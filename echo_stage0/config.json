@@ -1,0 +1,12 @@
+{
+  "user_name": "Michael",
+  "user_pronouns": "he/him",
+  "memory_enabled": true,
+  "memory_user_id": "echo_michael",
+  "remember_triggers": [
+    "remember that",
+    "make sure you remember",
+    "don't forget that",
+    "keep in mind that"
+  ]
+}
