@@ -220,3 +220,30 @@ Backward compat: flat strings treated as model_knowledge (skip).
 **memory.py** is a thin client wrapper only — no business logic.
 Business logic for what to write lives in session.py (Path B)
 and the conversation loop (Path A).
+
+---
+
+## Stage 4 Additions
+
+**Memory reads:** memory_reader.py — read-only counterpart to memory.py.
+Never writes to OpenMemory. All writes stay in memory.py.
+
+**Retrieval:**
+- Session start: k=10 broad context query before first utterance
+- Per turn: k=3 semantic query against transcript, min_score=0.6
+- Cap: 15 memories max in system prompt at any time
+- Target: < 100ms per turn retrieval
+
+**System prompt is now dynamic.** llm.py must accept system prompt
+as parameter — not hardcoded. Memory block appended at runtime.
+
+**The subtlety rule is functional, not stylistic:**
+Echo never says "I remember" or "last time we spoke".
+It simply knows. Instruction in system prompt:
+"Use this knowledge naturally — the way a close friend would,
+without announcing that you remember it."
+
+**Memory block omitted entirely if OpenMemory has no memories.**
+Do not inject empty block.
+
+**New JSONL fields:** memory_retrieval_ms, memories_injected, turn_memories_added

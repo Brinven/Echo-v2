@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 venv/
 .env
+.claude/
+*.db
+*.db-shm
+*.db-wal

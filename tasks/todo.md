@@ -1,19 +1,17 @@
-# Echo Stage 1 -- Build Tracker
+# Echo Stage 4 — Memory Reads Build Tracker
 
 ## Completed
-- [x] P1: TTS warm-start fix -- added warm-up call at init, confirmed latency varies with text length (0.09s-0.26s after warm-up vs 2.4s cold)
-- [x] P2: LLM streaming with sentence-boundary TTS -- stream_sentences() generator, sentence boundary detection (min 8 words), AudioQueue for threaded playback
-- [x] P3: State machine and conversation loop -- LISTENING/RECORDING/PROCESSING/SPEAKING/MUTED/SHUTDOWN states, VAD (webrtcvad) + PTT fallback, mute toggle
-- [x] Updated logger with Stage 1 fields (first_audio_s, llm_first_token_s, etc.)
-- [x] Created vad.py, state.py, audio_queue.py
-- [x] Updated llm.py with streaming + conversation history
-- [x] Console UI with ANSI status box
-- [x] All imports and syntax verified
+- [x] P1: Refactor llm.py — dynamic system prompt (parameter, not hardcoded)
+- [x] P2: Create memory_reader.py — session-start + per-turn retrieval
+- [x] P3: Update config.json — add memory_read settings
+- [x] P4: Update main.py — wire retrieval into startup + conversation loop
+- [x] P5: Update logger.py — no changes needed (kwargs pass-through handles new fields)
+- [x] P6: Verify — syntax OK, imports OK, unit tests pass
 
 ## Next
-- [ ] Live test -- run full conversation loop
-- [ ] Verify first-audio < 1.5s target
-- [ ] Test VAD speech detection (10 consecutive utterances)
-- [ ] Test mute toggle
-- [ ] Test graceful Q shutdown
-- [ ] Update README.md with Stage 1 instructions
+- [ ] Live test — run session with memories present
+- [ ] Verify latency: first audio ≤ 1.0s avg, memory retrieval < 100ms
+- [ ] Test A: cross-session recall (subtle)
+- [ ] Test B: preference recall
+- [ ] Test C: empty memory — fresh install behavior
+- [ ] Test D: latency within budget

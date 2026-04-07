@@ -11,13 +11,17 @@ from collections.abc import Generator
 from openai import OpenAI, APIConnectionError, APITimeoutError
 
 
-SYSTEM_PROMPT = (
-    "You are Echo, a helpful voice assistant. You are running locally on the "
-    "user's PC. Keep responses conversational and concise -- you are speaking "
-    "aloud, not writing. Avoid lists, bullet points, and markdown formatting. "
-    "Prefer 2-4 sentences unless the user explicitly asks for more detail. "
-    "When the user asks you to remember something, acknowledge it briefly "
-    "and naturally in your response."
+DEFAULT_SYSTEM_PROMPT = (
+    "You are Echo, a helpful voice assistant running locally on Michael's PC. "
+    "Keep responses conversational and concise -- you are speaking aloud, "
+    "not writing. Avoid lists, bullet points, and markdown formatting. "
+    "Prefer 2-4 sentences unless Michael explicitly asks for more detail. "
+    "When Michael asks you to remember something, acknowledge it briefly "
+    "and naturally in your response. "
+    "Use any personal context you have about Michael naturally, the way a "
+    "close friend would -- without announcing that you remember it, without "
+    "saying \"I remember\" or \"last time we spoke\". Simply know it and let "
+    "it inform how you talk to him."
 )
 LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
 TIMEOUT_S = 30
@@ -74,18 +78,22 @@ class LLMClient:
 
         print(f"  LLM: {self._model} via LM Studio")
 
-    def generate(self, user_text: str, history: list[dict] | None = None) -> str:
+    def generate(
+        self, user_text: str, history: list[dict] | None = None,
+        system_prompt: str | None = None,
+    ) -> str:
         """
         Send user text to LLM and return the full response (blocking).
 
         Args:
             user_text: The user's transcribed speech
             history: Optional conversation history (list of role/content dicts)
+            system_prompt: Optional system prompt override (default: DEFAULT_SYSTEM_PROMPT)
 
         Returns:
             LLM response text
         """
-        messages = self._build_messages(user_text, history)
+        messages = self._build_messages(user_text, history, system_prompt)
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
@@ -102,7 +110,7 @@ class LLMClient:
 
     def stream_sentences(
         self, user_text: str, history: list[dict] | None = None,
-        timing: dict | None = None,
+        timing: dict | None = None, system_prompt: str | None = None,
     ) -> Generator[str, None, None]:
         """
         Stream LLM response and yield complete sentences.
@@ -115,13 +123,14 @@ class LLMClient:
             user_text: The user's transcribed speech
             history: Optional conversation history
             timing: Optional dict — will be populated with 'ttft' (time to first token)
+            system_prompt: Optional system prompt override (default: DEFAULT_SYSTEM_PROMPT)
 
         Yields:
             Sentence-sized text chunks
         """
         import time
 
-        messages = self._build_messages(user_text, history)
+        messages = self._build_messages(user_text, history, system_prompt)
         t_start = time.perf_counter()
 
         try:
@@ -176,9 +185,12 @@ class LLMClient:
         if buffer.strip():
             yield buffer.strip()
 
-    def _build_messages(self, user_text: str, history: list[dict] | None = None) -> list[dict]:
+    def _build_messages(
+        self, user_text: str, history: list[dict] | None = None,
+        system_prompt: str | None = None,
+    ) -> list[dict]:
         """Build the messages list for a chat completion."""
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT}]
         if history:
             messages.extend(history)
         messages.append({"role": "user", "content": user_text})

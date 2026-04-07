@@ -1,8 +1,10 @@
 """
-Echo Stage 3 -- Memory Writes
+Echo Stage 4 -- Memory Reads
 
-Streaming pipeline with session management, memory writes (Path A: "remember that"
-immediate writes, Path B: end-of-session summary writer), sign-off detection.
+Streaming pipeline with session management, memory writes + reads.
+Memories from prior sessions are injected into the system prompt at
+session start and per-turn, so Echo knows things about the user
+across conversations.
 
 Controls:
   SPACE  -- push-to-talk (hold to record, release to process)
@@ -32,6 +34,9 @@ from summarizer import generate_summary
 from memory import (
     MemoryClient, has_remember_trigger, extract_remember_fact,
     write_session_memories,
+)
+from memory_reader import (
+    get_session_context, retrieve_and_build_prompt, _extract_content,
 )
 
 
@@ -77,6 +82,8 @@ def run_streaming_pipeline(
     memory_client: MemoryClient | None = None,
     explicitly_remembered: list[str] | None = None,
     user_name: str = "",
+    session_memories: list[str] | None = None,
+    memory_config: dict | None = None,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
@@ -123,6 +130,23 @@ def run_streaming_pipeline(
                 if explicitly_remembered is not None:
                     explicitly_remembered.append(fact)
 
+    # ── Memory read: per-turn retrieval + build system prompt ──
+    mcfg = memory_config or {}
+    system_prompt = None
+    turn_memories_added = 0
+    memory_retrieval_ms = 0.0
+
+    if memory_client and memory_client.available and session_memories is not None:
+        system_prompt, turn_memories_added, memory_retrieval_ms = retrieve_and_build_prompt(
+            memory_client=memory_client,
+            session_memories=session_memories,
+            transcript=transcript,
+            turn_k=mcfg.get("memory_turn_context_k", 3),
+            turn_min_score=mcfg.get("memory_turn_min_score", 0.6),
+            turn_retrieval_enabled=mcfg.get("memory_turn_retrieval_enabled", True),
+            max_memories=mcfg.get("memory_max_injected", 15),
+        )
+
     # ── LLM streaming -> TTS chunks -> audio queue ──
     audio_q.start()
     t_llm_start = time.perf_counter()
@@ -132,7 +156,7 @@ def run_streaming_pipeline(
     chunk_count = 0
 
     try:
-        for sentence in llm.stream_sentences(transcript, history, timing=llm_timing):
+        for sentence in llm.stream_sentences(transcript, history, timing=llm_timing, system_prompt=system_prompt):
             full_response += sentence + " "
 
             try:
@@ -169,8 +193,9 @@ def run_streaming_pipeline(
     status_str = "PASS" if passed else "FAIL"
     print(f"  [{status_str}: 1st audio {first_audio:.2f}s | STT {stt_latency:.2f}s | TTFT {actual_ttft:.2f}s | {chunk_count} chunks]")
 
+    memories_injected = len(session_memories) if session_memories else 0
     logger.log_run(
-        stage=3,
+        stage=4,
         model=llm.model_name,
         stt_backend=stt.backend,
         tts_backend=tts.backend,
@@ -182,6 +207,9 @@ def run_streaming_pipeline(
         total_latency_s=time.perf_counter() - t0,
         transcript=transcript,
         response_full=full_response,
+        memory_retrieval_ms=round(memory_retrieval_ms, 1),
+        memories_injected=memories_injected + turn_memories_added,
+        turn_memories_added=turn_memories_added,
     )
 
     return {"stt": stt_latency, "first_audio": first_audio, "passed": passed}
@@ -256,7 +284,7 @@ def run_signoff(
 def main():
     print()
     print("=" * 50)
-    print("  ECHO -- Stage 3 Memory Writes")
+    print("  ECHO -- Stage 4 Memory Reads")
     print("=" * 50)
     print()
     print("  Initializing...")
@@ -277,6 +305,31 @@ def main():
     # Initialize memory
     memory_client = MemoryClient(user_id=memory_user_id)
     explicitly_remembered: list[str] = []
+
+    # Memory read config
+    memory_read_enabled = config.get("memory_read_enabled", True)
+    memory_config = {
+        "memory_session_context_k": config.get("memory_session_context_k", 10),
+        "memory_turn_context_k": config.get("memory_turn_context_k", 3),
+        "memory_turn_min_score": config.get("memory_turn_min_score", 0.6),
+        "memory_max_injected": config.get("memory_max_injected", 15),
+        "memory_turn_retrieval_enabled": config.get("memory_turn_retrieval_enabled", True),
+    }
+
+    # Session-start memory retrieval
+    session_memories: list[str] = []
+    if memory_read_enabled and memory_client.available:
+        t_mem = time.perf_counter()
+        results = get_session_context(
+            memory_client,
+            k=memory_config["memory_session_context_k"],
+        )
+        session_memories = [_extract_content(r) for r in results]
+        mem_ms = (time.perf_counter() - t_mem) * 1000
+        if session_memories:
+            print(f"  Memory: loaded {len(session_memories)} memories ({mem_ms:.0f}ms)")
+        else:
+            print("  Memory: no prior memories found")
 
     logger = SessionLogger()
     history: list[dict] = []
@@ -469,6 +522,8 @@ def main():
                     memory_client=memory_client,
                     explicitly_remembered=explicitly_remembered,
                     user_name=user_name,
+                    session_memories=session_memories if memory_read_enabled else None,
+                    memory_config=memory_config,
                 )
 
                 if result and result.get("signoff"):
