@@ -1,33 +1,45 @@
 """
-OpenMemory client wrapper for Echo.
+Hindsight client wrapper for Echo.
 
-Thin wrapper around the OpenMemory embedded SDK.
-No business logic — just add/search/health operations.
-Business logic for what to write lives in session.py (Path B)
-and the conversation loop (Path A).
+Replaces the original embedded OpenMemory backend with the Axly Hindsight
+service running locally at http://localhost:8888 (PM2 process
+hindsight-memory). The MemoryClient surface is preserved so memory_reader.py,
+session.py, and main.py continue to work without changes.
 
-Uses the embedded Memory class directly (no server needed).
-SDK has a broken LangChain connector import — we patch around it.
+Why Hindsight instead of OpenMemory:
+- Shared with claude.ai and the Claude Code plugin (one source of truth across
+  every Axly project).
+- Biomimetic memory model (entities, observations, temporal links) gives
+  richer recall context than OpenMemory's flat semantic store.
+- Configured per-project via bank_id (Echo uses bank "echo").
+
+Two operational notes:
+- Writes ALWAYS use async=true. Hindsight's retain endpoint runs xAI Grok 4.1
+  Fast for fact extraction and takes ~10s per call -- unacceptable in the
+  voice hot path. Async retains return immediately (queued, processed in
+  background). Echo never blocks on memory writes.
+- Recall has no exposed similarity score (unlike OpenMemory's min_score).
+  Hindsight's internal ranker handles relevance; we cap with `budget` and
+  Python-side `[:k]`. memory_reader.py's old min_score parameter is now
+  ignored -- ranking + budget do the equivalent job.
 """
 
-import sys
 import os
-import asyncio
-import logging
 import re
+import json
+import logging
 from pathlib import Path
-from openai import OpenAI, APITimeoutError
+import requests
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-# Patch broken LangChain import in openmemory
-sys.modules.setdefault("openmemory.connectors", type(sys)("fake"))
-sys.modules.setdefault("openmemory.connectors.langchain", type(sys)("fake"))
+# ---- config -----------------------------------------------------------------------
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "memory.sqlite"
+_CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
 
-# "Remember that" trigger phrases
+# "Remember that" trigger phrases (unchanged from OpenMemory era)
 _REMEMBER_PATTERNS = [
     re.compile(r"\bremember\s+that\b", re.IGNORECASE),
     re.compile(r"\bmake\s+sure\s+you\s+remember\b", re.IGNORECASE),
@@ -41,29 +53,99 @@ def has_remember_trigger(transcript: str) -> bool:
     return any(p.search(transcript) for p in _REMEMBER_PATTERNS)
 
 
+def _load_hindsight_config() -> dict:
+    """
+    Resolve Hindsight URL/key/bank from config.json with env-var override.
+    Env vars take precedence so the same checked-in config can run against
+    any Hindsight instance (local, tailnet, or via the OAuth shim).
+    """
+    cfg = {}
+    if _CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"failed to read {_CONFIG_PATH}: {e}")
+
+    return {
+        "url": os.environ.get("HINDSIGHT_URL") or cfg.get("hindsight_url", "http://127.0.0.1:8888"),
+        "api_key": os.environ.get("HINDSIGHT_API_KEY") or cfg.get("hindsight_api_key"),
+        "bank_id": os.environ.get("HINDSIGHT_BANK_ID") or cfg.get("hindsight_bank_id", "echo"),
+        "tenant": os.environ.get("HINDSIGHT_TENANT") or cfg.get("hindsight_tenant", "default"),
+    }
+
+
+# ---- client ----------------------------------------------------------------------
+
 class MemoryClient:
-    """Wrapper around OpenMemory's embedded Memory class."""
+    """
+    Hindsight-backed memory client. Drop-in replacement for the original
+    OpenMemory wrapper -- same surface, different backend.
+
+    Args:
+        user_id: legacy OpenMemory parameter, retained for call-site compat.
+            Ignored; bank routing comes from hindsight_bank_id in config.
+    """
 
     def __init__(self, user_id: str = "echo_michael"):
+        # Kept on the instance for log lines and any future per-user routing,
+        # but not used as a Hindsight key (banks are project-scoped, not user-scoped).
         self._user_id = user_id
-        self._available = False
-        self._mem = None
-        self._init_memory()
 
-    def _init_memory(self):
-        """Initialize the OpenMemory client."""
-        try:
-            os.environ["OPENMEMORY_DB_URL"] = f"sqlite:///{DB_PATH}"
-            DB_PATH.parent.mkdir(exist_ok=True)
+        cfg = _load_hindsight_config()
+        self._base_url = cfg["url"].rstrip("/")
+        self._bank_id = cfg["bank_id"]
+        self._tenant = cfg["tenant"]
+        self._api_key = cfg["api_key"]
 
-            from openmemory.main import Memory
-            self._mem = Memory(user=self._user_id)
-            self._available = True
-            print(f"  Memory: connected (user: {self._user_id})")
-        except Exception as e:
-            logger.error(f"OpenMemory init failed: {e}")
-            print(f"  Memory: unavailable ({e})")
+        self._session = requests.Session()
+        self._session.headers.update({
+            "Content-Type": "application/json",
+            "User-Agent": "echo-voice-companion/0.4",
+        })
+        if self._api_key:
+            self._session.headers["Authorization"] = f"Bearer {self._api_key}"
+
+        self._available = self._probe_health()
+        if self._available:
+            print(f"  Memory: Hindsight connected ({self._base_url}, bank={self._bank_id})")
+        else:
+            print(f"  Memory: Hindsight unreachable at {self._base_url}")
             print("  WARNING: Memories will not be saved this session.")
+
+    # ----- internals --------------------------------------------------------------
+
+    def _probe_health(self) -> bool:
+        """Verify the Hindsight service is reachable and the bank exists."""
+        try:
+            r = self._session.get(f"{self._base_url}/health", timeout=3)
+            if r.status_code != 200:
+                logger.error(f"Hindsight /health returned {r.status_code}")
+                return False
+        except Exception as e:
+            logger.error(f"Hindsight /health failed: {e}")
+            return False
+
+        if not self._api_key:
+            logger.error("HINDSIGHT_API_KEY is not set; Hindsight requires Bearer auth")
+            return False
+
+        # Confirm the bank exists. PUT is idempotent; we'd rather create-if-missing
+        # than fail mid-session, but only do this once (during init).
+        try:
+            r = self._session.put(
+                f"{self._base_url}/v1/{self._tenant}/banks/{self._bank_id}",
+                json={"name": f"Echo ({self._user_id})"},
+                timeout=10,
+            )
+            return r.status_code in (200, 201)
+        except Exception as e:
+            logger.error(f"Hindsight bank PUT failed: {e}")
+            return False
+
+    def _bank_path(self, suffix: str = "") -> str:
+        return f"{self._base_url}/v1/{self._tenant}/banks/{self._bank_id}{suffix}"
+
+    # ----- public surface (matches the old OpenMemory wrapper) -------------------
 
     @property
     def available(self) -> bool:
@@ -71,66 +153,107 @@ class MemoryClient:
 
     def add(self, content: str, tags: list[str] | None = None) -> dict | None:
         """
-        Write a memory to OpenMemory.
+        Write a memory. Always async (non-blocking) -- Hindsight runs Grok for
+        fact extraction which is too slow for the voice hot path.
 
         Args:
-            content: The memory text
-            tags: Optional tags for categorization
+            content: the memory text
+            tags: optional tags for categorization
 
         Returns:
-            Result dict with memory ID, or None on failure
+            Hindsight retain response dict on success, None on failure.
         """
-        if not self._available:
+        if not self._available or not content or not content.strip():
             return None
 
+        body = {
+            "items": [{
+                "content": content.strip(),
+                "context": "echo-conversation",
+                "tags": tags or [],
+            }],
+            "async": True,
+        }
         try:
-            result = asyncio.run(
-                self._mem.add(content, user_id=self._user_id, tags=tags or [])
-            )
-            return result
+            r = self._session.post(self._bank_path("/memories"), json=body, timeout=10)
+            if not r.ok:
+                logger.error(f"Hindsight retain failed {r.status_code}: {r.text[:200]}")
+                return None
+            return r.json()
         except Exception as e:
-            logger.error(f"Memory add failed: {e}")
+            logger.error(f"Hindsight retain exception: {e}")
             return None
 
     def search(self, query: str, limit: int = 5) -> list[dict]:
-        """Search memories by semantic similarity."""
-        if not self._available:
+        """
+        Recall memories matching a query.
+
+        Returns a list of dicts shaped like the old OpenMemory result format
+        ({"content": str, "score": float, "id": str, "tags": [...]}) so
+        memory_reader.py works unchanged. The score is rank-based: top hit
+        gets 1.0, last hit gets ~0. Hindsight's own ranker chose the order.
+        """
+        if not self._available or not query or not query.strip():
             return []
 
+        # budget="low" for tight per-turn calls (k<=5), "mid" otherwise.
+        budget = "low" if limit <= 5 else "mid"
+        body = {
+            "query": query.strip(),
+            "budget": budget,
+            "max_tokens": 1024 if limit <= 5 else 2048,
+        }
         try:
-            results = asyncio.run(
-                self._mem.search(query, user_id=self._user_id, limit=limit)
-            )
-            return results
+            r = self._session.post(self._bank_path("/memories/recall"), json=body, timeout=10)
+            if not r.ok:
+                logger.error(f"Hindsight recall failed {r.status_code}: {r.text[:200]}")
+                return []
+            results = (r.json() or {}).get("results") or []
         except Exception as e:
-            logger.error(f"Memory search failed: {e}")
+            logger.error(f"Hindsight recall exception: {e}")
             return []
+
+        # Cap at requested limit and shape into OpenMemory-compatible dicts.
+        results = results[:limit]
+        n = len(results)
+        out = []
+        for i, hit in enumerate(results):
+            out.append({
+                "id": hit.get("id"),
+                "content": hit.get("text") or "",
+                "score": (1.0 - (i / n)) if n > 0 else 0.0,
+                "tags": hit.get("tags") or [],
+                "type": hit.get("type"),
+                "context": hit.get("context"),
+                "mentioned_at": hit.get("mentioned_at"),
+            })
+        return out
 
     def history(self, limit: int = 20) -> list[dict]:
-        """Get recent memory history."""
+        """Get recent memories (chronological list, not semantic recall)."""
         if not self._available:
             return []
-
         try:
-            return self._mem.history(self._user_id, limit=limit)
+            r = self._session.get(
+                self._bank_path("/memories/list"),
+                params={"limit": limit},
+                timeout=10,
+            )
+            if not r.ok:
+                logger.error(f"Hindsight list failed {r.status_code}: {r.text[:200]}")
+                return []
+            return ((r.json() or {}).get("items") or [])
         except Exception as e:
-            logger.error(f"Memory history failed: {e}")
+            logger.error(f"Hindsight list exception: {e}")
             return []
 
+
+# ---- LLM-driven fact extraction (unchanged from OpenMemory era) -------------------
 
 def extract_remember_fact(transcript: str, user_name: str, model: str) -> str | None:
     """
     Use LLM to extract the specific fact the user wants remembered.
-
     Fast, cheap call: max_tokens=50, temperature=0.
-
-    Args:
-        transcript: Full user utterance
-        user_name: User's name
-        model: LM Studio model ID
-
-    Returns:
-        Extracted fact as a single sentence, or None on failure
     """
     client = OpenAI(
         base_url=LM_STUDIO_URL,
@@ -164,13 +287,14 @@ def extract_remember_fact(transcript: str, user_name: str, model: str) -> str | 
             stream=False,
         )
         fact = response.choices[0].message.content.strip()
-        # Clean up: remove quotes, ensure it starts with the name
         fact = fact.strip('"\'')
         return fact if fact else None
     except Exception as e:
         logger.error(f"Remember fact extraction failed: {e}")
         return None
 
+
+# ---- session-summary writer (Path B; unchanged signature) ------------------------
 
 def write_session_memories(
     memory_client: MemoryClient,
@@ -179,7 +303,7 @@ def write_session_memories(
     explicitly_remembered: list[str],
 ) -> int:
     """
-    Path B: Write session summary facts to OpenMemory.
+    Path B: write session summary facts to Hindsight.
 
     Writes:
       - facts_about_user (always)
@@ -198,46 +322,28 @@ def write_session_memories(
 
     count = 0
 
-    # facts_about_user — always write
     for fact in summary.get("facts_about_user", []):
         if isinstance(fact, str) and fact.strip():
-            result = memory_client.add(
-                content=fact,
-                tags=["personal", "session_derived", session_id],
-            )
-            if result:
+            if memory_client.add(content=fact, tags=["personal", "session_derived", session_id]):
                 count += 1
 
-    # action_items — always write
     for item in summary.get("action_items", []):
         if isinstance(item, str) and item.strip():
-            result = memory_client.add(
-                content=item,
-                tags=["action_item", "session_derived", session_id],
-            )
-            if result:
+            if memory_client.add(content=item, tags=["action_item", "session_derived", session_id]):
                 count += 1
 
-    # facts_general — only web_search sources
     for item in summary.get("facts_general", []):
         if isinstance(item, dict):
             source = item.get("source", "model_knowledge")
             fact_text = item.get("fact", "")
             if source == "web_search" and fact_text.strip():
-                result = memory_client.add(
-                    content=fact_text,
-                    tags=["retrieved", "web_sourced", session_id],
-                )
-                if result:
+                if memory_client.add(content=fact_text, tags=["retrieved", "web_sourced", session_id]):
                     count += 1
-        # Flat strings (old Stage 2 format) -> model_knowledge, skip
-        # (backward compat: don't write these)
+        # Flat strings (legacy Stage 2 format) -> implicit model_knowledge -> skip.
 
-    # explicitly_remembered: do NOT re-write — already stored via Path A
-    # Just log for confirmation
     if explicitly_remembered:
         logger.info(
-            f"Skipping {len(explicitly_remembered)} explicitly remembered items "
+            f"Skipping {len(explicitly_remembered)} explicitly-remembered items "
             "(already stored via Path A)"
         )
 
