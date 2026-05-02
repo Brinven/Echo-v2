@@ -223,6 +223,53 @@ and the conversation loop (Path A).
 
 ---
 
+## ⚠ Hindsight Backend Notes (post-2026-05-02 swap)
+
+Echo's memory backend is **Hindsight, not OpenMemory** as of 2026-05-02.
+`memory.py` was rewritten; the `MemoryClient` surface is preserved so
+`memory_reader.py`, `session.py`, and `main.py` are untouched.
+
+Two behavioral differences from OpenMemory worth knowing:
+
+### 1. Writes are async by default
+
+Hindsight's retain runs xAI Grok 4.1 Fast for fact extraction (~10s/call).
+That's unacceptable in the voice hot path, so `MemoryClient.add()` always
+sends `async=true`. The retain queues immediately and processes in the
+background. Practical effect: a "remember that X" said at the end of a
+session is **NOT** searchable for ~10s after sign-off. Don't write tests
+that immediately recall what was just retained — wait or poll.
+
+### 2. min_score=0.6 is now a rank-based proxy, NOT a true similarity score
+
+Hindsight's `RecallResult` schema does **not** expose a similarity score
+field — by design. Hindsight's internal ranker handles relevance, surfaced
+through the `budget` (low/mid/high) and `max_tokens` knobs.
+
+`MemoryClient.search()` synthesizes a per-result score as `1.0 - (i / n)`
+where `i` is the rank index. So with k=3 results: `[1.00, 0.667, 0.333]`.
+With k=5: `[1.00, 0.80, 0.60, 0.40, 0.20]`. With k=10: `[1.00, 0.90, ...]`.
+
+This means `min_score=0.6` (in `memory_reader.get_turn_context`) **no longer
+filters by semantic confidence** — it just trims the bottom of the rank list.
+With k=3, it keeps the top 2. With k=5, it keeps the top 3.
+
+**If irrelevant memories start getting injected per-turn, the lever is
+`budget="low"` inside `MemoryClient.search()` — not min_score.** Tightening
+budget reduces the candidate pool Hindsight returns; loosening lets more
+through. The synthesized score is downstream of that.
+
+If you ever need a real confidence threshold, options are:
+- Use Hindsight's `tags` filter to pre-narrow (e.g. only `personal` tags)
+- Use the `types` filter (`world` / `experience` / `observation`) to bias
+  toward the right kind of memory
+- Set `budget="low"` and trust Hindsight's ranker
+
+Do not try to recompute similarity locally — embeddings live inside
+Hindsight; round-tripping them defeats the abstraction.
+
+---
+
 ## Stage 4 Additions
 
 **Memory reads:** memory_reader.py — read-only counterpart to memory.py.
