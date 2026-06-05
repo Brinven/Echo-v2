@@ -233,7 +233,7 @@ Two behavioral differences from OpenMemory worth knowing:
 
 ### 1. Writes are async by default
 
-Hindsight's retain runs xAI Grok 4.1 Fast for fact extraction (~10s/call).
+Hindsight's retain runs xAI Grok 4.3 (thinking disabled via reasoning_effort:none) for fact extraction (~10s/call).
 That's unacceptable in the voice hot path, so `MemoryClient.add()` always
 sends `async=true`. The retain queues immediately and processes in the
 background. Practical effect: a "remember that X" said at the end of a
@@ -267,6 +267,23 @@ If you ever need a real confidence threshold, options are:
 
 Do not try to recompute similarity locally — embeddings live inside
 Hindsight; round-tripping them defeats the abstraction.
+
+---
+
+## Memory (Hindsight bank routing)
+
+**Hindsight bank:** `echo`
+**Tags:** `echo`, `voice-companion`
+
+Set before invoking CC on this project: `$env:HINDSIGHT_BANK_ID="echo"`
+
+This is distinct from Echo's *runtime* memory above. At runtime Echo's `memory.py`
+passes `bank_id="echo"` explicitly on every retain/recall. This section is for
+**Claude Code sessions working on Echo** — the CC hindsight-memory plugin routes a
+session's auto-retains by the `HINDSIGHT_BANK_ID` env var, which falls back to
+`axly-infra` if unset. Set it to `echo` so Echo development notes land in the
+`echo` bank, not the shared infra bank. Cross-cutting infra (pm2, ports, OS
+gotchas) belongs in `axly-infra`; personal/relational content goes to Ib.
 
 ---
 
