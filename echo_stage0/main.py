@@ -1,10 +1,10 @@
 """
-Echo Stage 4 -- Memory Reads
+Echo Stage 5 (Part 1) -- Ib-Lite Memory
 
-Streaming pipeline with session management, memory writes + reads.
-Memories from prior sessions are injected into the system prompt at
-session start and per-turn, so Echo knows things about the user
-across conversations.
+Streaming pipeline with session management and the Ib-Lite memory subsystem
+(local SQLite: Core/Policy/Preference/Fact/Episodic). Core + Policy are injected
+into the system prompt at session start; relevant Facts/Episodes are retrieved
+per turn; a background significance gate decides what to save after each turn.
 
 Controls:
   SPACE  -- push-to-talk (hold to record, release to process)
@@ -31,13 +31,7 @@ from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
 from session import Session, is_signoff, load_config
 from summarizer import generate_summary
-from memory import (
-    MemoryClient, has_remember_trigger, extract_remember_fact,
-    write_session_memories,
-)
-from memory_reader import (
-    get_session_context, retrieve_and_build_prompt, _extract_content,
-)
+from ib_lite import IbLite
 
 
 # ── Console UI ───────────────────────────────────────────────────────────
@@ -79,11 +73,7 @@ def run_streaming_pipeline(
     sm: StateMachine,
     session: Session,
     vad_mode: str,
-    memory_client: MemoryClient | None = None,
-    explicitly_remembered: list[str] | None = None,
-    user_name: str = "",
-    session_memories: list[str] | None = None,
-    memory_config: dict | None = None,
+    ib: IbLite | None = None,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
@@ -120,32 +110,14 @@ def run_streaming_pipeline(
     print_conversation("You", transcript)
     session.add_user_turn(transcript, stt_latency)
 
-    # ── Path A: "remember that" check ──
-    if memory_client and memory_client.available and has_remember_trigger(transcript):
-        fact = extract_remember_fact(transcript, user_name or "the user", llm.model_name)
-        if fact:
-            result = memory_client.add(fact, tags=["explicit", "user_requested"])
-            if result:
-                print(f"  [Remembered: {fact}]")
-                if explicitly_remembered is not None:
-                    explicitly_remembered.append(fact)
-
-    # ── Memory read: per-turn retrieval + build system prompt ──
-    mcfg = memory_config or {}
+    # ── Memory read: Core + Policy + per-turn Fact/Episodic retrieval ──
+    # (The significance gate handles all writes — including explicit "remember
+    # that" turns — off the hot path after the response is delivered.)
     system_prompt = None
-    turn_memories_added = 0
+    memories_injected = 0
     memory_retrieval_ms = 0.0
-
-    if memory_client and memory_client.available and session_memories is not None:
-        system_prompt, turn_memories_added, memory_retrieval_ms = retrieve_and_build_prompt(
-            memory_client=memory_client,
-            session_memories=session_memories,
-            transcript=transcript,
-            turn_k=mcfg.get("memory_turn_context_k", 3),
-            turn_min_score=mcfg.get("memory_turn_min_score", 0.6),
-            turn_retrieval_enabled=mcfg.get("memory_turn_retrieval_enabled", True),
-            max_memories=mcfg.get("memory_max_injected", 15),
-        )
+    if ib and ib.available:
+        system_prompt, memory_retrieval_ms, memories_injected = ib.system_prompt_for_turn(transcript)
 
     # ── LLM streaming -> TTS chunks -> audio queue ──
     audio_q.start()
@@ -186,6 +158,11 @@ def run_streaming_pipeline(
         history.append({"role": "assistant", "content": full_response})
         session.add_echo_turn(full_response, (t_first_audio - t0) if t_first_audio else 0.0)
 
+        # ── Memory write (off the hot path): significance gate, background thread ──
+        if ib and ib.available:
+            turn_text = f"{session.user_name or 'Michael'}: {transcript}\nEcho: {full_response}"
+            ib.write_memory(session.session_id, turn_text)
+
     # ── Timing ──
     actual_ttft = llm_timing.get("ttft", 0.0)
     first_audio = (t_first_audio - t0) if t_first_audio else 0.0
@@ -193,9 +170,8 @@ def run_streaming_pipeline(
     status_str = "PASS" if passed else "FAIL"
     print(f"  [{status_str}: 1st audio {first_audio:.2f}s | STT {stt_latency:.2f}s | TTFT {actual_ttft:.2f}s | {chunk_count} chunks]")
 
-    memories_injected = len(session_memories) if session_memories else 0
     logger.log_run(
-        stage=4,
+        stage=5,
         model=llm.model_name,
         stt_backend=stt.backend,
         tts_backend=tts.backend,
@@ -208,8 +184,7 @@ def run_streaming_pipeline(
         transcript=transcript,
         response_full=full_response,
         memory_retrieval_ms=round(memory_retrieval_ms, 1),
-        memories_injected=memories_injected + turn_memories_added,
-        turn_memories_added=turn_memories_added,
+        memories_injected=memories_injected,
     )
 
     return {"stt": stt_latency, "first_audio": first_audio, "passed": passed}
@@ -222,10 +197,9 @@ def run_signoff(
     tts: TTSEngine,
     audio_q: AudioQueue,
     session: Session,
-    memory_client: MemoryClient | None = None,
-    explicitly_remembered: list[str] | None = None,
+    ib: IbLite | None = None,
 ):
-    """Execute the sign-off sequence: goodbye TTS, summary, save files, write memories."""
+    """Execute the sign-off sequence: goodbye TTS, summary, save files, write episodic."""
     user_name = session.user_name or "friend"
 
     # Step 1: Speak goodbye
@@ -251,7 +225,6 @@ def run_signoff(
         conversation_text=conversation_text,
         user_name=session.user_name,
         model=llm.model_name,
-        explicitly_remembered=explicitly_remembered,
     )
 
     # Step 4: Save files
@@ -263,19 +236,14 @@ def run_signoff(
     if "_error" in summary:
         print(f"  [WARNING: Summary had errors: {summary['_error']}]")
 
-    # Step 5: Path B — write session memories
-    if memory_client and memory_client.available:
-        mem_count = write_session_memories(
-            memory_client=memory_client,
-            summary=summary,
-            session_id=session.session_id,
-            explicitly_remembered=explicitly_remembered or [],
-        )
-        print(f"  [{mem_count} memories written to OpenMemory]")
+    # Step 5: Episodic write — session summary -> episodic_memory (before ended_at)
+    if ib and ib.available:
+        wrote = ib.end_session(session.session_id, summary, turn_count=session.turn_count)
+        print(f"  [Episodic memory written]" if wrote else "  [No episodic summary to write]")
     else:
-        print("  [Memory unavailable — skipping memory writes]")
+        print("  [Memory unavailable — skipping episodic write]")
 
-    # Step 5: Done
+    # Step 6: Done
     print("  [Session complete. Goodbye.]")
 
 
@@ -284,7 +252,7 @@ def run_signoff(
 def main():
     print()
     print("=" * 50)
-    print("  ECHO -- Stage 4 Memory Reads")
+    print("  ECHO -- Stage 5 Ib-Lite Memory")
     print("=" * 50)
     print()
     print("  Initializing...")
@@ -292,7 +260,6 @@ def main():
     # Load config
     config = load_config()
     user_name = config.get("user_name", "")
-    memory_user_id = config.get("memory_user_id", "echo_michael")
     if user_name:
         print(f"  User: {user_name}")
 
@@ -302,34 +269,8 @@ def main():
     tts = TTSEngine()
     vad = VADDetector()
 
-    # Initialize memory
-    memory_client = MemoryClient(user_id=memory_user_id)
-    explicitly_remembered: list[str] = []
-
-    # Memory read config
-    memory_read_enabled = config.get("memory_read_enabled", True)
-    memory_config = {
-        "memory_session_context_k": config.get("memory_session_context_k", 10),
-        "memory_turn_context_k": config.get("memory_turn_context_k", 3),
-        "memory_turn_min_score": config.get("memory_turn_min_score", 0.6),
-        "memory_max_injected": config.get("memory_max_injected", 15),
-        "memory_turn_retrieval_enabled": config.get("memory_turn_retrieval_enabled", True),
-    }
-
-    # Session-start memory retrieval
-    session_memories: list[str] = []
-    if memory_read_enabled and memory_client.available:
-        t_mem = time.perf_counter()
-        results = get_session_context(
-            memory_client,
-            k=memory_config["memory_session_context_k"],
-        )
-        session_memories = [_extract_content(r) for r in results]
-        mem_ms = (time.perf_counter() - t_mem) * 1000
-        if session_memories:
-            print(f"  Memory: loaded {len(session_memories)} memories ({mem_ms:.0f}ms)")
-        else:
-            print("  Memory: no prior memories found")
+    # Initialize memory (Ib-Lite: local SQLite, Core + Policy injected at session start)
+    ib = IbLite(llm.model_name)
 
     logger = SessionLogger()
     history: list[dict] = []
@@ -342,6 +283,7 @@ def main():
         tts_backend=tts.backend,
         user_name=user_name,
     )
+    ib.start_session(session.session_id)
 
     print(f"  Session: {session.session_id}")
     print()
@@ -519,11 +461,7 @@ def main():
                     audio_q=audio_q, logger=logger,
                     history=history, sm=sm,
                     session=session, vad_mode=vad_mode,
-                    memory_client=memory_client,
-                    explicitly_remembered=explicitly_remembered,
-                    user_name=user_name,
-                    session_memories=session_memories if memory_read_enabled else None,
-                    memory_config=memory_config,
+                    ib=ib,
                 )
 
                 if result and result.get("signoff"):
@@ -550,8 +488,7 @@ def main():
             elif sm.state == State.SIGN_OFF:
                 run_signoff(
                     llm=llm, tts=tts, audio_q=audio_q, session=session,
-                    memory_client=memory_client,
-                    explicitly_remembered=explicitly_remembered,
+                    ib=ib,
                 )
                 sm.transition(State.SHUTDOWN)
 

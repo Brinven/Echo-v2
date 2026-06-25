@@ -1,0 +1,324 @@
+"""
+Ib-Lite facade — the single entry point the Echo pipeline imports.
+
+Lifecycle per session:
+    ib = IbLite(model_name)            # open conn, init schema, load seeds
+    ib.start_session(session_id)       # sessions row (FK target for writes)
+    prompt, ms, n = ib.system_prompt_for_turn(transcript)   # per turn (read)
+    ib.write_memory(session_id, turn)  # per turn (background significance gate)
+    ib.end_session(session_id, summary, turn_count)          # episodic write
+
+Reads happen on the main connection. The background significance gate opens its
+OWN connection (sqlite3 connections are not thread-safe); WAL lets it write while
+the main thread reads. Only one gate runs at a time (single-flight) — if the user
+barges in while a gate is still working, the new turn's gate is skipped.
+"""
+
+import json
+import time
+import logging
+import threading
+from pathlib import Path
+from datetime import datetime, timezone
+
+from . import db
+from .embedder import encode
+from .significance import run_gate
+from .schema import validate_write
+from .retrieval import fact_search, episodic_search
+
+logger = logging.getLogger(__name__)
+
+_FAILURE_LOG = Path(__file__).resolve().parent.parent / "memory_failures.log"
+
+# Operational speaking-aloud rules (TTS hygiene, NOT personality). Personality
+# and behavioral rules live in the Core/Policy seed tables.
+VOICE_GUIDANCE = (
+    "You are speaking aloud, not writing. Keep responses conversational and "
+    "concise. Avoid lists, bullet points, and markdown formatting. Prefer 2-4 "
+    "sentences unless Michael explicitly asks for more detail."
+)
+
+# The subtlety instruction is functional, not stylistic. Do not reword.
+_MEMORY_BLOCK_HEADER = (
+    "You know the following from previous conversations with Michael. Use this "
+    "knowledge naturally — the way a close friend would, without announcing that "
+    'you remember it. Never say "I remember", "last time we spoke", or "based on '
+    'our conversations". Simply know it.'
+)
+
+
+def _new_id() -> str:
+    """Time-ordered id (uuid is unavailable in some sandboxes; this is enough)."""
+    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+
+
+class IbLite:
+    def __init__(self, model_name: str, db_path: Path | None = None):
+        self._model = model_name
+        self._db_path = db_path
+        self._conn = None
+        self._available = False
+        self._gate_lock = threading.Lock()
+        self._gate_busy = False
+
+        try:
+            self._conn = db.get_connection(db_path)
+            db.init_schema(self._conn)
+            self._available = True
+        except Exception as e:
+            logger.error(f"Ib-Lite init failed: {e}")
+            print(f"  Memory: Ib-Lite UNAVAILABLE ({e})")
+            print("  WARNING: running without memory this session.")
+            return
+
+        n_core = self._conn.execute("SELECT COUNT(*) FROM core_memory").fetchone()[0]
+        n_policy = self._conn.execute(
+            "SELECT COUNT(*) FROM policy_memory WHERE active = 1"
+        ).fetchone()[0]
+        n_pref = self._conn.execute("SELECT COUNT(*) FROM preference_memory").fetchone()[0]
+        n_fact = self._conn.execute("SELECT COUNT(*) FROM fact_memory").fetchone()[0]
+        db_name = (db_path or db.DB_PATH).name
+        print(
+            f"  Memory: Ib-Lite ready ({db_name}) — "
+            f"{n_core} core, {n_policy} policy, {n_pref} pref, {n_fact} fact"
+        )
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    # ── session lifecycle ────────────────────────────────────────────────
+
+    def start_session(self, session_id: str) -> None:
+        """Insert the sessions row so per-turn writes satisfy the FK."""
+        if not self._available:
+            return
+        self._conn.execute(
+            "INSERT OR IGNORE INTO sessions (id, started_at) VALUES (?, CURRENT_TIMESTAMP)",
+            (session_id,),
+        )
+        self._conn.commit()
+
+    # ── reads ────────────────────────────────────────────────────────────
+
+    def build_context_block(self) -> str:
+        """Always-injected base prompt: voice guidance + Core + Policy + Preferences."""
+        parts = [VOICE_GUIDANCE]
+
+        core = self._conn.execute(
+            "SELECT content FROM core_memory ORDER BY rowid"
+        ).fetchall()
+        if core:
+            parts.append("\n".join(r["content"] for r in core))
+
+        policy = self._conn.execute(
+            "SELECT rule FROM policy_memory WHERE active = 1 ORDER BY priority DESC, rowid"
+        ).fetchall()
+        if policy:
+            parts.append("Rules you follow:\n" + "\n".join(f"- {r['rule']}" for r in policy))
+
+        prefs = self._conn.execute(
+            "SELECT key, value FROM preference_memory ORDER BY updated_at DESC"
+        ).fetchall()
+        if prefs:
+            parts.append(
+                "Michael's preferences:\n"
+                + "\n".join(f"- {r['key']}: {r['value']}" for r in prefs)
+            )
+
+        return "\n\n".join(parts)
+
+    def read_memory(self, query: str) -> tuple[str, float, int]:
+        """Per-turn hybrid retrieval of Facts + Episodic. Returns (block, ms, count)."""
+        if not self._available or not query.strip():
+            return "", 0.0, 0
+
+        t0 = time.perf_counter()
+        facts: list[dict] = []
+        episodes: list[dict] = []
+        try:
+            facts = fact_search(self._conn, query)
+        except Exception as e:
+            logger.error(f"fact_search failed: {e}")
+        try:
+            episodes = episodic_search(self._conn, query)
+        except Exception as e:
+            logger.error(f"episodic_search failed: {e}")
+        ms = (time.perf_counter() - t0) * 1000.0
+
+        lines = [f"- {f['entity']} — {f['attribute']}: {f['value']}" for f in facts]
+        lines += [f"- Earlier: {e['summary']}" for e in episodes]
+        if not lines:
+            return "", ms, 0
+        return _MEMORY_BLOCK_HEADER + "\n" + "\n".join(lines), ms, len(lines)
+
+    def system_prompt_for_turn(self, query: str) -> tuple[str | None, float, int]:
+        """Full system prompt for one turn: base context + retrieved memory block.
+
+        Returns (system_prompt | None, retrieval_ms, memories_injected). None means
+        'no memory available' — the caller falls back to the LLM's default prompt.
+        """
+        if not self._available:
+            return None, 0.0, 0
+        base = self.build_context_block()
+        mem_block, ms, count = self.read_memory(query)
+        prompt = base if not mem_block else f"{base}\n\n{mem_block}"
+        return prompt, ms, count
+
+    # ── writes (background) ──────────────────────────────────────────────
+
+    def write_memory(self, session_id: str, turn_text: str) -> None:
+        """Fire the significance gate on a background thread. Non-blocking, single-flight."""
+        if not self._available or not turn_text.strip():
+            return
+        with self._gate_lock:
+            if self._gate_busy:
+                logger.info("significance gate busy — skipping this turn")
+                return
+            self._gate_busy = True
+        threading.Thread(
+            target=self._gate_worker, args=(session_id, turn_text), daemon=True
+        ).start()
+
+    def _gate_worker(self, session_id: str, turn_text: str) -> None:
+        try:
+            payload = run_gate(turn_text, self._model)
+            if not isinstance(payload, dict) or not payload.get("save"):
+                return
+
+            ok, err = validate_write(payload)
+            if not ok:
+                # Retry once with the validation error as a correction hint.
+                payload = run_gate(turn_text, self._model, correction=err)
+                if not isinstance(payload, dict) or not payload.get("save"):
+                    return
+                ok, err = validate_write(payload)
+                if not ok:
+                    self._log_failure(turn_text, payload, err)
+                    return
+
+            self._insert(session_id, payload)
+        except Exception as e:
+            logger.error(f"gate worker error: {e}")
+        finally:
+            with self._gate_lock:
+                self._gate_busy = False
+
+    def _insert(self, session_id: str, payload: dict) -> None:
+        """Write a validated payload using a thread-local connection.
+
+        Facts/preferences/policies UPSERT via explicit ON CONFLICT ... DO UPDATE
+        (NOT INSERT OR REPLACE) so the external-content FTS5 stays consistent:
+        an UPDATE keeps the rowid and fires the AFTER UPDATE trigger that re-syncs
+        fact_fts. REPLACE would delete+insert and orphan FTS rows.
+        """
+        conn = db.get_connection(self._db_path)
+        try:
+            ptype = payload["type"]
+            if ptype == "fact":
+                text = f"{payload['entity']} {payload['attribute']} {payload['value']}"
+                conn.execute(
+                    """
+                    INSERT INTO fact_memory (id, entity, attribute, value, source_session, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(entity, attribute) DO UPDATE SET
+                        value = excluded.value,
+                        embedding = excluded.embedding,
+                        source_session = excluded.source_session,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (_new_id(), payload["entity"], payload["attribute"],
+                     payload["value"], session_id, encode(text)),
+                )
+            elif ptype == "preference":
+                conn.execute(
+                    """
+                    INSERT INTO preference_memory (key, value, source_session)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        source_session = excluded.source_session
+                    """,
+                    (payload["key"], payload["value"], session_id),
+                )
+            elif ptype == "policy":
+                conn.execute(
+                    """
+                    INSERT INTO policy_memory (key, rule, priority, source_session)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        rule = excluded.rule,
+                        priority = excluded.priority
+                    """,
+                    (payload["key"], payload["rule"], int(payload["priority"]), session_id),
+                )
+            conn.commit()
+            logger.info(f"Ib-Lite wrote {ptype}: {payload}")
+        finally:
+            conn.close()
+
+    def _log_failure(self, turn_text: str, payload: dict, err: str) -> None:
+        try:
+            with open(_FAILURE_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "ts": _new_id(),
+                    "error": err,
+                    "payload": payload,
+                    "turn": turn_text[:500],
+                }) + "\n")
+        except Exception as e:
+            logger.error(f"could not write failure log: {e}")
+        logger.warning(f"discarded invalid memory write: {err}")
+
+    # ── session end (episodic) ───────────────────────────────────────────
+
+    def end_session(self, session_id: str, summary: dict, turn_count: int | None = None) -> bool:
+        """Write the episodic row, THEN mark the session ended (gotcha #7 order).
+
+        Maps the existing summarizer schema onto episodic_memory:
+            summary_text       -> summary
+            topics_discussed   -> key_topics (JSON)
+            conversation_mood  -> mood_signal
+        Returns True if an episodic row was written.
+        """
+        if not self._available:
+            return False
+
+        summary_text = (summary.get("summary_text") or "").strip()
+        topics = summary.get("topics_discussed") or []
+        mood = (summary.get("conversation_mood") or "").strip() or None
+        episode_id = _new_id()
+        written = False
+
+        try:
+            if summary_text:
+                self._conn.execute(
+                    """
+                    INSERT INTO episodic_memory
+                        (id, session_id, summary, key_topics, mood_signal, turn_count, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (episode_id, session_id, summary_text, json.dumps(topics),
+                     mood, turn_count, encode(summary_text)),
+                )
+                written = True
+
+            self._conn.execute(
+                "UPDATE sessions SET ended_at = CURRENT_TIMESTAMP, turn_count = ?, "
+                "mood_signal = ?, episode_id = ? WHERE id = ?",
+                (turn_count, mood, episode_id if written else None, session_id),
+            )
+            self._conn.commit()
+        except Exception as e:
+            logger.error(f"end_session failed: {e}")
+            return False
+
+        return written
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass

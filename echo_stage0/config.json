@@ -1,22 +1,4 @@
 {
   "user_name": "Michael",
-  "user_pronouns": "he/him",
-  "memory_enabled": true,
-  "memory_user_id": "echo_michael",
-  "remember_triggers": [
-    "remember that",
-    "make sure you remember",
-    "don't forget that",
-    "keep in mind that"
-  ],
-  "memory_read_enabled": true,
-  "memory_session_context_k": 10,
-  "memory_turn_context_k": 3,
-  "memory_turn_min_score": 0.6,
-  "memory_max_injected": 15,
-  "memory_turn_retrieval_enabled": true,
-
-  "hindsight_url": "http://127.0.0.1:8888",
-  "hindsight_bank_id": "echo",
-  "hindsight_tenant": "default"
+  "user_pronouns": "he/him"
 }

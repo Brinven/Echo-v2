@@ -10,6 +10,7 @@ venv/
 *.db-shm
 *.db-wal
 
-# OpenMemory archives kept locally for reference; never committed.
+# OpenMemory / Hindsight archives kept locally for reference; never committed.
 archived-openmemory-*/
+archived-hindsight-*/
 

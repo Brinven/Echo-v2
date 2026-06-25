@@ -19,3 +19,27 @@ pipeline, connections expired between calls.
 API server.
 
 **Impact**: First-audio dropped from 5.3s to 0.8s (6.5x improvement).
+
+## 2026-06-24: Gemma 4 12B QAT is a thinking model — gate returned empty output
+
+**Problem**: The Ib-Lite significance gate returned empty `content` for fact/preference
+turns (json_parse_failed) while correctly returning `{"save": false}` for smalltalk. The
+empty ones also took longer (4.0s vs 3.2s).
+
+**Root cause**: `gemma-4-12b-it-qat@q4_k_xl` in LM Studio is a *thinking* model. It emitted
+all its output into `reasoning_content` (397 reasoning tokens), hit `max_tokens=150`
+(finish_reason=length), and produced an EMPTY `content` — the intended JSON never made it
+out of the reasoning channel. Smalltalk happened to fit a short answer.
+
+**Fix**: Pass `reasoning_effort="none"` on the gate completion. Verified the alternatives
+do NOT work for this template: `reasoning_effort="low"` still burned 147 reasoning tokens;
+`chat_template_kwargs.enable_thinking=false` likewise; raising `max_tokens=700` just burned
+697 reasoning tokens in 16s without finishing. Only `"none"` disabled it → clean JSON in ~1s.
+
+**Rule**: When calling a local model for STRUCTURED output (JSON gates, extractors), assume
+it may be a thinking model and explicitly disable reasoning with `reasoning_effort="none"`.
+Check `finish_reason` and `reasoning_tokens` when `content` comes back empty. (Cross-project
+LM Studio fact — also retained to `axly-infra`.)
+
+**Prevention**: Any future structured-output call against an unknown LM Studio model should
+default to `reasoning_effort="none"` and validate the JSON, rather than trusting `content`.

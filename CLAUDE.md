@@ -223,50 +223,49 @@ and the conversation loop (Path A).
 
 ---
 
-## ⚠ Hindsight Backend Notes (post-2026-05-02 swap)
+## ⚠ Memory Backend: Ib-Lite (Stage 5 Part 1, 2026-06-24 — replaced Hindsight)
 
-Echo's memory backend is **Hindsight, not OpenMemory** as of 2026-05-02.
-`memory.py` was rewritten; the `MemoryClient` surface is preserved so
-`memory_reader.py`, `session.py`, and `main.py` are untouched.
+Echo's runtime memory is now **Ib-Lite**, a self-contained local SQLite store in
+`echo_stage0/ib_lite/`. It replaced the external Hindsight HTTP backend entirely —
+no memory server, no cloud, no curator model. Everything runs behind the local
+Gemma 4 12B QAT.
 
-Two behavioral differences from OpenMemory worth knowing:
+- `memory.py`, `memory_reader.py`, `smoke_memory.py`, `openmemory.db*` are archived
+  in `echo_stage0/archived-hindsight-2026-06-24/`. Do not re-import them.
+- The pipeline imports only `from ib_lite import IbLite`. Five typed tables
+  (Core, Policy, Preference, Fact, Episodic) live in `echo_stage0/echo.db`
+  (created on first run).
+- Reads: Core+Policy injected every turn; Fact+Episodic hybrid-retrieved per turn
+  (FTS5 BM25 + sqlite-vec cosine + recency), ~13ms/turn. Writes: a background
+  significance-gate thread fires after each turn (single-flight) — off the hot path.
+- sqlite-vec ships via the `sqlite-vec` pip package (0.1.9), loaded with
+  `sqlite_vec.load(conn)` — NOT a hand-placed `vec0.dll`.
 
-### 1. Writes are async by default
+### Critical runtime gotcha — gate model thinking must be disabled
 
-Hindsight's retain runs xAI Grok 4.3 (thinking disabled via reasoning_effort:none) for fact extraction (~10s/call).
-That's unacceptable in the voice hot path, so `MemoryClient.add()` always
-sends `async=true`. The retain queues immediately and processes in the
-background. Practical effect: a "remember that X" said at the end of a
-session is **NOT** searchable for ~10s after sign-off. Don't write tests
-that immediately recall what was just retained — wait or poll.
+The significance gate calls the SAME loaded model. Gemma 4 12B QAT in LM Studio is a
+**thinking model**: by default it spends the whole token budget in `reasoning_content`
+and returns an EMPTY `content` (finish_reason=length) — the gate gets nothing to parse.
+Fix (already in `ib_lite/significance.py`): pass **`reasoning_effort="none"`** on the gate
+completion. This is the ONLY knob that works for this template — `reasoning_effort="low"`
+and `chat_template_kwargs.enable_thinking=false` do NOT disable it. With it: clean JSON in
+~1s. If the gate is ever pointed at a different thinking model, re-verify reasoning is off.
 
-### 2. min_score=0.6 is now a rank-based proxy, NOT a true similarity score
+### FTS5 stays in sync via UPSERT, not REPLACE
 
-Hindsight's `RecallResult` schema does **not** expose a similarity score
-field — by design. Hindsight's internal ranker handles relevance, surfaced
-through the `budget` (low/mid/high) and `max_tokens` knobs.
+Fact writes use explicit `INSERT ... ON CONFLICT(entity,attribute) DO UPDATE` (NOT
+`INSERT OR REPLACE`). REPLACE is delete+insert and would orphan external-content FTS5 rows
+(the AFTER DELETE trigger only fires under recursive_triggers, which must stay OFF or the
+`fact_touch` trigger loops). DO UPDATE keeps the rowid and fires the AFTER UPDATE trigger
+that re-syncs `fact_fts` correctly.
 
-`MemoryClient.search()` synthesizes a per-result score as `1.0 - (i / n)`
-where `i` is the rank index. So with k=3 results: `[1.00, 0.667, 0.333]`.
-With k=5: `[1.00, 0.80, 0.60, 0.40, 0.20]`. With k=10: `[1.00, 0.90, ...]`.
+### Retrieval threshold is empirical
 
-This means `min_score=0.6` (in `memory_reader.get_turn_context`) **no longer
-filters by semantic confidence** — it just trims the bottom of the rank list.
-With k=3, it keeps the top 2. With k=5, it keeps the top 3.
-
-**If irrelevant memories start getting injected per-turn, the lever is
-`budget="low"` inside `MemoryClient.search()` — not min_score.** Tightening
-budget reduces the candidate pool Hindsight returns; loosening lets more
-through. The synthesized score is downstream of that.
-
-If you ever need a real confidence threshold, options are:
-- Use Hindsight's `tags` filter to pre-narrow (e.g. only `personal` tags)
-- Use the `types` filter (`world` / `experience` / `observation`) to bias
-  toward the right kind of memory
-- Set `budget="low"` and trust Hindsight's ranker
-
-Do not try to recompute similarity locally — embeddings live inside
-Hindsight; round-tripping them defeats the abstraction.
+`MIN_SCORE=0.4` in `ib_lite/retrieval.py`. BM25 is unbounded (and flipped `* -1`), so the
+weighted score (0.5·BM25 + 0.3·cosine + 0.2·recency) is NOT normalized — 0.4 is a tuned
+floor, not a probability. Raise it if irrelevant facts surface; lower it if relevant ones
+get dropped. Weights and `TOP_K=5` are tunable constants in the same file. The embedder
+(all-MiniLM-L6-v2) is CPU-only by design — never move it to GPU; that VRAM is the 12B's.
 
 ---
 
@@ -277,8 +276,8 @@ Hindsight; round-tripping them defeats the abstraction.
 
 Set before invoking CC on this project: `$env:HINDSIGHT_BANK_ID="echo"`
 
-This is distinct from Echo's *runtime* memory above. At runtime Echo's `memory.py`
-passes `bank_id="echo"` explicitly on every retain/recall. This section is for
+This is distinct from Echo's *runtime* memory above (now **Ib-Lite** — local SQLite,
+no Hindsight at runtime). This section is for
 **Claude Code sessions working on Echo** — the CC hindsight-memory plugin routes a
 session's auto-retains by the `HINDSIGHT_BANK_ID` env var, which falls back to
 `axly-infra` if unset. Set it to `echo` so Echo development notes land in the
