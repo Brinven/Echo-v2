@@ -61,6 +61,9 @@ class IbLite:
         self._available = False
         self._gate_lock = threading.Lock()
         self._gate_busy = False
+        # Most recent fact written this session, for "Echo, forget that".
+        # Set on the gate thread, read on the main thread — guard with the lock.
+        self._last_fact: dict | None = None
 
         try:
             self._conn = db.get_connection(db_path)
@@ -78,7 +81,7 @@ class IbLite:
         ).fetchone()[0]
         n_pref = self._conn.execute("SELECT COUNT(*) FROM preference_memory").fetchone()[0]
         n_fact = self._conn.execute("SELECT COUNT(*) FROM fact_memory").fetchone()[0]
-        db_name = (db_path or db.DB_PATH).name
+        db_name = Path(db_path or db.DB_PATH).name
         print(
             f"  Memory: Ib-Lite ready ({db_name}) — "
             f"{n_core} core, {n_policy} policy, {n_pref} pref, {n_fact} fact"
@@ -214,6 +217,7 @@ class IbLite:
         fact_fts. REPLACE would delete+insert and orphan FTS rows.
         """
         conn = db.get_connection(self._db_path)
+        wrote_fact: dict | None = None
         try:
             ptype = payload["type"]
             if ptype == "fact":
@@ -231,6 +235,11 @@ class IbLite:
                     (_new_id(), payload["entity"], payload["attribute"],
                      payload["value"], session_id, encode(text)),
                 )
+                wrote_fact = {
+                    "entity": payload["entity"],
+                    "attribute": payload["attribute"],
+                    "value": payload["value"],
+                }
             elif ptype == "preference":
                 conn.execute(
                     """
@@ -255,8 +264,37 @@ class IbLite:
                 )
             conn.commit()
             logger.info(f"Ib-Lite wrote {ptype}: {payload}")
+            if wrote_fact is not None:
+                with self._gate_lock:
+                    self._last_fact = wrote_fact
         finally:
             conn.close()
+
+    def forget_last_fact(self) -> dict | None:
+        """Delete the most recent fact written this session (for "Echo, forget that").
+
+        Returns the forgotten fact dict {entity, attribute, value}, or None if
+        there is nothing to forget. The plain DELETE fires the fact_fts_delete
+        trigger, keeping FTS in sync.
+        """
+        if not self._available:
+            return None
+        with self._gate_lock:
+            fact = self._last_fact
+            self._last_fact = None
+        if not fact:
+            return None
+        try:
+            self._conn.execute(
+                "DELETE FROM fact_memory WHERE entity = ? AND attribute = ?",
+                (fact["entity"], fact["attribute"]),
+            )
+            self._conn.commit()
+            logger.info(f"Ib-Lite forgot fact: {fact}")
+            return fact
+        except Exception as e:
+            logger.error(f"forget_last_fact failed: {e}")
+            return None
 
     def _log_failure(self, turn_text: str, payload: dict, err: str) -> None:
         try:

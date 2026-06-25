@@ -275,6 +275,25 @@ floor, not a probability. Raise it if irrelevant facts surface; lower it if rele
 get dropped. Weights and `TOP_K=5` are tunable constants in the same file. The embedder
 (all-MiniLM-L6-v2) is CPU-only by design — never move it to GPU; that VRAM is the 12B's.
 
+`confidence` weights the **rank** (final `score = base × confidence`) and gates via
+`MIN_CONFIDENCE=0.15`, but the `MIN_SCORE` floor is checked against the *un-weighted* base —
+so a normal fact (default confidence 0.85) keeps its recall, while a fact dialed below 0.15
+(via the CLI) is suppressed without being deleted.
+
+### Curation & correction tools (Nice-to-Haves, built 2026-06-25)
+
+- **`echo_stage0/ib_lite_cli.py`** — inspect/curate memory from the terminal:
+  `python ib_lite_cli.py list | facts | search "<q>" | core <k> "<v>" | policy ... |
+  pref ... | confidence <fact_id> <0-1> | rm <table> <id|key>`. Use it to see what the
+  gate saved, seed Core/Policy, or down-rank/delete bad facts.
+- **"Echo, forget that"** — `is_forget()` in `session.py` + `IbLite.forget_last_fact()`
+  deletes the most recent fact written this session (tracked as `_last_fact`, set on the
+  gate thread under `_gate_lock`) and Echo confirms aloud. Handled in `main.py` before the
+  normal turn; the forget turn is never itself gated.
+- **Deferred to Stage 5 Part 2:** mood_signal → tone at session start (belongs with the
+  personality layer). The full confidence-*decay* job is also deferred — recency already
+  ages facts at read time; revisit only if stale facts become a real problem.
+
 ---
 
 ## Memory (Hindsight bank routing)

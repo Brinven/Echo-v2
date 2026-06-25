@@ -54,5 +54,17 @@ DO UPDATE` instead of `INSERT OR REPLACE`, so the external-content FTS5 stays in
 AFTER UPDATE trigger (REPLACE = delete+insert would orphan FTS rows; recursive_triggers must
 stay OFF or `fact_touch` loops).
 
-Deferred (PRD Nice-to-Haves, not built): CLI inspector, confidence decay, mood-driven tone.
 Next: Stage 5 Part 2 (personality) and Part 3 (web search).
+
+## Nice-to-Haves (built 2026-06-25)
+
+- [x] #1 CLI inspector — `ib_lite_cli.py` (list/facts/search/core/policy/pref/confidence/rm).
+- [x] #4 "Echo, forget that" — `is_forget()` + `IbLite.forget_last_fact()`, wired into main.py,
+      deletes the last fact written this session (spoken confirmation), FTS-synced.
+- [x] #2 lite — confidence folded into retrieval rank (`score = base × confidence`) +
+      `MIN_CONFIDENCE=0.15` floor; threshold still on base score so recall is unchanged.
+- [ ] #3 mood-tone — DEFERRED to Stage 5 Part 2 (personality territory).
+- [ ] #2 full decay job — DEFERRED (recency already ages facts; revisit if stale facts appear).
+
+Verified: smoke test green (now incl. forget step); confidence suppression + score math;
+CLI exercised end-to-end. Fixed a latent bug: `IbLite(db_path=...)` now accepts str or Path.

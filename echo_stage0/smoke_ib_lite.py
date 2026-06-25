@@ -104,6 +104,17 @@ def main() -> int:
     assert eps and "shocks" in eps[0]["summary"], "episodic not retrievable"
     print(f"  ok (episode_id={sess['episode_id']}, retrieved {len(eps)})\n")
 
+    print(f"{CYAN}[7] forget_last_fact ('Echo, forget that'){RESET}")
+    ib.start_session("smoke-session-2")
+    ib._insert("smoke-session-2", {"type": "fact", "entity": "Michael",
+                                    "attribute": "test_attr", "value": "scratch me"})
+    forgotten = ib.forget_last_fact()
+    assert forgotten and forgotten["value"] == "scratch me", "forget did not return the fact"
+    left = ib._conn.execute(
+        "SELECT COUNT(*) FROM fact_memory WHERE attribute = 'test_attr'").fetchone()[0]
+    assert left == 0 and ib.forget_last_fact() is None, "fact not deleted / double-forget unsafe"
+    print("  ok (deleted + double-forget safe)\n")
+
     ib.close()
     print(f"{GREEN}SMOKE PASSED{RESET}")
     return 0

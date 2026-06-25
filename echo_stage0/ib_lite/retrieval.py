@@ -23,6 +23,9 @@ from .embedder import encode
 RETRIEVAL_WEIGHTS = {"fts": 0.5, "vec": 0.3, "recency": 0.2}
 TOP_K = 5
 MIN_SCORE = 0.4
+# Facts below this confidence are suppressed entirely. Default fact confidence
+# is 0.85, so normal facts pass; lower a fact via the CLI to soft-hide it.
+MIN_CONFIDENCE = 0.15
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 _STOPWORDS = {
@@ -59,66 +62,78 @@ def _hybrid_search(
     weights: dict = RETRIEVAL_WEIGHTS,
     top_k: int = TOP_K,
     min_score: float = MIN_SCORE,
+    confidence_col: str | None = None,
+    min_confidence: float = MIN_CONFIDENCE,
 ) -> list[dict]:
+    """Hybrid FTS5 + cosine + recency search.
+
+    When `confidence_col` is given (facts), `confidence` weights the RANK
+    (score = base × confidence) and gates via `min_confidence`, while the
+    base score (un-weighted) is what's checked against `min_score` — so
+    lowering a fact's confidence demotes/hides it without changing the recall
+    floor for normal facts. Episodic search passes no confidence_col.
+    """
     q_emb = encode(query)
     fts_q = _fts_match_query(query)
     w_fts = float(weights["fts"])
     w_vec = float(weights["vec"])
     w_rec = float(weights["recency"])
     cols = ", ".join(f"m.{c}" for c in select_cols)
+    conf_expr = f"COALESCE(m.{confidence_col}, 1.0)" if confidence_col else "1.0"
 
     if fts_q:
-        sql = f"""
-            WITH fts AS (
+        fts_cte = f"""fts AS (
                 SELECT rowid, bm25({fts_table}) * -1 AS fts_score
                 FROM {fts_table} WHERE {fts_table} MATCH ?
-            ),
-            vec AS (
-                SELECT rowid, 1.0 - vec_distance_cosine(embedding, ?) AS vec_score
-                FROM {table} WHERE embedding IS NOT NULL
-            ),
-            rec AS (
-                SELECT rowid,
-                    1.0 / (1.0 + (julianday('now') - julianday({ts_col}))) AS recency
-                FROM {table}
-            )
-            SELECT {cols},
-                ROUND(({w_fts} * COALESCE(fts.fts_score, 0))
-                    + ({w_vec} * COALESCE(vec.vec_score, 0))
-                    + ({w_rec} * rec.recency), 4) AS score
-            FROM {table} m
-            JOIN rec ON rec.rowid = m.rowid
-            LEFT JOIN fts ON fts.rowid = m.rowid
-            LEFT JOIN vec ON vec.rowid = m.rowid
-            WHERE (fts.fts_score IS NOT NULL OR vec.vec_score IS NOT NULL)
-              AND score >= ?
-            ORDER BY score DESC LIMIT ?
-        """
-        params: tuple = (fts_q, q_emb, min_score, top_k)
+            ),"""
+        fts_join = "LEFT JOIN fts ON fts.rowid = m.rowid"
+        base_expr = (f"({w_fts} * COALESCE(fts.fts_score, 0))"
+                     f" + ({w_vec} * COALESCE(vec.vec_score, 0))"
+                     f" + ({w_rec} * rec.recency)")
+        match_cond = "(fts.fts_score IS NOT NULL OR vec.vec_score IS NOT NULL)"
+        lead_params: list = [fts_q, q_emb]
     else:
-        sql = f"""
-            WITH vec AS (
-                SELECT rowid, 1.0 - vec_distance_cosine(embedding, ?) AS vec_score
-                FROM {table} WHERE embedding IS NOT NULL
-            ),
-            rec AS (
-                SELECT rowid,
-                    1.0 / (1.0 + (julianday('now') - julianday({ts_col}))) AS recency
-                FROM {table}
-            )
+        fts_cte = ""
+        fts_join = ""
+        base_expr = (f"({w_vec} * COALESCE(vec.vec_score, 0))"
+                     f" + ({w_rec} * rec.recency)")
+        match_cond = "vec.vec_score IS NOT NULL"
+        lead_params = [q_emb]
+
+    conf_filter = " AND confidence >= ?" if confidence_col else ""
+
+    sql = f"""
+        WITH {fts_cte}
+        vec AS (
+            SELECT rowid, 1.0 - vec_distance_cosine(embedding, ?) AS vec_score
+            FROM {table} WHERE embedding IS NOT NULL
+        ),
+        rec AS (
+            SELECT rowid,
+                1.0 / (1.0 + (julianday('now') - julianday({ts_col}))) AS recency
+            FROM {table}
+        ),
+        scored AS (
             SELECT {cols},
-                ROUND(({w_vec} * COALESCE(vec.vec_score, 0))
-                    + ({w_rec} * rec.recency), 4) AS score
+                ROUND({base_expr}, 4) AS base_score,
+                ROUND(({base_expr}) * {conf_expr}, 4) AS score
             FROM {table} m
             JOIN rec ON rec.rowid = m.rowid
+            {fts_join}
             LEFT JOIN vec ON vec.rowid = m.rowid
-            WHERE vec.vec_score IS NOT NULL
-              AND score >= ?
-            ORDER BY score DESC LIMIT ?
-        """
-        params = (q_emb, min_score, top_k)
+            WHERE {match_cond}
+        )
+        SELECT * FROM scored
+        WHERE base_score >= ?{conf_filter}
+        ORDER BY score DESC LIMIT ?
+    """
 
-    rows = conn.execute(sql, params).fetchall()
+    params = lead_params + [min_score]
+    if confidence_col:
+        params.append(min_confidence)
+    params.append(top_k)
+
+    rows = conn.execute(sql, tuple(params)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -131,6 +146,7 @@ def fact_search(conn: sqlite3.Connection, query: str, **kw) -> list[dict]:
         ts_col="updated_at",
         select_cols=["id", "entity", "attribute", "value", "confidence"],
         query=query,
+        confidence_col="confidence",
         **kw,
     )
 

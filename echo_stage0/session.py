@@ -20,10 +20,23 @@ _SIGNOFF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Forget pattern: a clear imperative to drop the last thing remembered.
+# Kept narrow to avoid firing on ordinary conversation.
+_FORGET_PATTERNS = [
+    re.compile(r"\bforget\s+(that|what\s+i\s+just\s+(said|told\s+you)|what\s+you\s+just\s+(saved|stored))\b", re.IGNORECASE),
+    re.compile(r"\bscratch\s+that\b", re.IGNORECASE),
+    re.compile(r"\bdon'?t\s+remember\s+that\b", re.IGNORECASE),
+]
+
 
 def is_signoff(transcript: str) -> bool:
     """Check if the transcript contains the sign-off phrase."""
     return bool(_SIGNOFF_PATTERN.search(transcript))
+
+
+def is_forget(transcript: str) -> bool:
+    """Check if the transcript is a 'forget that' correction command."""
+    return any(p.search(transcript) for p in _FORGET_PATTERNS)
 
 
 class Session:

@@ -29,7 +29,7 @@ from llm import LLMClient
 from tts import TTSEngine
 from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
-from session import Session, is_signoff, load_config
+from session import Session, is_signoff, is_forget, load_config
 from summarizer import generate_summary
 from ib_lite import IbLite
 
@@ -106,6 +106,27 @@ def run_streaming_pipeline(
         print_conversation("You", transcript)
         session.add_user_turn(transcript, stt_latency)
         return {"signoff": True, "transcript": transcript, "stt": stt_latency}
+
+    # ── Forget correction: "Echo, forget that" ──
+    if is_forget(transcript) and ib and ib.available:
+        print_conversation("You", transcript)
+        session.add_user_turn(transcript, stt_latency)
+        forgotten = ib.forget_last_fact()
+        if forgotten:
+            reply = f"Okay, I've let that go — the part about {forgotten['value']}."
+        else:
+            reply = "There's nothing recent for me to forget."
+        print_conversation("Echo", reply)
+        audio_q.start()
+        try:
+            tts_audio, tts_sr = tts.synthesize(reply)
+            audio_q.enqueue(tts_audio, tts_sr)
+            sm.transition(State.SPEAKING)
+        except Exception as e:
+            print(f"  [TTS error on forget: {e}]")
+        audio_q.finish()
+        session.add_echo_turn(reply, 0.0)
+        return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
 
     print_conversation("You", transcript)
     session.add_user_turn(transcript, stt_latency)
