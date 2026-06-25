@@ -10,9 +10,14 @@ Controls:
   SPACE  -- push-to-talk (hold to record, release to process)
   M      -- toggle mute
   S      -- toggle Maximum Snark Mode (locks snark to 10 for the session)
+  L      -- swap the LLM mid-conversation (filter-picker; keeps the chat + history)
   Q      -- quit (double-press required mid-conversation)
   Say "Echo, that's all for now" to end session gracefully
   Say "Echo, maximum snark mode" to lock snark to 10
+
+Model selection: `python main.py --model <name-or-substring>` (or set ECHO_MODEL) pins a
+model; otherwise a filter-picker runs at startup (Enter reuses your last pick). See
+audition.md for the full model-testing workflow.
 """
 
 import sys
@@ -31,7 +36,7 @@ from llm import LLMClient
 from tts import TTSEngine
 from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
-from session import Session, is_signoff, is_forget, is_max_snark, load_config
+from session import Session, is_signoff, is_forget, is_max_snark, load_config, save_config
 from summarizer import generate_summary
 from ib_lite import IbLite
 from persona import build_system_prompt, mood_opener
@@ -48,7 +53,7 @@ def draw_status(status="--", vad="--", mute="off", stt=0.0, fa=0.0, session_id="
     if stt > 0:
         timing = f"  |  STT {stt:.2f}s, 1st-audio {fa:.2f}s"
     session_str = f"  |  turn {turn}" if turn > 0 else ""
-    line = f"  [{status}]{mute_str}{vad_str}{session_str}{timing}  [SPACE:talk M:mute S:snark Q:quit]"
+    line = f"  [{status}]{mute_str}{vad_str}{session_str}{timing}  [SPACE:talk M:mute S:snark L:model Q:quit]"
 
     sys.stdout.write(f"\r\033[K{line}")
     sys.stdout.flush()
@@ -57,6 +62,16 @@ def draw_status(status="--", vad="--", mute="off", stt=0.0, fa=0.0, session_id="
 def clear_status_line():
     sys.stdout.write("\r\033[K")
     sys.stdout.flush()
+
+
+def _parse_model_arg(argv: list[str]) -> str | None:
+    """Pull a --model <value> (or --model=<value>) pin from argv. CLI overrides ECHO_MODEL."""
+    for i, a in enumerate(argv):
+        if a == "--model" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--model="):
+            return a.split("=", 1)[1]
+    return None
 
 
 def print_conversation(speaker: str, text: str):
@@ -323,7 +338,13 @@ def main():
 
     # Initialize backends
     stt = STTEngine()
-    llm = LLMClient()
+    # Model selection: --model/ECHO_MODEL pin, else filter-picker (Enter reuses last_model).
+    pinned_model = _parse_model_arg(sys.argv[1:])
+    llm = LLMClient(pinned=pinned_model, last_model=config.get("last_model"))
+    # Remember the picked model so Enter reuses it next launch.
+    if llm.model_name and config.get("last_model") != llm.model_name:
+        config["last_model"] = llm.model_name
+        save_config(config)
     tts = TTSEngine()
     vad = VADDetector()
 
@@ -375,6 +396,8 @@ def main():
     mute_toggle_event = threading.Event()
     space_pressed = threading.Event()
     space_released = threading.Event()
+    swap_requested = threading.Event()   # L key — request a mid-chat model swap
+    picker_active = threading.Event()    # set while the swap picker owns the terminal
     muted = False
 
     # Q double-press tracking
@@ -410,6 +433,10 @@ def main():
     # ── Keyboard handlers ──
     def on_key(event):
         nonlocal muted, q_first_press_time, q_warned
+        # While the model picker owns the terminal, ignore all keys so the user's typed
+        # filter/number goes to input() and doesn't trip PTT/mute/etc.
+        if picker_active.is_set():
+            return
         if event.event_type != keyboard.KEY_DOWN:
             if event.name == "space":
                 space_released.set()
@@ -439,6 +466,9 @@ def main():
             clear_status_line()
             state = "ON (snark locked to 10)" if session.max_snark else "off (back to daily)"
             print(f"  [Maximum Snark Mode: {state}]")
+        elif event.name == "l":
+            # Request a mid-chat model swap; serviced at the next LISTENING tick.
+            swap_requested.set()
         elif event.name == "space":
             space_pressed.set()
 
@@ -451,6 +481,34 @@ def main():
         callback=audio_vad_callback, blocksize=FRAME_SIZE,
     )
     audio_stream.start()
+
+    def do_model_swap():
+        """Mid-chat hot-swap: pause the mic, run the filter-picker, swap voice + gate model.
+
+        Conversation history is preserved (plain message dicts), so the new model continues the
+        SAME chat. The new model JIT-loads in LM Studio, so the first reply after a swap may pause.
+        """
+        picker_active.set()
+        try:
+            audio_stream.stop()
+        except Exception:
+            pass
+        clear_status_line()
+        print("\n  ── Swap model (keeps this conversation) ──")
+        new_model = llm.pick_model_interactive()
+        if new_model and new_model != llm.model_name:
+            llm.set_model(new_model)
+            ib.set_model(new_model)   # keep the significance gate in sync with the voice
+            config["last_model"] = new_model
+            save_config(config)
+            print(f"  [Now using {new_model} — first reply may pause while LM Studio loads it]")
+        else:
+            print(f"  [Model unchanged — staying on {llm.model_name}]")
+        try:
+            audio_stream.start()
+        except Exception:
+            pass
+        picker_active.clear()
 
     signoff_triggered = False
 
@@ -477,6 +535,10 @@ def main():
                     if quit_event.is_set():
                         sm.transition(State.SHUTDOWN)
                         break
+                    if swap_requested.is_set():
+                        swap_requested.clear()
+                        do_model_swap()
+                        break  # re-enter LISTENING cleanly (resets buffers, redraws status)
                     if mute_toggle_event.is_set():
                         mute_toggle_event.clear()
                         if muted:

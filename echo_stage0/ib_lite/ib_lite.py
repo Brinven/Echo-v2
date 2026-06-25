@@ -91,6 +91,14 @@ class IbLite:
     def available(self) -> bool:
         return self._available
 
+    def set_model(self, name: str) -> None:
+        """Swap the model the significance gate uses (mid-chat hot-swap keeps voice + gate in sync).
+
+        The gate reads self._model fresh on each run_gate() call, so this takes effect on the
+        next background write — no restart needed.
+        """
+        self._model = name
+
     # ── session lifecycle ────────────────────────────────────────────────
 
     def start_session(self, session_id: str) -> None:

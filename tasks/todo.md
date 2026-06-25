@@ -70,6 +70,12 @@ migrates existing rows — schema-shape changes to live data need a `user_versio
   on exchange 1 only via `session.mood_opener`. Verified live (warmer opening is softer, in-character).
 - `start-echo.bat` rewritten — dropped all Hindsight env plumbing (runtime is Ib-Lite, no server/keys);
   now just sets PYTHONUTF8 and runs main.py.
+- Model audition workflow built (`llm.py` + `main.py` + `session.save_config`): filter-picker
+  (substring narrow, Enter=last_model from config.json), `--model`/`ECHO_MODEL` pin (`_resolve_pin`),
+  and mid-chat **L-key hot-swap** (`do_model_swap` swaps voice + gate, keeps history). Doc:
+  `echo_stage0/audition.md`. Verified: _resolve_pin (exact/unique/ambiguous/none) + live pinned
+  construction (exact/substring/env) skip the picker. Interactive picker + L swap are user-run
+  (need a real terminal).
 
 Remaining nice-to-haves (still deferred): persona self-check (silent mid-conversation alignment
 probe) and dry-wit calibration example exchanges in the persona block.

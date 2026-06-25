@@ -5,6 +5,7 @@ Connects to LM Studio's OpenAI-compatible API at localhost:1234.
 Auto-detects loaded models. Supports both blocking and streaming generation.
 """
 
+import os
 import sys
 import re
 import json
@@ -14,6 +15,22 @@ from collections.abc import Generator
 from openai import OpenAI, APIConnectionError, APITimeoutError
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_pin(pin: str, available: list[str]) -> tuple[str | None, list[str]]:
+    """Resolve a model pin (exact id, or case-insensitive substring) against the live list.
+
+    Returns (resolved_id_or_None, substring_matches). An exact id wins outright. Otherwise a
+    SINGLE substring match resolves; multiple matches return None plus the list so the caller
+    can drop the user into the picker pre-filtered.
+    """
+    if pin in available:
+        return pin, [pin]
+    low = pin.lower()
+    matches = [m for m in available if low in m.lower()]
+    if len(matches) == 1:
+        return matches[0], matches
+    return None, matches
 
 
 # Last-resort fallback only. From Stage 5 Part 2, the per-turn system prompt is
@@ -71,7 +88,9 @@ _MAX_BUFFER_TOKENS = 150  # flush if no sentence boundary found after this many 
 class LLMClient:
     """LLM client for LM Studio via OpenAI-compatible API."""
 
-    def __init__(self):
+    _PICK_DISPLAY_CAP = 30  # don't dump the whole (huge) model list unfiltered
+
+    def __init__(self, pinned: str | None = None, last_model: str | None = None):
         self._client = OpenAI(
             base_url=LM_STUDIO_URL,
             api_key="not-needed",
@@ -79,7 +98,7 @@ class LLMClient:
         )
         self._model = None
         self._sampler = _load_sampler()
-        self._detect_model()
+        self._detect_model(pinned=pinned, last_model=last_model)
         print(
             f"  Sampler: temp {self._sampler['temperature']}, top_p {self._sampler['top_p']}, "
             f"top_k {self._sampler['top_k']}, repeat {self._sampler['repeat_penalty']}, "
@@ -111,8 +130,15 @@ class LLMClient:
             "stream": stream,
         }
 
-    def _detect_model(self):
-        """Auto-detect available models from LM Studio."""
+    def _detect_model(self, pinned: str | None = None, last_model: str | None = None):
+        """Select the model at startup.
+
+        Resolution order:
+          1. A pin (the `pinned` arg, else the ECHO_MODEL env var) — name or substring.
+             A unique match is used silently; an ambiguous one opens the picker pre-filtered.
+          2. Exactly one model loaded → use it.
+          3. Otherwise → interactive filter-picker, defaulting to `last_model` on Enter.
+        """
         try:
             models = self._client.models.list()
             available = [m.id for m in models.data]
@@ -130,20 +156,102 @@ class LLMClient:
             )
             sys.exit(1)
 
-        if len(available) == 1:
-            self._model = available[0]
-        else:
-            print("\n  Available models:")
-            for i, name in enumerate(available, 1):
-                print(f"    {i}. {name}")
-            while True:
-                choice = input(f"  Select model [1-{len(available)}]: ").strip()
-                if choice.isdigit() and 1 <= int(choice) <= len(available):
-                    self._model = available[int(choice) - 1]
-                    break
-                print("  Invalid choice, try again.")
+        last = last_model if (last_model and last_model in available) else None
+        pin = pinned or os.environ.get("ECHO_MODEL")
 
+        chosen: str | None = None
+        if pin:
+            resolved, matches = _resolve_pin(pin, available)
+            if resolved:
+                self._model = resolved
+                print(f"  LLM: {self._model} via LM Studio (pinned '{pin}')")
+                return
+            if matches:
+                print(f"\n  '{pin}' matches {len(matches)} models — narrow it down:")
+                chosen = self._pick_interactive(available, last, initial_filter=pin)
+            else:
+                print(f"\n  No model matches '{pin}'. Pick from the full list:")
+                chosen = self._pick_interactive(available, last)
+        elif len(available) == 1:
+            self._model = available[0]
+            print(f"  LLM: {self._model} via LM Studio")
+            return
+        else:
+            chosen = self._pick_interactive(available, last)
+
+        # The picker only returns None on explicit 'cancel'; at startup we must end with a model.
+        while chosen is None:
+            print("  (a model is required to start)")
+            chosen = self._pick_interactive(available, last)
+        self._model = chosen
         print(f"  LLM: {self._model} via LM Studio")
+
+    def _pick_interactive(
+        self, available: list[str], last_model: str | None = None, initial_filter: str = "",
+    ) -> str | None:
+        """Filter-picker REPL. Type a substring to narrow, a number to pick, Enter to reuse
+        `last_model`, or 'cancel' to abort (returns None). The current/last model is marked '*'.
+        """
+        flt = initial_filter.strip()
+        while True:
+            matches = [m for m in available if flt.lower() in m.lower()] if flt else available
+            if not matches:
+                print(f"  (no model matches '{flt}' — filter cleared)")
+                flt = ""
+                continue
+
+            if not flt and len(matches) > self._PICK_DISPLAY_CAP:
+                print(f"  {len(matches)} models loaded — type a filter to narrow "
+                      f"(e.g. 'qat', '12b', 'e4b', 'heretic').")
+            else:
+                print(f"  Models matching '{flt}':" if flt else "  Available models:")
+                for i, name in enumerate(matches, 1):
+                    mark = "*" if name == last_model else " "
+                    print(f"   {mark}{i:3}. {name}")
+
+            hint = []
+            if last_model:
+                hint.append(f"Enter=last({last_model})")
+            hint += ["number=pick", "text=filter", "cancel=abort"]
+            choice = input(f"  [{' | '.join(hint)}] > ").strip()
+
+            if not choice:
+                if last_model:
+                    return last_model
+                if len(matches) == 1:
+                    return matches[0]
+                print("  Type a filter or a number.")
+                continue
+            if choice.lower() == "cancel":
+                return None
+            if choice.isdigit():
+                idx = int(choice)
+                if 1 <= idx <= len(matches):
+                    return matches[idx - 1]
+                print(f"  Out of range (1-{len(matches)}).")
+                continue
+            flt = choice  # anything else is a new filter
+
+    def set_model(self, name: str) -> None:
+        """Swap the active model in place (mid-chat hot-swap). The gate is swapped separately."""
+        self._model = name
+
+    def list_models(self) -> list[str]:
+        """Live model ids from LM Studio (empty list on error)."""
+        try:
+            return [m.id for m in self._client.models.list().data]
+        except Exception as e:
+            logger.error(f"could not list models: {e}")
+            return []
+
+    def pick_model_interactive(self) -> str | None:
+        """Re-query LM Studio and run the filter-picker (current model offered as 'last').
+        Returns the chosen id, or None if cancelled / nothing available."""
+        available = self.list_models()
+        if not available:
+            print("  [No models available from LM Studio]")
+            return None
+        return self._pick_interactive(available, last_model=self._model)
 
     def generate(
         self, user_text: str, history: list[dict] | None = None,

@@ -66,7 +66,14 @@ Do not architect for dual-GPU now.
 
 - **Runtime**: LM Studio, localhost:1234, OpenAI-compatible API (`/v1/`)
 - **Package**: `openai` Python package pointed at local endpoint
-- **Model selection**: auto-detect from `/v1/models` at startup
+- **Model selection** (Stage 5 Part 2, 2026-06-24): live `/v1/models` + a **filter-picker** in
+  `llm.py` (`_pick_interactive`) — type a substring to narrow the (huge) list, number to pick,
+  Enter reuses `config.json` `last_model`. Pin non-interactively with `--model <name|substring>`
+  (parsed in `main.py`) or the `ECHO_MODEL` env var (`_resolve_pin`: exact id or unique substring
+  wins; ambiguous → picker pre-filtered). **Mid-chat hot-swap on the `L` key** (`do_model_swap` in
+  `main.py`) swaps BOTH the voice model (`llm.set_model`) and the gate model (`ib.set_model`),
+  preserving conversation history; first reply after a swap pauses while LM Studio JIT-loads.
+  Full workflow doc: `echo_stage0/audition.md`. The harnesses honor `ECHO_MODEL` for batch testing.
 - **Preferred models**: Gemma 4B (fast, ~80 tok/s on this hardware) or similar small-medium local model
 - **No cloud LLM**: do not add fallback to OpenAI, Anthropic, or any external API
 - **Fine-tuning**: considered as a future option, not in scope yet

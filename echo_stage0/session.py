@@ -224,3 +224,14 @@ def load_config() -> dict:
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(default, f, indent=2)
     return default
+
+
+def save_config(config: dict) -> None:
+    """Persist the config dict back to config.json (used to remember the last-picked model)."""
+    config_path = Path(__file__).resolve().parent / "config.json"
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+    except OSError as e:
+        # Non-fatal: a failed save just means we won't remember the choice next time.
+        print(f"  [Could not save config.json: {e}]")
