@@ -169,6 +169,25 @@ class IbLite:
         prompt = base if not mem_block else f"{base}\n\n{mem_block}"
         return prompt, ms, count
 
+    def last_mood_signal(self) -> str | None:
+        """Mood phrase of the most recent prior session (for opening-tone modulation).
+
+        Reads the latest episodic_memory.mood_signal. Returns None if memory is
+        unavailable, there are no prior episodes, or none carried a mood.
+        """
+        if not self._available:
+            return None
+        try:
+            row = self._conn.execute(
+                "SELECT mood_signal FROM episodic_memory "
+                "WHERE mood_signal IS NOT NULL AND TRIM(mood_signal) <> '' "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            return row["mood_signal"] if row else None
+        except Exception as e:
+            logger.error(f"last_mood_signal failed: {e}")
+            return None
+
     # ── writes (background) ──────────────────────────────────────────────
 
     def write_memory(self, session_id: str, turn_text: str) -> None:

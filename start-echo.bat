@@ -1,32 +1,23 @@
 @echo off
-REM Echo launcher. Reads HINDSIGHT_API_TENANT_API_KEY from the Hindsight project's
-REM env file and exposes it to Python as HINDSIGHT_API_KEY, then runs main.py.
-REM Hindsight must be running locally (PM2 process hindsight-memory).
+REM ============================================================================
+REM Echo launcher (Stage 5).
+REM
+REM Runtime memory is Ib-Lite -- a self-contained local SQLite store at
+REM echo_stage0\echo.db. No external memory server, no API keys, no Hindsight.
+REM (The CC hindsight plugin still uses bank "echo" for DEV notes, but Echo's
+REM  runtime no longer talks to Hindsight at all.)
+REM
+REM Requirements:
+REM   - LM Studio running at 127.0.0.1:1234 with a model loaded
+REM     (Echo target: gemma-4-12b-it-qat). main.py exits with a clear message if not.
+REM ============================================================================
 
-setlocal enableextensions enabledelayedexpansion
+setlocal enableextensions
 
-set "HINDSIGHT_ENV=H:\AxlyGitHub_H\HindSight\hindsight.env"
-
-if not exist "%HINDSIGHT_ENV%" (
-  echo [echo] WARNING: %HINDSIGHT_ENV% not found.
-  echo [echo] Memory will be unavailable this session.
-  goto :run
-)
-
-for /f "usebackq tokens=1,* delims==" %%A in ("%HINDSIGHT_ENV%") do (
-  if /I "%%A"=="HINDSIGHT_API_TENANT_API_KEY" set "HINDSIGHT_API_KEY=%%B"
-)
-
-if not defined HINDSIGHT_API_KEY (
-  echo [echo] WARNING: HINDSIGHT_API_TENANT_API_KEY not found in %HINDSIGHT_ENV%.
-  echo [echo] Memory will be unavailable this session.
-)
-
-set "HINDSIGHT_URL=http://127.0.0.1:8888"
-set "HINDSIGHT_BANK_ID=echo"
+REM Force UTF-8 so console output (em-dashes etc.) doesn't choke on cp1252.
 set "PYTHONUTF8=1"
 
-:run
 cd /d "%~dp0echo_stage0"
 python main.py %*
+
 endlocal

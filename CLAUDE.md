@@ -303,9 +303,10 @@ Echo's character lives in **`echo_stage0/persona.py`** — `PERSONA_BLOCK`, `SNA
 snark, core_block, memory_block)`. Identity is here and ONLY here.
 
 - **System prompt assembly is now in `main.py`, not `ib_lite`.** Per turn it builds:
-  `persona block → core_block (ib.build_context_block) → memory_block (ib.read_memory) →
-  anti-drift anchor`. `IbLite.system_prompt_for_turn()` still exists but is **retired from
-  the hot path** — do not reintroduce it as the assembler or the two orderings will diverge.
+  `persona block → mood opener (opening only) → core_block (ib.build_context_block) →
+  memory_block (ib.read_memory) → anti-drift anchor`. `IbLite.system_prompt_for_turn()`
+  still exists but is **retired from the hot path** — do not reintroduce it as the assembler
+  or the two orderings will diverge.
   Persona is built even when Ib-Lite is unavailable (empty core/memory), so the old generic
   `DEFAULT_SYSTEM_PROMPT` fallback is bypassed.
 - **Identity is single-sourced.** The old `persona` row in `core_memory` was removed from the
@@ -321,6 +322,15 @@ snark, core_block, memory_block)`. Identity is here and ONLY here.
 - **Maximum Snark Mode** (locks 10 for the session): voice "Echo, maximum snark mode"
   (`is_max_snark()` in `session.py`, handled in `main.py` like the forget path — not gated, does
   not advance the exchange counter) OR the **S** key toggle. Resets on next launch (per-process).
+
+### Mood opener (Nice-to-Have, built 2026-06-24)
+- `persona.mood_opener(mood_signal)` maps the PRIOR session's mood to a brief opening-tone nudge
+  (warmer after a rough session, lighter after a good one). `conversation_mood` is free text from
+  the summarizer (not an enum), so it's **keyword-matched**; "unknown"/neutral/no-match → "".
+- `IbLite.last_mood_signal()` returns the most recent episodic mood. `main.py` resolves the opener
+  once at session start (`session.mood_opener`) and passes it to `build_system_prompt` **only on
+  exchange 1** — it fades after the opening. Verified live: warmer opening is softer, in-character,
+  and never announces itself.
 
 ### Anti-drift anchor — counter semantics (off-by-one is the trap)
 - `session.exchange_count` counts full user→Echo **exchanges** (1/round-trip). This is DISTINCT

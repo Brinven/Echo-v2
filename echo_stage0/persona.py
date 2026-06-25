@@ -67,6 +67,47 @@ You do not drift into generic assistant behavior. You stay yourself.
 [/anchor]"""
 
 
+# ── Mood opener (Nice-to-Have, PRD §3) ──
+#
+# The most recent prior session's mood (Ib-Lite episodic mood_signal) nudges Echo's
+# OPENING tone — warmer after a rough session, lighter after a good one. Applied only on
+# the first exchange of a session; it fades after that and the conversation's own flow
+# takes over. conversation_mood is a free-text phrase from the summarizer (not a fixed
+# enum), so we keyword-match it. No match (or 'unknown') → no opener.
+
+_MOOD_WARMER_KEYS = (
+    "frustrat", "stress", "anxious", "low", "down", "sad", "upset", "angry", "tense",
+    "tired", "exhaust", "overwhelm", "worried", "discourag", "defeat", "rough",
+)
+_MOOD_LIGHTER_KEYS = (
+    "excit", "happy", "upbeat", "great", "good", "positive", "productive", "energ",
+    "cheer", "optimist", "hopeful", "pleased", "content", "relaxed",
+)
+
+_MOOD_WARMER = (
+    "Michael's last conversation ended on a rough note. Open a little warmer and softer "
+    "than usual — do not mention it or make a thing of it, just be gentle in how you start."
+)
+_MOOD_LIGHTER = (
+    "Michael's last conversation ended on a good note. Open with an easy, light tone — "
+    "you can carry a little of that energy into how you start."
+)
+
+
+def mood_opener(mood_signal: str | None) -> str:
+    """Map a free-text mood phrase to a brief opening-tone nudge ('' if none/neutral)."""
+    if not mood_signal:
+        return ""
+    m = mood_signal.strip().lower()
+    if not m or m == "unknown":
+        return ""
+    if any(k in m for k in _MOOD_WARMER_KEYS):
+        return _MOOD_WARMER
+    if any(k in m for k in _MOOD_LIGHTER_KEYS):
+        return _MOOD_LIGHTER
+    return ""
+
+
 # Token budget for the assembled system prompt (PRD §4). A guide, not a hard cap —
 # only ever enforced by trimming the retrieved-memory block, never persona/core/policy.
 TOKEN_BUDGET = 1200
@@ -95,11 +136,13 @@ def build_system_prompt(
     snark_level: int,
     core_block: str = "",
     memory_block: str = "",
+    mood_opener: str = "",
 ) -> str:
     """Assemble the full per-turn system prompt.
 
-    Order (PRD §4):
-        PERSONA  →  CORE/POLICY slab  →  RETRIEVED MEMORY (if any)  →  ANTI-DRIFT ANCHOR
+    Order (PRD §4, with the optional mood opener riding just after the persona):
+        PERSONA  →  MOOD OPENER (opening only)  →  CORE/POLICY slab
+                 →  RETRIEVED MEMORY (if any)  →  ANTI-DRIFT ANCHOR
 
     Args:
         exchange_count: 1-based count of the exchange this prompt is being built for.
@@ -110,9 +153,11 @@ def build_system_prompt(
             Policy + Preferences). Empty string when memory is unavailable.
         memory_block: Ib-Lite's per-turn retrieved Fact/Episodic block. Empty when
             retrieval returns nothing above threshold.
+        mood_opener: optional opening-tone nudge (see mood_opener()). Pass non-empty
+            ONLY on the first exchange of a session; empty otherwise.
 
     Token budget (PRD §4): if the assembled prompt exceeds TOKEN_BUDGET, the memory
-    block is trimmed (oldest/last lines dropped toward k=3). Persona, core, and policy
+    block is trimmed (last lines dropped toward k=3). Persona, mood, core, and policy
     are NEVER trimmed.
     """
     persona = build_persona_block(snark_level)
@@ -126,34 +171,29 @@ def build_system_prompt(
         else ""
     )
 
-    trimmed_memory = _trim_memory_to_budget(persona, core_block, memory_block, anchor)
-    return _join_blocks(persona, core_block, trimmed_memory, anchor)
+    # Everything except the retrieved memory is never trimmed.
+    fixed = (persona, mood_opener, core_block, anchor)
+    trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
+    return _join_blocks(persona, mood_opener, core_block, trimmed_memory, anchor)
 
 
-def _join_blocks(persona: str, core_block: str, memory_block: str, anchor: str) -> str:
-    """Join non-empty blocks with blank lines. Drops empties so no dangling headers."""
-    parts = [persona]
-    if core_block.strip():
-        parts.append(core_block.strip())
-    if memory_block.strip():
-        parts.append(memory_block.strip())
-    if anchor.strip():
-        parts.append(anchor.strip())
-    return "\n\n".join(parts)
+def _join_blocks(*blocks: str) -> str:
+    """Join non-empty blocks with blank lines, in order. Drops empties (no dangling headers)."""
+    return "\n\n".join(b.strip() for b in blocks if b and b.strip())
 
 
-def _trim_memory_to_budget(persona: str, core_block: str, memory_block: str, anchor: str) -> str:
-    """Shorten ONLY the memory block until the assembled prompt fits TOKEN_BUDGET.
+def _trim_memory_to_budget(memory_block: str, *fixed_blocks: str) -> str:
+    """Shorten ONLY the memory block until persona+fixed+memory fits TOKEN_BUDGET.
 
-    Persona, core, and policy are never trimmed (PRD §4). The memory block is a header
-    line followed by per-item lines; we drop trailing item lines (keeping the header and
-    at most the top few items) until we're under budget or down to the header alone.
+    fixed_blocks are everything that is never trimmed (persona, mood, core/policy, anchor);
+    their order here doesn't matter — only the total token estimate does. The memory block
+    is a header line followed by per-item lines; we drop trailing item lines (keeping the
+    header and at least the top 3 items the PRD names as the floor) until under budget.
     """
     if not memory_block.strip():
         return memory_block
 
-    full = _join_blocks(persona, core_block, memory_block, anchor)
-    if _estimate_tokens(full) <= TOKEN_BUDGET:
+    if _estimate_tokens(_join_blocks(*fixed_blocks, memory_block)) <= TOKEN_BUDGET:
         return memory_block
 
     lines = memory_block.splitlines()
@@ -166,7 +206,7 @@ def _trim_memory_to_budget(persona: str, core_block: str, memory_block: str, anc
     while len(items) > 3:
         items.pop()
         candidate = "\n".join([header] + items)
-        if _estimate_tokens(_join_blocks(persona, core_block, candidate, anchor)) <= TOKEN_BUDGET:
+        if _estimate_tokens(_join_blocks(*fixed_blocks, candidate)) <= TOKEN_BUDGET:
             return candidate
 
     return "\n".join([header] + items)

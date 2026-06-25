@@ -34,7 +34,7 @@ from state import State, StateMachine
 from session import Session, is_signoff, is_forget, is_max_snark, load_config
 from summarizer import generate_summary
 from ib_lite import IbLite
-from persona import build_system_prompt
+from persona import build_system_prompt, mood_opener
 from daily_state import get_daily_snark_level
 
 
@@ -171,7 +171,11 @@ def run_streaming_pipeline(
         core_block = ib.build_context_block()
         memory_block, memory_retrieval_ms, memories_injected = ib.read_memory(transcript)
 
-    system_prompt = build_system_prompt(exchange_n, snark_level, core_block, memory_block)
+    # Mood opener only on the opening exchange; it fades after that.
+    opener = session.mood_opener if exchange_n == 1 else ""
+    system_prompt = build_system_prompt(
+        exchange_n, snark_level, core_block, memory_block, mood_opener=opener
+    )
 
     # ── LLM streaming -> TTS chunks -> audio queue ──
     audio_q.start()
@@ -343,8 +347,15 @@ def main():
     # Maximum Snark Mode (voice "maximum snark mode" or the S key) overrides to 10 in-session.
     session.daily_snark = get_daily_snark_level()
 
+    # Opening-tone modulation: nudge Echo warmer/lighter based on how the LAST session
+    # ended (Ib-Lite episodic mood_signal). Applied only on the first exchange.
+    if ib and ib.available:
+        session.mood_opener = mood_opener(ib.last_mood_signal())
+
     print(f"  Session: {session.session_id}")
     print(f"  Snark level: {session.daily_snark}/10")
+    if session.mood_opener:
+        print("  Opening tone: adjusted to last session's mood")
     print()
     print('  Say "Echo, that\'s all for now" to end session')
     draw_status(status="READY", vad=vad_mode, session_id=session.session_id)

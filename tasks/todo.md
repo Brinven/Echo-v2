@@ -65,4 +65,13 @@ counter is 1-based and checked *for the turn being built* (`count % 8 == 0`), wi
 offline assert that exchange 0 does NOT anchor. Also: editing an `INSERT OR IGNORE` seed never
 migrates existing rows — schema-shape changes to live data need a `user_version`-guarded migration.
 
+**Follow-up (same day):**
+- Mood opener nice-to-have wired: `persona.mood_opener()` + `IbLite.last_mood_signal()`, applied
+  on exchange 1 only via `session.mood_opener`. Verified live (warmer opening is softer, in-character).
+- `start-echo.bat` rewritten — dropped all Hindsight env plumbing (runtime is Ib-Lite, no server/keys);
+  now just sets PYTHONUTF8 and runs main.py.
+
+Remaining nice-to-haves (still deferred): persona self-check (silent mid-conversation alignment
+probe) and dry-wit calibration example exchanges in the persona block.
+
 Next: Stage 5 Part 3 (web search — where CoT isolation's "separate reasoning call" pattern lands).

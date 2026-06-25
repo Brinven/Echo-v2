@@ -72,6 +72,9 @@ class Session:
         # is the in-session Maximum Snark Mode lock. Effective level is computed per turn.
         self.daily_snark = 5
         self.max_snark = False
+        # mood_opener: a resolved opening-tone nudge (from the prior session's mood),
+        # set once at session start and applied only on the first exchange.
+        self.mood_opener = ""
 
         SESSIONS_DIR.mkdir(exist_ok=True)
 
