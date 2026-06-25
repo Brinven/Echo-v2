@@ -28,6 +28,10 @@ _FORGET_PATTERNS = [
     re.compile(r"\bdon'?t\s+remember\s+that\b", re.IGNORECASE),
 ]
 
+# Maximum Snark Mode trigger (PRD §2b). "Echo, maximum snark mode" and close variants.
+# Requires both "max(imum)" and "snark" so it can't fire on ordinary talk about snark.
+_MAX_SNARK_PATTERN = re.compile(r"\bmax(?:imum)?\s+snark\b", re.IGNORECASE)
+
 
 def is_signoff(transcript: str) -> bool:
     """Check if the transcript contains the sign-off phrase."""
@@ -37,6 +41,11 @@ def is_signoff(transcript: str) -> bool:
 def is_forget(transcript: str) -> bool:
     """Check if the transcript is a 'forget that' correction command."""
     return any(p.search(transcript) for p in _FORGET_PATTERNS)
+
+
+def is_max_snark(transcript: str) -> bool:
+    """Check if the transcript triggers Maximum Snark Mode."""
+    return bool(_MAX_SNARK_PATTERN.search(transcript))
 
 
 class Session:
@@ -52,6 +61,17 @@ class Session:
         self._user_name = user_name or ""
         self._turns: list[dict] = []
         self._turn_counter = 0
+
+        # ── Personality state (Stage 5 Part 2) ──
+        # exchange_count is distinct from _turn_counter: it counts full user→Echo
+        # exchanges (1 per round trip), used for anti-drift anchor timing. _turn_counter
+        # counts speaker-turns (2 per exchange) and is used for logging/metrics.
+        # Per-process, so both reset at session end automatically.
+        self._exchange_count = 0
+        # daily_snark is set once at session start (by main from daily_state); max_snark
+        # is the in-session Maximum Snark Mode lock. Effective level is computed per turn.
+        self.daily_snark = 5
+        self.max_snark = False
 
         SESSIONS_DIR.mkdir(exist_ok=True)
 
@@ -70,6 +90,27 @@ class Session:
     @property
     def has_turns(self) -> bool:
         return self._turn_counter > 0
+
+    @property
+    def exchange_count(self) -> int:
+        """Number of full user→Echo exchanges so far this session (anti-drift timing)."""
+        return self._exchange_count
+
+    def increment_exchange(self) -> int:
+        """Advance the exchange counter for a real turn. Returns the new value.
+
+        Call this once per genuine exchange, AFTER the too-short/no-speech/sign-off/
+        forget/max-snark guards (those return before a real exchange and must not
+        advance the counter). The returned 1-based value is what build_system_prompt
+        checks for the anchor (8, 16, 24, ...).
+        """
+        self._exchange_count += 1
+        return self._exchange_count
+
+    @property
+    def effective_snark(self) -> int:
+        """Current snark level: locked to 10 in Maximum Snark Mode, else the daily roll."""
+        return 10 if self.max_snark else self.daily_snark
 
     @property
     def turns(self) -> list[dict]:

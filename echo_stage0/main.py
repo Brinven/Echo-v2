@@ -9,8 +9,10 @@ per turn; a background significance gate decides what to save after each turn.
 Controls:
   SPACE  -- push-to-talk (hold to record, release to process)
   M      -- toggle mute
+  S      -- toggle Maximum Snark Mode (locks snark to 10 for the session)
   Q      -- quit (double-press required mid-conversation)
   Say "Echo, that's all for now" to end session gracefully
+  Say "Echo, maximum snark mode" to lock snark to 10
 """
 
 import sys
@@ -29,9 +31,11 @@ from llm import LLMClient
 from tts import TTSEngine
 from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
-from session import Session, is_signoff, is_forget, load_config
+from session import Session, is_signoff, is_forget, is_max_snark, load_config
 from summarizer import generate_summary
 from ib_lite import IbLite
+from persona import build_system_prompt
+from daily_state import get_daily_snark_level
 
 
 # ── Console UI ───────────────────────────────────────────────────────────
@@ -44,7 +48,7 @@ def draw_status(status="--", vad="--", mute="off", stt=0.0, fa=0.0, session_id="
     if stt > 0:
         timing = f"  |  STT {stt:.2f}s, 1st-audio {fa:.2f}s"
     session_str = f"  |  turn {turn}" if turn > 0 else ""
-    line = f"  [{status}]{mute_str}{vad_str}{session_str}{timing}  [SPACE:talk M:mute Q:quit]"
+    line = f"  [{status}]{mute_str}{vad_str}{session_str}{timing}  [SPACE:talk M:mute S:snark Q:quit]"
 
     sys.stdout.write(f"\r\033[K{line}")
     sys.stdout.flush()
@@ -128,17 +132,46 @@ def run_streaming_pipeline(
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
 
+    # ── Maximum Snark Mode: "Echo, maximum snark mode" ──
+    # Locks snark to 10 for the rest of this session. Not a real exchange — does not
+    # advance the exchange counter and is never gated to memory.
+    if is_max_snark(transcript):
+        print_conversation("You", transcript)
+        session.add_user_turn(transcript, stt_latency)
+        session.max_snark = True
+        reply = "Maximum snark it is, Michael. You asked for it."
+        print_conversation("Echo", reply)
+        audio_q.start()
+        try:
+            tts_audio, tts_sr = tts.synthesize(reply)
+            audio_q.enqueue(tts_audio, tts_sr)
+            sm.transition(State.SPEAKING)
+        except Exception as e:
+            print(f"  [TTS error on max-snark: {e}]")
+        audio_q.finish()
+        session.add_echo_turn(reply, 0.0)
+        return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
+
     print_conversation("You", transcript)
     session.add_user_turn(transcript, stt_latency)
 
-    # ── Memory read: Core + Policy + per-turn Fact/Episodic retrieval ──
-    # (The significance gate handles all writes — including explicit "remember
-    # that" turns — off the hot path after the response is delivered.)
-    system_prompt = None
+    # ── Personality + memory: assemble the full system prompt ──
+    # This is a real exchange — advance the anti-drift counter FIRST so the anchor
+    # fires on exchanges 8, 16, 24... (build_system_prompt checks count % 8 == 0).
+    # Assembly order: persona block (with today's snark) → Core/Policy/Prefs slab
+    # (Ib-Lite) → retrieved Fact/Episodic memory → anti-drift anchor.
+    exchange_n = session.increment_exchange()
+    snark_level = session.effective_snark
+
+    core_block = ""
+    memory_block = ""
     memories_injected = 0
     memory_retrieval_ms = 0.0
     if ib and ib.available:
-        system_prompt, memory_retrieval_ms, memories_injected = ib.system_prompt_for_turn(transcript)
+        core_block = ib.build_context_block()
+        memory_block, memory_retrieval_ms, memories_injected = ib.read_memory(transcript)
+
+    system_prompt = build_system_prompt(exchange_n, snark_level, core_block, memory_block)
 
     # ── LLM streaming -> TTS chunks -> audio queue ──
     audio_q.start()
@@ -306,7 +339,12 @@ def main():
     )
     ib.start_session(session.session_id)
 
+    # Personality: today's snark level (daily roll, persisted in echo_daily_state.json).
+    # Maximum Snark Mode (voice "maximum snark mode" or the S key) overrides to 10 in-session.
+    session.daily_snark = get_daily_snark_level()
+
     print(f"  Session: {session.session_id}")
+    print(f"  Snark level: {session.daily_snark}/10")
     print()
     print('  Say "Echo, that\'s all for now" to end session')
     draw_status(status="READY", vad=vad_mode, session_id=session.session_id)
@@ -384,6 +422,12 @@ def main():
         elif event.name == "m":
             muted = not muted
             mute_toggle_event.set()
+        elif event.name == "s":
+            # Toggle Maximum Snark Mode (locks snark to 10 for the session).
+            session.max_snark = not session.max_snark
+            clear_status_line()
+            state = "ON (snark locked to 10)" if session.max_snark else "off (back to daily)"
+            print(f"  [Maximum Snark Mode: {state}]")
         elif event.name == "space":
             space_pressed.set()
 

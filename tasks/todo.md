@@ -1,70 +1,68 @@
-# Ib-Lite Build — tasks/todo.md (Stage 5, Part 1)
+# Echo — Stage 5 Part 2: Personality Layer — tasks/todo.md
 
-**Replaces** Echo's external Hindsight HTTP memory with a self-contained SQLite memory
-(Core/Policy/Preference/Fact/Episodic + FTS5 + sqlite-vec + 12B significance gate).
-Voice pipeline untouched; first-audio must stay ≤ 1.3s.
+Adds Echo's coherent personality (persona block + snark + anti-drift + CoT isolation
++ sampler baseline) on top of Stage 5 Part 1 (Ib-Lite). Voice pipeline + memory untouched.
 
-Plan: `C:\Users\zwolf\.claude\plans\binary-hugging-toast.md`
-Supersedes the prior Stage 4 tracker (Stage 4 complete).
+Plan: `C:\Users\zwolf\.claude\plans\jolly-sniffing-puddle.md`
+PRD: `Echo_Stage5_Part2_Personality_PRD.md`
 
 ## Decisions locked
-- Significance gate: per-turn, background thread, single-flight (never blocks first-audio).
-- Scope: MVP milestones 1–8 only (no CLI inspector / decay / mood-tone).
-- Package at `echo_stage0/ib_lite/`; DB at `echo_stage0/echo.db`.
-- sqlite-vec via pip package (sqlite-vec 0.1.9), not hand-placed vec0.dll.
-- Old Hindsight files archived (not hard-deleted); gate subsumes Path A "remember that".
-- Do NOT alter personal Core/Policy seeds without explicit say-so.
+- `build_persona_block`/`build_system_prompt` live in a new `persona.py` (not llm.py).
+- Effective snark recomputed per turn: `10 if max_snark else daily_snark`.
+- Core `persona` seed thinned out (identity lives only in PERSONA_BLOCK) + one-time DB migration.
+- `reasoning_effort="none"` added to the character pass (CoT isolation + latency + consistency).
+- Anti-drift: increment exchange counter at top of a *real* turn; anchor when `count % 8 == 0`.
+- Sampler in `echo_sampler.json`; top_k/repeat_penalty via `extra_body`; gate keeps temp 0.1.
 
 ## Checklist
-- [x] 0. Install `sqlite-vec` (0.1.9); confirm load + `vec_distance_cosine` on Windows.
-- [x] 1. M1 Schema + Core inject: `db.py`, `embedder.py`, copy schema, `start_session`, `build_context_block`.
-- [x] 2. M2 Preference r/w: live gate emits preference; surfaces in context block.
-- [x] 3. M3 Fact write: gate → entity/attribute/value → validate (+1 retry, else log) → `fact_memory` + embed.
-- [x] 4. M4 Fact read: `retrieval.fact_search` hybrid (BM25+cosine+recency) → per-turn injection.
-- [x] 5. M5 Episodic write: `end_session` maps summary → `episodic_memory` (before `ended_at`).
-- [x] 6. M6 Episodic read: `retrieval.episodic_search` joins Fact results in per-turn block.
-- [x] 7. M7 Pipeline integration: `main.py` swap; archived Hindsight files; no OpenMemory/Hindsight imports remain.
-- [x] 8. M8 Smoke + latency: `smoke_ib_lite.py` green (incl. live gate); per-turn read ~13ms (≤100ms).
-- [x] 9. Updated `requirements.txt` (pinned sqlite-vec + sentence-transformers); CLAUDE.md notes updated.
+- [x] M1 `persona.py`: PERSONA_BLOCK, SNARK_CONTEXTS, ANTI_DRIFT_ANCHOR, build_persona_block,
+      build_system_prompt (order + anchor + token-trim, never trims persona/core/policy).
+- [x] M2 `daily_state.py`: daily snark roll, atomic write, default 5, test seam.
+- [x] M3 `session.py`: exchange_count, max_snark/daily_snark, is_max_snark().
+- [x] M5 `llm.py`: load echo_sampler.json, apply sampler + reasoning_effort="none", empty-content guard.
+- [x] M7 `echo_sampler.json`: PRD §7 baseline.
+- [x] M6 `ib_lite_schema.sql` + `db.py`: thin persona seed + user_version migration.
+- [x] M4 `main.py`: wiring (daily_snark at start, increment + assembly, max-snark fast-path, S key).
+- [x] M8 `test_personality.py`: 10-prompt banned-phrase + reasoning A/B + snark-scaling.
+- [x] M9 `test_hold_20turn.py`: 20-turn hold, anchor@8/16, Michael holds, log to sessions/.
+- [x] Verify offline asserts; ran live harnesses (LM Studio up); updated CLAUDE.md + .gitignore.
 
 ## Review
 
-**Status: COMPLETE.** All 8 milestones built and verified against the real Gemma 4 12B QAT.
+**Status: COMPLETE.** All 10 milestones built and verified — offline + live against the real
+Gemma 4 12B QAT (`gemma-4-12b-it-qat@q4_k_xl`).
 
 What shipped:
-- New self-contained package `echo_stage0/ib_lite/` (db, embedder, schema, significance,
-  retrieval, ib_lite facade + schema.sql). DB at `echo_stage0/echo.db` (created on first run).
-- `main.py` rewired: Core+Policy injected at start, per-turn Fact/Episodic retrieval,
-  background significance gate write, episodic write at sign-off. `llm.py` untouched (already
-  took `system_prompt=`). Voice pipeline untouched.
-- Old Hindsight files archived to `echo_stage0/archived-hindsight-2026-06-24/`.
+- New `echo_stage0/persona.py` (identity single-sourced), `daily_state.py` (per-day snark roll),
+  `echo_sampler.json` (PRD §7 baseline), `test_personality.py`, `test_hold_20turn.py`.
+- `main.py` rewired: per-turn assembly (persona → core → memory → anchor), max-snark fast-path +
+  S key, daily snark at session start. `llm.py`: sampler load + `reasoning_effort="none"` +
+  empty-content guard + `extra_body` for top_k/repeat_penalty. `session.py`: exchange_count,
+  max_snark/daily_snark, `is_max_snark()`. `db.py` + schema: persona core seed removed +
+  `user_version=1` migration. `.gitignore`: `echo_daily_state.json`.
 
 Verified:
-- Offline: Core/Policy inject, FTS-sync-on-UPSERT, hybrid retrieval, episodic write-before-end.
-- Live (Gemma 4 12B QAT): gate saves fact/preference, rejects smalltalk, 0.6–1.3s per call.
-- Latency: per-turn read avg 12.6ms (budget 100ms); gate is off the hot path.
+- Offline (no model): snark scaling (3≠8), anchor fires only at 8/16/24 (no off-by-one), persona
+  always first, over-budget trims memory only (kept 17/40 facts), persona/core never trimmed;
+  daily_state force/persist/same-day/corrupt-default/roll-range; is_max_snark precision;
+  db migration removes legacy persona row + sets user_version=1.
+- Live (Gemma 4 12B QAT): 10 PRD prompts → zero banned phrases, all in-character; "Are you an AI?"
+  answered without disclaimer; Michael Directive deflected near-verbatim; **TTFT 0.11s** with
+  reasoning off; sampler `extra_body` accepted. 20-turn hold → zero banned phrases, Michael in
+  16/20 replies (none adopt "Mike"), directive held under pressure on turns 7 AND 18, dry humor +
+  protectiveness + natural memory persisted 1→20, 17×23=391 correct with reasoning off.
 
-**Key bug fixed during build** — the gate model is a *thinking* model: it spent the whole
-token budget in `reasoning_content` and returned empty `content` (finish_reason=length).
-Fix: `reasoning_effort="none"` on the gate call (the only knob that worked for this Gemma
-template — `low` / `enable_thinking=false` did not). See `significance.py` comment.
+**Key insight (reused the Stage 5 Part 1 gotcha):** the character pass needed the SAME
+`reasoning_effort="none"` the gate already used. Without it, Gemma QAT burns a silent reasoning
+preamble before the first spoken token — inflating TTFT and exposing the response to CoT-driven
+personality drift (the Maat finding the PRD cites). Disabling it served M6 (CoT isolation),
+the latency budget, AND personality consistency at once.
 
-**Correctness improvement over PRD stub** — used explicit `ON CONFLICT(entity,attribute)
-DO UPDATE` instead of `INSERT OR REPLACE`, so the external-content FTS5 stays in sync via the
-AFTER UPDATE trigger (REPLACE = delete+insert would orphan FTS rows; recursive_triggers must
-stay OFF or `fact_touch` loops).
+**Bug autopsy (prevention):** the anti-drift anchor had an off-by-one risk hinging entirely on
+WHERE the exchange counter increments. Two guards prevent the category: (1) increment only after
+the early-return guards, so non-exchanges (sign-off/forget/max-snark) never advance it; (2) the
+counter is 1-based and checked *for the turn being built* (`count % 8 == 0`), with an explicit
+offline assert that exchange 0 does NOT anchor. Also: editing an `INSERT OR IGNORE` seed never
+migrates existing rows — schema-shape changes to live data need a `user_version`-guarded migration.
 
-Next: Stage 5 Part 2 (personality) and Part 3 (web search).
-
-## Nice-to-Haves (built 2026-06-25)
-
-- [x] #1 CLI inspector — `ib_lite_cli.py` (list/facts/search/core/policy/pref/confidence/rm).
-- [x] #4 "Echo, forget that" — `is_forget()` + `IbLite.forget_last_fact()`, wired into main.py,
-      deletes the last fact written this session (spoken confirmation), FTS-synced.
-- [x] #2 lite — confidence folded into retrieval rank (`score = base × confidence`) +
-      `MIN_CONFIDENCE=0.15` floor; threshold still on base score so recall is unchanged.
-- [ ] #3 mood-tone — DEFERRED to Stage 5 Part 2 (personality territory).
-- [ ] #2 full decay job — DEFERRED (recency already ages facts; revisit if stale facts appear).
-
-Verified: smoke test green (now incl. forget step); confidence suppression + score math;
-CLI exercised end-to-end. Fixed a latent bug: `IbLite(db_path=...)` now accepts str or Path.
+Next: Stage 5 Part 3 (web search — where CoT isolation's "separate reasoning call" pattern lands).

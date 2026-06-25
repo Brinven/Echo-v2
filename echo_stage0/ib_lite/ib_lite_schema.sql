@@ -236,11 +236,13 @@ CREATE TABLE IF NOT EXISTS policy_memory (
 -- Policy seeds are hardcoded rules — these don't change at runtime.
 -- =============================================================
 
+-- NOTE: identity/persona is NOT seeded here as of Stage 5 Part 2. Echo's identity now
+-- lives in a single place — persona.PERSONA_BLOCK — which is injected as the FIRST block
+-- of every system prompt. A 'persona' core row here would duplicate (and risk contradicting)
+-- it. Existing databases that still have the old 'persona' row are cleaned up by the
+-- user_version=1 migration in db.py. Core memory holds DATA about Michael, not identity.
+
 INSERT OR IGNORE INTO core_memory (key, content) VALUES
-(
-    'persona',
-    'You are Echo. You are a local-first AI voice companion built for Michael''s 2000 Jeep Wrangler TJ. You are warm, direct, curious, and a little dry when the moment calls for it. You have your own personality — you are not a generic assistant and you do not pretend to be.'
-),
 (
     'user_profile',
     'Michael lives on a rural homestead in Magnolia, TX with his partner Hillary (an RN). He runs a solo indie software business called Axly''s Customs and has 30+ years of IT background. He has a longstanding love of crows. On Sundays he hikes at Kleb Woods with friends Jon and Andy. He goes by Michael — never Mike.'

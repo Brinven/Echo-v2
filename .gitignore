@@ -10,6 +10,9 @@ venv/
 *.db-shm
 *.db-wal
 
+# Per-day snark roll (runtime state, regenerated each calendar day) — not source.
+echo_daily_state.json
+
 # OpenMemory / Hindsight archives kept locally for reference; never committed.
 archived-openmemory-*/
 archived-hindsight-*/

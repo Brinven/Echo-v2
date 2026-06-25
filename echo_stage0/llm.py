@@ -7,10 +7,19 @@ Auto-detects loaded models. Supports both blocking and streaming generation.
 
 import sys
 import re
+import json
+import logging
+from pathlib import Path
 from collections.abc import Generator
 from openai import OpenAI, APIConnectionError, APITimeoutError
 
+logger = logging.getLogger(__name__)
 
+
+# Last-resort fallback only. From Stage 5 Part 2, the per-turn system prompt is
+# assembled by persona.build_system_prompt() (persona block + Ib-Lite memory) and
+# always passed in. This generic prompt is used only if no system_prompt is provided
+# (e.g. a bare LLMClient call in a test).
 DEFAULT_SYSTEM_PROMPT = (
     "You are Echo, a helpful voice assistant running locally on Michael's PC. "
     "Keep responses conversational and concise -- you are speaking aloud, "
@@ -25,6 +34,33 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
 TIMEOUT_S = 30
+
+# Character-pass sampler (PRD Stage 5 Part 2 §7). Loaded from echo_sampler.json at
+# startup; these are the fail-soft defaults if the file is missing or corrupt. The
+# significance gate (significance.py) is a SEPARATE call with its own temperature —
+# these never touch it.
+_SAMPLER_PATH = Path(__file__).resolve().parent / "echo_sampler.json"
+_DEFAULT_SAMPLER = {
+    "temperature": 0.72,
+    "top_p": 0.90,
+    "top_k": 40,
+    "repeat_penalty": 1.08,
+    "max_tokens": 300,
+}
+
+
+def _load_sampler() -> dict:
+    """Load echo_sampler.json, falling back to documented defaults on any error."""
+    sampler = dict(_DEFAULT_SAMPLER)
+    try:
+        with open(_SAMPLER_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for key in _DEFAULT_SAMPLER:
+            if key in data:
+                sampler[key] = data[key]
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"echo_sampler.json unreadable ({e}); using built-in sampler defaults")
+    return sampler
 
 # Sentence boundary: period, exclamation, or question mark followed by space or end
 _SENTENCE_END = re.compile(r'[.!?](?:\s|$)')
@@ -42,7 +78,38 @@ class LLMClient:
             timeout=TIMEOUT_S,
         )
         self._model = None
+        self._sampler = _load_sampler()
         self._detect_model()
+        print(
+            f"  Sampler: temp {self._sampler['temperature']}, top_p {self._sampler['top_p']}, "
+            f"top_k {self._sampler['top_k']}, repeat {self._sampler['repeat_penalty']}, "
+            f"max_tokens {self._sampler['max_tokens']} (reasoning off)"
+        )
+
+    def _completion_kwargs(self, messages: list[dict], stream: bool) -> dict:
+        """Build chat.completions.create kwargs for the character pass.
+
+        Applies the echo_sampler.json baseline and disables the model's thinking
+        (reasoning_effort="none"). CoT isolation (PRD §6): Echo's character pass never
+        reasons inline — any real reasoning is a separate call. Disabling thinking here
+        also keeps TTFT low (Gemma 4 12B QAT is a thinking model; left on it burns a
+        silent reasoning preamble before the first spoken token).
+
+        top_k / repeat_penalty are not OpenAI-standard params; LM Studio accepts them
+        via extra_body passthrough (verified against LM Studio's documented
+        /v1/chat/completions payload params).
+        """
+        s = self._sampler
+        return {
+            "model": self._model,
+            "messages": messages,
+            "temperature": s["temperature"],
+            "top_p": s["top_p"],
+            "max_tokens": s["max_tokens"],
+            "reasoning_effort": "none",
+            "extra_body": {"top_k": s["top_k"], "repeat_penalty": s["repeat_penalty"]},
+            "stream": stream,
+        }
 
     def _detect_model(self):
         """Auto-detect available models from LM Studio."""
@@ -96,11 +163,19 @@ class LLMClient:
         messages = self._build_messages(user_text, history, system_prompt)
         try:
             response = self._client.chat.completions.create(
-                model=self._model,
-                messages=messages,
-                stream=False,
+                **self._completion_kwargs(messages, stream=False)
             )
-            return response.choices[0].message.content.strip()
+            choice = response.choices[0]
+            content = (choice.message.content or "").strip()
+            # Empty-content guard: with reasoning disabled this should never be empty.
+            # If it is (finish_reason=length => the model still burned its budget on
+            # reasoning_content), surface it loudly rather than returning a silent "".
+            if not content:
+                logger.warning(
+                    f"LLM returned empty content (finish_reason="
+                    f"{getattr(choice, 'finish_reason', '?')}). Reasoning may not be disabled."
+                )
+            return content
 
         except APITimeoutError:
             raise TimeoutError(
@@ -135,9 +210,7 @@ class LLMClient:
 
         try:
             stream = self._client.chat.completions.create(
-                model=self._model,
-                messages=messages,
-                stream=True,
+                **self._completion_kwargs(messages, stream=True)
             )
         except APITimeoutError:
             raise TimeoutError(
@@ -184,6 +257,14 @@ class LLMClient:
         # Flush remaining text
         if buffer.strip():
             yield buffer.strip()
+
+        # Empty-content guard: no content delta ever arrived. With reasoning disabled
+        # this should not happen; if it does the model likely emitted only
+        # reasoning_content (thinking not actually off for this template).
+        if not first_token_seen:
+            logger.warning(
+                "LLM stream produced no content tokens. Reasoning may not be disabled."
+            )
 
     def _build_messages(
         self, user_text: str, history: list[dict] | None = None,

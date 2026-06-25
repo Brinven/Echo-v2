@@ -296,6 +296,65 @@ so a normal fact (default confidence 0.85) keeps its recall, while a fact dialed
 
 ---
 
+## ⚠ Personality Layer (Stage 5 Part 2, 2026-06-24)
+
+Echo's character lives in **`echo_stage0/persona.py`** — `PERSONA_BLOCK`, `SNARK_CONTEXTS`,
+`ANTI_DRIFT_ANCHOR`, `build_persona_block(snark)`, and `build_system_prompt(exchange_count,
+snark, core_block, memory_block)`. Identity is here and ONLY here.
+
+- **System prompt assembly is now in `main.py`, not `ib_lite`.** Per turn it builds:
+  `persona block → core_block (ib.build_context_block) → memory_block (ib.read_memory) →
+  anti-drift anchor`. `IbLite.system_prompt_for_turn()` still exists but is **retired from
+  the hot path** — do not reintroduce it as the assembler or the two orderings will diverge.
+  Persona is built even when Ib-Lite is unavailable (empty core/memory), so the old generic
+  `DEFAULT_SYSTEM_PROMPT` fallback is bypassed.
+- **Identity is single-sourced.** The old `persona` row in `core_memory` was removed from the
+  seed AND a one-time migration in `db.py` (guarded by `PRAGMA user_version`, v1) deletes it
+  from existing `echo.db` files. Core memory now holds DATA about Michael (`user_profile`,
+  `relationship`), never identity. Don't re-add a `persona` core row — it would duplicate the block.
+
+### Snark level (0–10)
+- `echo_stage0/daily_state.py` rolls a random level once per calendar day, persisted to
+  `echo_daily_state.json` (gitignored runtime state), default **5** on missing/corrupt.
+- **Effective snark is recomputed per turn:** `10 if session.max_snark else session.daily_snark`.
+  Do NOT cache the effective level at session start — Max Snark Mode changes it mid-session.
+- **Maximum Snark Mode** (locks 10 for the session): voice "Echo, maximum snark mode"
+  (`is_max_snark()` in `session.py`, handled in `main.py` like the forget path — not gated, does
+  not advance the exchange counter) OR the **S** key toggle. Resets on next launch (per-process).
+
+### Anti-drift anchor — counter semantics (off-by-one is the trap)
+- `session.exchange_count` counts full user→Echo **exchanges** (1/round-trip). This is DISTINCT
+  from `session.turn_count`, which is speaker-turns (2/exchange) and is used only for logging.
+- `increment_exchange()` fires once per **real** exchange, AFTER the too-short/no-speech/
+  sign-off/forget/max-snark guards (those `return` first and must not advance it). The anchor is
+  injected when `exchange_count % 8 == 0` (exchanges 8, 16, 24…). First real exchange reads 1, so
+  no anchor; the eighth reads 8. Per-process, resets at session end.
+
+### CoT isolation + sampler (llm.py)
+- The character pass now passes **`reasoning_effort="none"`** (Gemma 4 12B QAT is a thinking
+  model — same gotcha as the gate). Verified live: non-empty content, **TTFT ~0.11s** (no silent
+  reasoning preamble), and even arithmetic stayed correct (17×23=391). An empty-content guard
+  logs loudly if reasoning ever sneaks back on.
+- Sampler baseline in **`echo_sampler.json`** (temp 0.72 / top_p 0.90 / top_k 40 / repeat_penalty
+  1.08 / max_tokens 300), loaded once in `LLMClient.__init__`, fail-soft to built-in defaults.
+  `temperature`/`top_p`/`max_tokens` are direct kwargs; **`top_k`/`repeat_penalty` go via
+  `extra_body`** (LM Studio passthrough — verified against LM Studio's documented payload params;
+  the spelling is `repeat_penalty`, not `repetition_penalty`). The significance gate keeps its own
+  `temperature=0.1` / `max_tokens=150` — untouched.
+
+### Test harnesses
+- `test_personality.py` (M8): offline asserts (snark scaling, anchor timing, never-trim-persona) +
+  live 10-prompt banned-phrase sweep + Mike-deflection + reasoning A/B.
+- `test_hold_20turn.py` (M9): offline anchor-at-8/16 + live 20-turn hold, logs the transcript to
+  `sessions/hold_test_*.json` for manual review.
+- Both call `LLMClient()` which uses the **interactive model picker** when LM Studio has many
+  models loaded. To run non-interactively, pin the model (construct the client and set `_model`).
+  Banned phrases (PRD §10): "Certainly", "Absolutely!", "Great question", "As an AI",
+  "I don't have access", "I remember that", "last time we spoke", "Is there anything else",
+  "fascinating".
+
+---
+
 ## Memory (Hindsight bank routing)
 
 **Hindsight bank:** `echo`

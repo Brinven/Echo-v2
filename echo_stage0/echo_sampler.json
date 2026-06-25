@@ -1,0 +1,8 @@
+{
+  "_comment": "Echo character-pass sampler baseline (PRD Stage 5 Part 2 §7). These apply ONLY to Echo's response generation in llm.py. The Ib-Lite significance gate uses its own temperature=0.1 / max_tokens=150 (significance.py) and is unaffected. Tune from here by feel: do NOT drop temperature to 0.0-0.4 (Echo goes robotic, loses dry wit); do NOT exceed 0.85 (personality inconsistency). top_k and repeat_penalty are passed to LM Studio via extra_body (not OpenAI-standard params).",
+  "temperature": 0.72,
+  "top_p": 0.90,
+  "top_k": 40,
+  "repeat_penalty": 1.08,
+  "max_tokens": 300
+}

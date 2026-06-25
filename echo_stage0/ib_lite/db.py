@@ -43,3 +43,23 @@ def init_schema(conn: sqlite3.Connection) -> None:
     """Run the schema file (idempotent — every statement is CREATE/INSERT OR IGNORE)."""
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     conn.commit()
+    _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply one-time, versioned migrations tracked by PRAGMA user_version.
+
+    The schema seeds are INSERT OR IGNORE and only fire on a fresh row, so editing the
+    seed file cannot retro-remove data from an already-initialized echo.db. Schema-shape
+    changes that must touch existing rows go here, guarded by user_version so each runs
+    exactly once.
+
+    v1 (Stage 5 Part 2): identity moved out of core_memory into persona.PERSONA_BLOCK.
+        Drop the legacy 'persona' core row so it can't duplicate/contradict the block.
+    """
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+    if version < 1:
+        conn.execute("DELETE FROM core_memory WHERE key = 'persona'")
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
