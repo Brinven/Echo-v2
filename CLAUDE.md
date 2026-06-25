@@ -6,6 +6,14 @@ Do not override these decisions without explicit user instruction.
 
 ---
 
+## Git Workflow
+
+Solo repo — **commit and push directly to `main`**. No feature branches, no PR
+flow (confirmed by Michael 2026-06-24). GitHub is backup redundancy, not review.
+Don't branch before pushing to the default branch on this repo.
+
+---
+
 ## What Echo Is
 
 Echo is a local-first AI voice companion. It runs entirely on the user's Windows PC.
