@@ -28,6 +28,47 @@ Build todo (checklist) gets written when Michael greenlights a track.
 
 ---
 
+## 🔮 Backlog / Later (idea captured, not yet specced)
+
+### Stage 6 (tentative) — Speaker Awareness ("who is talking to her")
+
+**Problem:** today Echo has zero speaker awareness — Whisper transcribes *what* is
+said, not *who*; she just assumes the config `user_name` ("Michael").
+
+**Pre-camera answer — voice fingerprinting (speaker verification):** enroll a person
+once → a voiceprint embedding; per utterance, extract an embedding from the *same audio
+buffer STT already uses* and cosine-match against enrolled profiles; above threshold →
+that person, else → guest/unknown. ~50–200ms, local, no cloud, no camera.
+- Library: **Resemblyzer** for a PoC (simple, real-time, uses existing torch) →
+  **SpeechBrain ECAPA-TDNN** (`spkrec-ecapa-voxceleb`) if we want Jeep-grade noise
+  robustness. Both local, no keys (on-spine). Picovoice **Eagle** is on-device but
+  needs a free key — mild spine friction, keep as fallback only.
+- **Persona is already built for this:** Part 2 §2e (with Michael / known passengers /
+  unknown people) is specced but tagged "requires vision." Voice ID lights those rules
+  up *pre-vision*. Enrollment UX: "Echo, this is Jon" → capture a few seconds → enrolled.
+- **Limits (where cameras still earn their keep):** probabilistic (noise, illness lower
+  confidence → threshold + guest fallback); knows who's *speaking*, not who's silently
+  *present*; enroll in the real environment (desk vs Jeep road noise differ).
+- **Cameras (further out):** facial rec adds presence + the silent passenger, AND a
+  recognized home camera feed doubles as a strong "we're home" signal that **fuses with
+  Part 5's LAN fingerprint** (two independent location signals > either alone).
+
+**OPEN — noodle: memory model for guests (the real design cost, not the voice ID).**
+- **Scale is small and bounded:** ~8 people max, generous. Roster ≈ Hillary, Jon, Mom,
+  +1–2. So **no scalable multi-user infra needed** — a fixed set of named profiles +
+  a single "guest/unknown" bucket. Keep it dead simple.
+- **Already solved:** Ib-Lite's fact schema is entity/attribute/value, so "facts *about*
+  a person" (entity="Jon", …) already works via the significance gate.
+- **The new work is:** (a) **speaker attribution** — the gate currently assumes Michael
+  is the subject; it needs the current speaker id; (b) **privacy/scoping** — what Echo
+  surfaces to whom (don't blab a guest's aside to Michael; Michael's device = he has
+  full access, guests get a lighter/guarded interaction); (c) **speaker-aware retrieval**
+  — bias toward the current speaker's relevant memories; (d) **unknown speaker →
+  ephemeral/guarded** by default (privacy + noise control).
+- Decision deferred — revisit when Michael greenlights Stage 6.
+
+---
+
 # Echo — Stage 5 Part 2: Personality Layer — tasks/todo.md (COMPLETE — history below)
 
 Adds Echo's coherent personality (persona block + snark + anti-drift + CoT isolation
