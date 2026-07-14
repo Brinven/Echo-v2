@@ -61,10 +61,22 @@ that person, else → guest/unknown. ~50–200ms, local, no cloud, no camera.
   a person" (entity="Jon", …) already works via the significance gate.
 - **The new work is:** (a) **speaker attribution** — the gate currently assumes Michael
   is the subject; it needs the current speaker id; (b) **privacy/scoping** — what Echo
-  surfaces to whom (don't blab a guest's aside to Michael; Michael's device = he has
-  full access, guests get a lighter/guarded interaction); (c) **speaker-aware retrieval**
+  surfaces to whom, and whether she keeps a guest's aside *from* Michael (his device →
+  he has full access — see Michael's lean below); (c) **speaker-aware retrieval**
   — bias toward the current speaker's relevant memories; (d) **unknown speaker →
   ephemeral/guarded** by default (privacy + noise control).
+- **Michael's lean (2026-07-14) on the privacy boundary:** Echo is *his*,
+  unapologetically — the loyalty-blab is in-character and played for comedy (guest asks
+  her to keep something from Michael → "Seriously? You thought I'd take your side over
+  Michael's?"). Natural extension of the Michael Directive (she's partisan, not a neutral
+  vault), so "doesn't keep secrets from Michael" is arguably the right default for a
+  personal device. **Michael wants to sit with this — it deserves real thought.** The
+  nuance for his time: it's not blab-vs-vault, it's Echo's *judgment about register* —
+  loyalty-comedy lands when stakes are low, but her competence + warmth should read the
+  room and NOT play a genuinely vulnerable moment for laughs. Design it as *when the snark
+  is the right tone*, not a binary secrecy flag. Reassurance: this is a persona/policy
+  **tone** decision, not architecture (storage stays a simple "told-by" tag), so it can
+  be decided late without blocking anything.
 - Decision deferred — revisit when Michael greenlights Stage 6.
 
 ---
