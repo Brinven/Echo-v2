@@ -39,7 +39,7 @@ from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
 from session import (
     Session, is_signoff, is_forget, is_max_snark, is_stay_offline, is_go_online,
-    load_config, save_config,
+    is_location_override, load_config, save_config,
 )
 from summarizer import generate_summary
 from ib_lite import IbLite
@@ -47,6 +47,7 @@ from persona import build_system_prompt, mood_opener
 from daily_state import get_daily_snark_level
 from search import build_provider, load_search_config, format_search_block
 from search_decision import decide_search
+from location import resolve_location
 
 
 # ── Console UI ───────────────────────────────────────────────────────────
@@ -209,6 +210,27 @@ def run_streaming_pipeline(
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
 
+    # ── Location override: "Echo, we're in the Jeep" / "we're home" ──
+    # Session-scoped (session.location). Not a real exchange — no counter advance,
+    # never gated. Next launch re-resolves from the network.
+    loc_override = is_location_override(transcript)
+    if loc_override:
+        print_conversation("You", transcript)
+        session.add_user_turn(transcript, stt_latency)
+        session.location = loc_override
+        reply = "Buckle up, Michael." if loc_override == "jeep" else "Home it is, Michael."
+        print_conversation("Echo", reply)
+        audio_q.start()
+        try:
+            tts_audio, tts_sr = tts.synthesize(reply)
+            audio_q.enqueue(tts_audio, tts_sr)
+            sm.transition(State.SPEAKING)
+        except Exception as e:
+            print(f"  [TTS error on location-override: {e}]")
+        audio_q.finish()
+        session.add_echo_turn(reply, 0.0)
+        return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
+
     print_conversation("You", transcript)
     session.add_user_turn(transcript, stt_latency)
 
@@ -280,7 +302,7 @@ def run_streaming_pipeline(
     opener = session.mood_opener if exchange_n == 1 else ""
     system_prompt = build_system_prompt(
         exchange_n, snark_level, core_block, memory_block,
-        search_block=search_block, mood_opener=opener,
+        search_block=search_block, mood_opener=opener, location=session.location,
     )
 
     # ── LLM streaming -> TTS chunks -> audio queue (already started above) ──
@@ -358,6 +380,7 @@ def run_streaming_pipeline(
         response_full=full_response,
         memory_retrieval_ms=round(memory_retrieval_ms, 1),
         memories_injected=memories_injected,
+        location=session.location,
         # Search turns log passed_budget=None so they're excluded from the pass-rate.
         passed_budget=(None if search_meta["web_search_triggered"]
                        else (first_audio < 1.5 if t_first_audio else False)),
@@ -486,6 +509,10 @@ def main():
     # Maximum Snark Mode (voice "maximum snark mode" or the S key) overrides to 10 in-session.
     session.daily_snark = get_daily_snark_level()
 
+    # Location context (Stage 5 Part 5): resolve home/jeep/unknown once from the local
+    # network fingerprint. Fail-soft to "unknown" (neutral); the voice override can flip it.
+    session.location = resolve_location()
+
     # Opening-tone modulation: nudge Echo warmer/lighter based on how the LAST session
     # ended (Ib-Lite episodic mood_signal). Applied only on the first exchange.
     if ib and ib.available:
@@ -493,6 +520,8 @@ def main():
 
     print(f"  Session: {session.session_id}")
     print(f"  Snark level: {session.daily_snark}/10")
+    print(f"  Location: {session.location}"
+          + ('  (say "Echo, we\'re in the Jeep" to switch)' if session.location != "jeep" else ""))
     if session.mood_opener:
         print("  Opening tone: adjusted to last session's mood")
     print()

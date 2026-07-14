@@ -14,6 +14,9 @@ venv/
 # Per-day snark roll (runtime state, regenerated each calendar day) — not source.
 echo_daily_state.json
 
+# Home-network fingerprint (personal; per-machine). Commit echo_location.example.json instead.
+echo_location.json
+
 # OpenMemory / Hindsight archives kept locally for reference; never committed.
 archived-openmemory-*/
 archived-hindsight-*/

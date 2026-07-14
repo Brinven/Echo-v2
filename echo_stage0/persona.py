@@ -108,6 +108,28 @@ def mood_opener(mood_signal: str | None) -> str:
     return ""
 
 
+# ── Location context (Stage 5 Part 5 — Michael approves, persona content) ──
+#
+# Resolved once per session from the local network fingerprint (location.py) and
+# injected EVERY turn, right after the persona/mood — it's identity-level context.
+# Makes an existing persona trait location-aware: Part 2's "protective of Michael and
+# the Jeep" now knows WHEN the Jeep half is live. "unknown" → "" (neutral, no nudge).
+
+LOCATION_CONTEXTS = {
+    "home": (
+        "You are with Michael at home — his desk, the house. This is downtime, not a "
+        "drive. Don't raise the Jeep's fuel, oil, route, or anything vehicular unless "
+        "Michael brings it up first. Home conversation."
+    ),
+    "jeep": (
+        "You are in the Jeep with Michael. Driving companion mode: the route, fuel, the "
+        "Jeep's condition, and the road are all fair game, and your protectiveness of the "
+        "Jeep is warranted here. Read the drive."
+    ),
+    "unknown": "",   # neutral — no location nudge; relaxed, home-style conversation
+}
+
+
 # Token budget for the assembled system prompt (PRD §4). A guide, not a hard cap —
 # only ever enforced by trimming the retrieved-memory block, never persona/core/policy.
 TOKEN_BUDGET = 1200
@@ -138,14 +160,15 @@ def build_system_prompt(
     memory_block: str = "",
     search_block: str = "",
     mood_opener: str = "",
+    location: str = "",
 ) -> str:
     """Assemble the full per-turn system prompt.
 
-    Order (PRD §4, plus the mood opener after the persona and the web-search block
-    after retrieved memory — Stage 5 Part 3 §7):
-        PERSONA  →  MOOD OPENER (opening only)  →  CORE/POLICY slab
-                 →  RETRIEVED MEMORY (if any)  →  WEB SEARCH (this turn only)
-                 →  ANTI-DRIFT ANCHOR
+    Order (PRD §4, plus the mood opener + location context after the persona and the
+    web-search block after retrieved memory — Stage 5 Part 3 §7 / Part 5 §3):
+        PERSONA  →  MOOD OPENER (opening only)  →  LOCATION CONTEXT (every turn)
+                 →  CORE/POLICY slab  →  RETRIEVED MEMORY (if any)
+                 →  WEB SEARCH (this turn only)  →  ANTI-DRIFT ANCHOR
 
     Args:
         exchange_count: 1-based count of the exchange this prompt is being built for.
@@ -160,12 +183,15 @@ def build_system_prompt(
             Empty on non-search turns. Ephemeral — never persisted, never trimmed.
         mood_opener: optional opening-tone nudge (see mood_opener()). Pass non-empty
             ONLY on the first exchange of a session; empty otherwise.
+        location: "home" / "jeep" / "unknown" (location.resolve_location()). Looked up
+            in LOCATION_CONTEXTS; "unknown"/unrecognized → no block. Never trimmed.
 
     Token budget (PRD §4): if the assembled prompt exceeds TOKEN_BUDGET, ONLY the
     retrieved-memory block is trimmed (last lines dropped toward k=3). Persona, mood,
-    core/policy, the search block, and the anchor are NEVER trimmed.
+    location, core/policy, the search block, and the anchor are NEVER trimmed.
     """
     persona = build_persona_block(snark_level)
+    location_block = LOCATION_CONTEXTS.get(location, "")
 
     # The anchor is decided on the value THIS turn carries: first real exchange is 1
     # (1 % 8 != 0 → no anchor), the eighth is 8 (8 % 8 == 0 → anchor). The caller must
@@ -178,9 +204,11 @@ def build_system_prompt(
 
     # Everything except the retrieved memory is never trimmed. The search block is
     # load-bearing for this exact turn (Echo answers from it), so it's fixed too.
-    fixed = (persona, mood_opener, core_block, search_block, anchor)
+    fixed = (persona, mood_opener, location_block, core_block, search_block, anchor)
     trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
-    return _join_blocks(persona, mood_opener, core_block, trimmed_memory, search_block, anchor)
+    return _join_blocks(
+        persona, mood_opener, location_block, core_block, trimmed_memory, search_block, anchor
+    )
 
 
 def _join_blocks(*blocks: str) -> str:

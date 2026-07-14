@@ -37,6 +37,18 @@ _MAX_SNARK_PATTERN = re.compile(r"\bmax(?:imum)?\s+snark\b", re.IGNORECASE)
 _STAY_OFFLINE_PATTERN = re.compile(r"\b(?:stay|go|get)\s+offline\b", re.IGNORECASE)
 _GO_ONLINE_PATTERN = re.compile(r"\b(?:go\s+(?:back\s+)?online|back\s+online)\b", re.IGNORECASE)
 
+# Location voice override (Stage 5 Part 5 §6, session-scoped). Deliberately specific
+# phrases so they can't fire on ordinary talk about the jeep or home ("I drove the jeep
+# home" matches neither). Jeep checked first.
+_LOC_JEEP_PATTERN = re.compile(
+    r"\b(?:we'?re\s+in\s+the\s+jeep|(?:get|hop)\s+in\s+the\s+jeep|jeep\s+mode|in\s+the\s+jeep\s+now)\b",
+    re.IGNORECASE,
+)
+_LOC_HOME_PATTERN = re.compile(
+    r"\b(?:we'?re\s+(?:at\s+)?home|we'?re\s+in\s+the\s+house|back\s+home|home\s+mode)\b",
+    re.IGNORECASE,
+)
+
 
 def is_signoff(transcript: str) -> bool:
     """Check if the transcript contains the sign-off phrase."""
@@ -61,6 +73,15 @@ def is_stay_offline(transcript: str) -> bool:
 def is_go_online(transcript: str) -> bool:
     """Check if the transcript asks Echo to resume web search this session."""
     return bool(_GO_ONLINE_PATTERN.search(transcript))
+
+
+def is_location_override(transcript: str) -> str | None:
+    """Return 'jeep'/'home' if the transcript forces a location, else None."""
+    if _LOC_JEEP_PATTERN.search(transcript):
+        return "jeep"
+    if _LOC_HOME_PATTERN.search(transcript):
+        return "home"
+    return None
 
 
 class Session:
@@ -93,6 +114,9 @@ class Session:
         # web_search_off: session-scoped kill switch for web search (voice "stay offline").
         # The global enable lives in echo_search.json; this is the in-session override.
         self.web_search_off = False
+        # location: 'home'/'jeep'/'unknown', resolved once at session start (like snark)
+        # from the local network fingerprint; the voice override can flip it mid-session.
+        self.location = "unknown"
 
         SESSIONS_DIR.mkdir(exist_ok=True)
 

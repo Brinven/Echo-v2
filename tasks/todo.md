@@ -69,9 +69,23 @@ tunable from logs. Reversible.
   model change makes it necessary. Part 3's separate-reasoning-call infra would still feed the
   self-check probe if resurrected.
 - **Stage 5 Part 5 — Location / Context Awareness** → `Echo_Stage5_Part5_LocationAwareness_PRD.md`
-  **NEXT after Part 3.** Home-vs-Jeep via LAN presence (gateway-MAC fingerprint) + voice
-  override. Reuses the snark/mood context-block pattern. Michael's rationale: location grounding
-  makes Echo "act normally" instead of roleplaying — knowing where she is settles the register.
+  **BUILT 2026-07-14, awaiting Michael's sign-off on the LOCATION_CONTEXTS persona wording.**
+  - [x] M1 `location.py` — gateway-MAC + known-host probe, ~2s cap, fail-soft, test seam.
+        **Live: resolves `home` on the desk** (MAC matched); all seam branches verified
+        (match→home, no-match→jeep, error/disabled/no-fingerprint→unknown, MAC colon/dash normalize).
+  - [x] M2 Config — `echo_location.json` pre-filled with real gateway `172.16.0.1` /
+        `3C-37-86-97-0D-7F`, **gitignored** (home fingerprint); `echo_location.example.json`
+        committed as the template (+ MAC lookup one-liner).
+  - [x] M3 `LOCATION_CONTEXTS` + `location` arg in `build_system_prompt` (after mood, before
+        core; never trimmed). Order + presence + no-trim verified.
+  - [x] M4 `session.location` + `is_location_override()` (jeep/home/none; rejects "drove the jeep home").
+  - [x] M5 `main.py` — resolve@start (beside snark), per-turn inject, voice-override fast-path
+        (not gated, no counter advance), startup status line.
+  - [x] M6 Behavior proof (live): same prompt → home = desk/downtime (no Jeep talk); jeep =
+        tire pressure + route + protectiveness. Clean split.
+  - [x] M7 `location` logged in JSONL.
+  - [ ] M8 (NTH) periodic re-check — off by default (`recheck_interval_min: 0`); deferred.
+  - **Michael's gate:** approve/tweak the two context strings (persona content, PRD §5), then commit.
 
 ---
 

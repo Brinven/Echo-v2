@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to echo_location.json and fill in YOUR home gateway MAC. The real file is gitignored (it's your home-network fingerprint). Detection off or missing file => location resolves to 'unknown' (neutral/home-style). The voice override ('Echo, we're in the Jeep') always works regardless.",
+  "_find_gateway_mac": "PowerShell: $g=(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select -First 1).NextHop; Get-NetNeighbor -IPAddress $g | Select LinkLayerAddress",
+  "location_detection_enabled": true,
+  "home_gateway_mac": "AA-BB-CC-DD-EE-FF",
+  "home_known_host": "192.168.1.1",
+  "recheck_interval_min": 0
+}
