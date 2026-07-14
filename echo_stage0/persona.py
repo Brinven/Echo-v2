@@ -136,13 +136,16 @@ def build_system_prompt(
     snark_level: int,
     core_block: str = "",
     memory_block: str = "",
+    search_block: str = "",
     mood_opener: str = "",
 ) -> str:
     """Assemble the full per-turn system prompt.
 
-    Order (PRD §4, with the optional mood opener riding just after the persona):
+    Order (PRD §4, plus the mood opener after the persona and the web-search block
+    after retrieved memory — Stage 5 Part 3 §7):
         PERSONA  →  MOOD OPENER (opening only)  →  CORE/POLICY slab
-                 →  RETRIEVED MEMORY (if any)  →  ANTI-DRIFT ANCHOR
+                 →  RETRIEVED MEMORY (if any)  →  WEB SEARCH (this turn only)
+                 →  ANTI-DRIFT ANCHOR
 
     Args:
         exchange_count: 1-based count of the exchange this prompt is being built for.
@@ -153,12 +156,14 @@ def build_system_prompt(
             Policy + Preferences). Empty string when memory is unavailable.
         memory_block: Ib-Lite's per-turn retrieved Fact/Episodic block. Empty when
             retrieval returns nothing above threshold.
+        search_block: web-search results for THIS turn (search.format_search_block()).
+            Empty on non-search turns. Ephemeral — never persisted, never trimmed.
         mood_opener: optional opening-tone nudge (see mood_opener()). Pass non-empty
             ONLY on the first exchange of a session; empty otherwise.
 
-    Token budget (PRD §4): if the assembled prompt exceeds TOKEN_BUDGET, the memory
-    block is trimmed (last lines dropped toward k=3). Persona, mood, core, and policy
-    are NEVER trimmed.
+    Token budget (PRD §4): if the assembled prompt exceeds TOKEN_BUDGET, ONLY the
+    retrieved-memory block is trimmed (last lines dropped toward k=3). Persona, mood,
+    core/policy, the search block, and the anchor are NEVER trimmed.
     """
     persona = build_persona_block(snark_level)
 
@@ -171,10 +176,11 @@ def build_system_prompt(
         else ""
     )
 
-    # Everything except the retrieved memory is never trimmed.
-    fixed = (persona, mood_opener, core_block, anchor)
+    # Everything except the retrieved memory is never trimmed. The search block is
+    # load-bearing for this exact turn (Echo answers from it), so it's fixed too.
+    fixed = (persona, mood_opener, core_block, search_block, anchor)
     trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
-    return _join_blocks(persona, mood_opener, core_block, trimmed_memory, anchor)
+    return _join_blocks(persona, mood_opener, core_block, trimmed_memory, search_block, anchor)
 
 
 def _join_blocks(*blocks: str) -> str:

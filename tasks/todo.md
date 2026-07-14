@@ -1,30 +1,77 @@
 # Echo — tasks/todo.md
 
-## ▶ Next phase (2026-07-13) — Web Search + Persona Persistence
+## ▶ ACTIVE (2026-07-14) — Stage 5 Part 3: Web Search
 
-Launch fixed (Echo now runs in `echo_stage0/.venv`; see `tasks/lessons.md` 2026-07-13).
-Two tracks chosen by Michael, PRDs drafted, awaiting his review:
+Michael's call (2026-07-14): build **Part 3 (Web Search)** → then **Part 5 (Location)**.
+Part 4 is **penciled DONE** (see below); revisit only if a model swap needs it.
 
-- **Stage 5 Part 3 — Web Search** → `Echo_Stage5_Part3_WebSearch_PRD.md`
-  Self-hosted **SearXNG** (Docker, localhost-only, keyless). Separate-reasoning-call
-  decides + builds the query (Part 2 §6's reserved pattern); results inject into the
-  character pass; in-character filler covers latency + announces going online.
+**§6 decision (resolved):** keyword pre-filter → decision call (NOT decide-every-turn).
+Protects the <3s feel, recall-biased so misses fall through to the cheap Stage B call,
+tunable from logs. Reversible.
+
+### Build checklist (PRD §12 milestones)
+- [x] **M1 — SearXNG up.** ✅ **Reused Michael's EXISTING `Searxng` container on
+      `127.0.0.1:26`** — already JSON-enabled + limiter off (verified live: weather query
+      returned real JSON). No new container. My initial duplicate (`echo-searxng`) was torn
+      down. `searxng/docker-compose.yml` kept as a **localhost-only fallback** (port 8890,
+      not running); `searxng/README.md` documents the real setup. `echo_search.json` created
+      (base_url→:26). ⚠ Existing container is `0.0.0.0:26` (LAN-exposed) — hardening note for
+      Michael, non-blocking (Echo's own traffic is loopback).
+      *Gotcha found:* port **8888 is taken by a native uvicorn app** (PID-owned), not Docker.
+- [x] **M2 — `search.py`.** ✅ `SearchProvider` ABC, `SearXNGProvider`, `SearchResult`,
+      `healthy()`, `load_search_config()`, `build_provider()`, `format_search_block()`.
+      Uses httpx (already an openai dep — no new dep). Defensive `.get()` parsing; 5s
+      timeout; never raises. **Live-verified against :26** — healthy()=True, 5 real weather
+      results parsed, populated + empty-results blocks format correctly.
+- [x] **M3 — Decision call (`search_decision.py`).** ✅ Stage A `prefilter_hit()` (regex,
+      recall-biased) + Stage B `decide_search()` (reasoning-off JSON, mirrors
+      `significance.py:run_gate`, never raises, empty-content guard). **Live-verified** on a
+      6-prompt mixed sweep: lookups→search+query, personal/opinion/greeting→false, joke
+      skipped at Stage A (0ms). Stage B ~0.7–1.5s.
+- [x] **M4 — Result injection.** ✅ `search_block` arg added to
+      `persona.build_system_prompt` (after memory, before anchor; never trimmed).
+      **Verified:** order memory→search→anchor holds; anchor timing intact (exch 1 none, exch 8 yes).
+- [x] **M5 — Latency filler.** ✅ In `main.py run_streaming_pipeline`: search step sits after the
+      sign-off/forget/max-snark short-circuits, before assembly. `audio_q.start()` moved up so the
+      filler + streamed answer share ONE playback cycle (filler enqueues first, plays while search
+      runs). Rotating filler via `_pick_filler`. Search turns marked exempt from <3s PASS/FAIL.
+- [x] **M6 — Toggle + transparency.** ✅ `web_search_enabled` (echo_search.json → `build_provider`
+      returns None if off). Startup `healthy()` probe (warn-don't-block). Graceful SearXNG-down →
+      `search()` returns [] → in-character decline (verified against a dead port). Voice off-switch
+      `is_stay_offline`/`is_go_online` + `session.web_search_off` (verified).
+- [x] **M7 — Logging.** ✅ All 8 fields wired via `**search_meta`; search turns log
+      `passed_budget=None` (excluded from pass-rate).
+- [x] **M8 — End-to-end (headless).** ✅ Live model + live SearXNG, 4-prompt sweep: weather →
+      searched, "83°, thunderstorm, keep it in mind for the Jeep" (in-voice, no URLs/"according to");
+      Artemis news → searched, real dates; crows opinion → NO search, pure Echo; "how are you doing"
+      → NO search. Zero banned phrases. **Remaining: Michael's live mic/keyboard pass** (10-prompt +
+      real audio) — user-run, like the personality harnesses.
+      *Refinement from the live test:* added a greeting stoplist to `prefilter_hit` so pure smalltalk
+      ("hey echo how are you doing") skips the Stage B call entirely.
+- [ ] **M9 — Memory (NTH).** Provenance/exclusion only if logs show junk facts. Deferred — the gate
+      already sees searched turns (main.py); revisit only if real logs show ephemeral web junk.
+
+### Tailscale / firewall (road web-search prep — future Jeep deployment)
+- Firewall break-glass (added by Michael 2026-07-14, elevated):
+  `New-NetFirewallRule -DisplayName "Echo SearXNG (Tailscale/LAN)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 26 -Profile Any`
+- ⚠ Host-to-**self** `100.86.181.37:26` still times out even WITH the rule — but that's a known
+  Tailscale self-hairpin dead-end, NOT proof the remote path is blocked. **Definitive test = curl
+  from the `echo` Mac node** (`100.94.68.70`): `curl "http://100.86.181.37:26/search?q=test&format=json"`.
+- Recommended Jeep architecture: run SearXNG **on the Mac Mini itself** (`searxng_base_url` →
+  `http://127.0.0.1:8888`) → self-contained road search, no home-PC dependency. One-line config swap
+  (provider abstraction already supports it). Tailscale-to-home is the zero-setup fallback.
+
+### Deferred / queued
 - **Stage 5 Part 4 — Persona Persistence** → `Echo_Stage5_Part4_PersonaPersistence_PRD.md`
-  (1) model-matrix eval harness, (2) self-check probe (background, gate-pattern),
-  (3) dry-wit calibration examples. Goal: smallest model that still feels like Echo.
+  **PENCILED DONE (2026-07-14):** Michael settled on **Gemma 4 12B QAT (Hauhaucs decensored)**
+  as the persona-persistence pick — "penciled," pending the inevitable next great open model.
+  Eval harness / self-check probe / dry-wit calibration examples NOT built; revisit only if a
+  model change makes it necessary. Part 3's separate-reasoning-call infra would still feed the
+  self-check probe if resurrected.
 - **Stage 5 Part 5 — Location / Context Awareness** → `Echo_Stage5_Part5_LocationAwareness_PRD.md`
-  Home-vs-Jeep via LAN presence (gateway-MAC fingerprint) + voice override. Reuses the
-  snark/mood context-block pattern; the flag future OBD/GPS telemetry gates on.
-
-**Recommended build order:** Part 4 calibration examples (cheap, changes baseline) →
-Part 4 eval harness (baseline models) → Part 3 web search (flagship feature) →
-Part 4 self-check probe → re-run harness to prove the probe's lift. Part 3 and the
-self-check probe share the separate-reasoning-call infra.
-
-Open decision for Michael (Part 3 §6): search-decision on every turn vs keyword
-pre-filter first. CC recommends the pre-filter to protect the <3s budget.
-
-Build todo (checklist) gets written when Michael greenlights a track.
+  **NEXT after Part 3.** Home-vs-Jeep via LAN presence (gateway-MAC fingerprint) + voice
+  override. Reuses the snark/mood context-block pattern. Michael's rationale: location grounding
+  makes Echo "act normally" instead of roleplaying — knowing where she is settles the register.
 
 ---
 

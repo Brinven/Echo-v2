@@ -1,0 +1,26 @@
+# Echo — SearXNG FALLBACK compose (NOT the active backend — see README.md)
+#
+# Echo currently uses Michael's EXISTING host container `Searxng` on 127.0.0.1:26,
+# which already has the JSON API on and the limiter off (verified 2026-07-14). Do NOT
+# run this stack alongside it — it exists only as a repo-tracked, reproducible,
+# localhost-ONLY recipe to recreate the backend if that container ever goes away.
+#
+# If you DO bring this up: it binds 127.0.0.1:8890 (8888 is taken by a native app;
+# 26 is the existing container). Then point echo_search.json's searxng_base_url at it.
+#
+# Localhost binding is enforced by the "127.0.0.1:" port prefix below, NOT by
+# settings.yml (server.bind_address/port are no-ops under Docker — Granian binds
+# 0.0.0.0:8080 inside the container). Never drop the 127.0.0.1: prefix.
+
+services:
+  searxng:
+    # Matches the version of the existing host container (rolling release, no semver).
+    image: searxng/searxng:2026.6.15-cf1410af8
+    container_name: echo-searxng-fallback
+    ports:
+      - "127.0.0.1:8890:8080"          # localhost-only; 8890 avoids native :8888 and existing :26
+    volumes:
+      - ./config:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8890/
+    restart: unless-stopped

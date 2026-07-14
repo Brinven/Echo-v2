@@ -32,6 +32,11 @@ _FORGET_PATTERNS = [
 # Requires both "max(imum)" and "snark" so it can't fire on ordinary talk about snark.
 _MAX_SNARK_PATTERN = re.compile(r"\bmax(?:imum)?\s+snark\b", re.IGNORECASE)
 
+# Web-search off/on switch (Stage 5 Part 3 §6 NTH, session-scoped). Requires the explicit
+# "offline"/"online" keyword so it can't fire on ordinary conversation.
+_STAY_OFFLINE_PATTERN = re.compile(r"\b(?:stay|go|get)\s+offline\b", re.IGNORECASE)
+_GO_ONLINE_PATTERN = re.compile(r"\b(?:go\s+(?:back\s+)?online|back\s+online)\b", re.IGNORECASE)
+
 
 def is_signoff(transcript: str) -> bool:
     """Check if the transcript contains the sign-off phrase."""
@@ -46,6 +51,16 @@ def is_forget(transcript: str) -> bool:
 def is_max_snark(transcript: str) -> bool:
     """Check if the transcript triggers Maximum Snark Mode."""
     return bool(_MAX_SNARK_PATTERN.search(transcript))
+
+
+def is_stay_offline(transcript: str) -> bool:
+    """Check if the transcript asks Echo to stop searching the web this session."""
+    return bool(_STAY_OFFLINE_PATTERN.search(transcript))
+
+
+def is_go_online(transcript: str) -> bool:
+    """Check if the transcript asks Echo to resume web search this session."""
+    return bool(_GO_ONLINE_PATTERN.search(transcript))
 
 
 class Session:
@@ -75,6 +90,9 @@ class Session:
         # mood_opener: a resolved opening-tone nudge (from the prior session's mood),
         # set once at session start and applied only on the first exchange.
         self.mood_opener = ""
+        # web_search_off: session-scoped kill switch for web search (voice "stay offline").
+        # The global enable lives in echo_search.json; this is the in-session override.
+        self.web_search_off = False
 
         SESSIONS_DIR.mkdir(exist_ok=True)
 

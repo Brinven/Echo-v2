@@ -1,0 +1,21 @@
+# Echo — SearXNG settings (overrides only what Echo needs on top of the shipped defaults)
+#
+# use_default_settings: true means we inherit SearXNG's full default settings.yml and
+# only override the keys below. Keep this file MINIMAL so a rolling-release image bump
+# can't break us on a setting we needlessly pinned.
+#
+# limiter: false + public_instance: false are safe ONLY because the port is localhost-
+# bound (see docker-compose.yml) and only Echo talks to it. Never expose to the LAN.
+
+use_default_settings: true
+
+server:
+  # Generate before first use: python -c "import secrets; print(secrets.token_hex(32))"
+  secret_key: "CHANGE_ME_GENERATE_A_64_HEX_SECRET"
+  limiter: false           # allows a local programmatic client (no Valkey/rate-limit)
+  public_instance: false   # keep bot-detection off for localhost use
+
+search:
+  formats:
+    - html
+    - json                 # enables the JSON API (HTML-only by default; 403 without this)

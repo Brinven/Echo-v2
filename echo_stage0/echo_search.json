@@ -1,0 +1,14 @@
+{
+  "web_search_enabled": true,
+  "provider": "searxng",
+  "searxng_base_url": "http://127.0.0.1:26",
+  "categories": "general",
+  "engines": "duckduckgo,brave",
+  "top_k": 5,
+  "timeout_s": 5,
+  "filler_lines": [
+    "Let me look that up, Michael.",
+    "One moment — checking on that.",
+    "Give me a second, I'll look it up."
+  ]
+}

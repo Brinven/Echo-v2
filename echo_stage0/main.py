@@ -22,6 +22,7 @@ audition.md for the full model-testing workflow.
 
 import sys
 import time
+import random
 import threading
 
 import keyboard
@@ -36,11 +37,16 @@ from llm import LLMClient
 from tts import TTSEngine
 from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
-from session import Session, is_signoff, is_forget, is_max_snark, load_config, save_config
+from session import (
+    Session, is_signoff, is_forget, is_max_snark, is_stay_offline, is_go_online,
+    load_config, save_config,
+)
 from summarizer import generate_summary
 from ib_lite import IbLite
 from persona import build_system_prompt, mood_opener
 from daily_state import get_daily_snark_level
+from search import build_provider, load_search_config, format_search_block
+from search_decision import decide_search
 
 
 # ── Console UI ───────────────────────────────────────────────────────────
@@ -79,6 +85,15 @@ def print_conversation(speaker: str, text: str):
     print(f"  {speaker}: {text}")
 
 
+_DEFAULT_FILLERS = ["Let me look that up, Michael.", "One moment."]
+
+
+def _pick_filler(search_config: dict | None) -> str:
+    """Pick an in-character 'going online' filler line (rotates for variety)."""
+    lines = (search_config or {}).get("filler_lines") or _DEFAULT_FILLERS
+    return random.choice(lines)
+
+
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 def run_streaming_pipeline(
@@ -93,6 +108,8 @@ def run_streaming_pipeline(
     session: Session,
     vad_mode: str,
     ib: IbLite | None = None,
+    search_provider=None,
+    search_config: dict | None = None,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
@@ -167,14 +184,87 @@ def run_streaming_pipeline(
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
 
+    # ── Web-search off/on switch: "Echo, stay offline" / "go back online" ──
+    # Session-scoped (session.web_search_off). Not a real exchange — no counter
+    # advance, never gated. Mutually exclusive patterns (offline vs online keyword).
+    if is_stay_offline(transcript) or is_go_online(transcript):
+        going_offline = is_stay_offline(transcript)
+        print_conversation("You", transcript)
+        session.add_user_turn(transcript, stt_latency)
+        session.web_search_off = going_offline
+        reply = (
+            "Alright, I'll stay offline — just me, no web."
+            if going_offline
+            else "Back online. I'll look things up when it actually helps."
+        )
+        print_conversation("Echo", reply)
+        audio_q.start()
+        try:
+            tts_audio, tts_sr = tts.synthesize(reply)
+            audio_q.enqueue(tts_audio, tts_sr)
+            sm.transition(State.SPEAKING)
+        except Exception as e:
+            print(f"  [TTS error on search-toggle: {e}]")
+        audio_q.finish()
+        session.add_echo_turn(reply, 0.0)
+        return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
+
     print_conversation("You", transcript)
     session.add_user_turn(transcript, stt_latency)
+
+    # ── Web search (Stage 5 Part 3): a SEPARATE reasoning call decides whether this
+    # turn needs the web and builds the query; results inject into the character pass.
+    # CoT-isolated — Echo sees results, not the reasoning. A search turn breaks the
+    # <3s budget, so we speak an in-character filler the instant we decide to search
+    # (covers latency + is the transparency cue that she's going online).
+    #
+    # audio_q is started HERE (once) so the filler and the streamed answer share one
+    # playback cycle: the filler enqueues first (plays while the search runs), then the
+    # answer chunks follow it seamlessly.
+    search_block = ""
+    search_meta = {
+        "web_search_triggered": False, "search_prefilter_hit": False,
+        "search_decision_ms": 0.0, "search_query": None, "search_provider": None,
+        "search_latency_ms": 0.0, "results_count": 0, "search_engines_used": None,
+    }
+    audio_q.start()
+    if search_provider is not None and not session.web_search_off:
+        decision = decide_search(transcript, llm.model_name)
+        search_meta["search_prefilter_hit"] = decision["prefilter_hit"]
+        search_meta["search_decision_ms"] = round(decision["decision_ms"], 1)
+        if decision["search"] and decision["query"]:
+            query = decision["query"]
+            search_meta["web_search_triggered"] = True
+            search_meta["search_query"] = query
+
+            # Filler first (latency cover + transparency). Not logged as a turn.
+            filler = _pick_filler(search_config)
+            print_conversation("Echo", filler)
+            try:
+                f_audio, f_sr = tts.synthesize(filler)
+                audio_q.enqueue(f_audio, f_sr)
+                sm.transition(State.SPEAKING)
+            except Exception as e:
+                print(f"  [TTS error on filler: {e}]")
+
+            # Search runs behind the filler. Provider never raises → [] on any failure,
+            # and format_search_block([]) yields a graceful in-character 'came up empty'.
+            top_k = int((search_config or {}).get("top_k", 5))
+            t_search = time.perf_counter()
+            results = search_provider.search(query, top_k=top_k)
+            search_meta["search_latency_ms"] = round((time.perf_counter() - t_search) * 1000, 1)
+            search_meta["results_count"] = len(results)
+            search_meta["search_provider"] = (search_config or {}).get("provider", "searxng")
+            engines = sorted({r.engine for r in results if r.engine})
+            search_meta["search_engines_used"] = ",".join(engines) if engines else None
+            search_block = format_search_block(query, results)
+            print(f"  [web: '{query}' → {len(results)} results in {search_meta['search_latency_ms']:.0f}ms]")
 
     # ── Personality + memory: assemble the full system prompt ──
     # This is a real exchange — advance the anti-drift counter FIRST so the anchor
     # fires on exchanges 8, 16, 24... (build_system_prompt checks count % 8 == 0).
-    # Assembly order: persona block (with today's snark) → Core/Policy/Prefs slab
-    # (Ib-Lite) → retrieved Fact/Episodic memory → anti-drift anchor.
+    # Assembly order: persona → Core/Policy/Prefs slab (Ib-Lite) → retrieved
+    # Fact/Episodic memory → web-search block (this turn only) → anti-drift anchor.
     exchange_n = session.increment_exchange()
     snark_level = session.effective_snark
 
@@ -189,11 +279,11 @@ def run_streaming_pipeline(
     # Mood opener only on the opening exchange; it fades after that.
     opener = session.mood_opener if exchange_n == 1 else ""
     system_prompt = build_system_prompt(
-        exchange_n, snark_level, core_block, memory_block, mood_opener=opener
+        exchange_n, snark_level, core_block, memory_block,
+        search_block=search_block, mood_opener=opener,
     )
 
-    # ── LLM streaming -> TTS chunks -> audio queue ──
-    audio_q.start()
+    # ── LLM streaming -> TTS chunks -> audio queue (already started above) ──
     t_llm_start = time.perf_counter()
     llm_timing = {}
     t_first_audio = None
@@ -239,9 +329,19 @@ def run_streaming_pipeline(
     # ── Timing ──
     actual_ttft = llm_timing.get("ttft", 0.0)
     first_audio = (t_first_audio - t0) if t_first_audio else 0.0
-    passed = first_audio < 1.5 if t_first_audio else False
-    status_str = "PASS" if passed else "FAIL"
-    print(f"  [{status_str}: 1st audio {first_audio:.2f}s | STT {stt_latency:.2f}s | TTFT {actual_ttft:.2f}s | {chunk_count} chunks]")
+    if search_meta["web_search_triggered"]:
+        # Search turns are exempt from the <3s budget (decision + round-trip + answer).
+        # first_audio here is time to the ANSWER audio, after the filler already played.
+        passed = None
+        print(
+            f"  [SEARCH (exempt): answer-audio {first_audio:.2f}s | "
+            f"decision {search_meta['search_decision_ms']:.0f}ms | "
+            f"search {search_meta['search_latency_ms']:.0f}ms | {chunk_count} chunks]"
+        )
+    else:
+        passed = first_audio < 1.5 if t_first_audio else False
+        status_str = "PASS" if passed else "FAIL"
+        print(f"  [{status_str}: 1st audio {first_audio:.2f}s | STT {stt_latency:.2f}s | TTFT {actual_ttft:.2f}s | {chunk_count} chunks]")
 
     logger.log_run(
         stage=5,
@@ -258,6 +358,10 @@ def run_streaming_pipeline(
         response_full=full_response,
         memory_retrieval_ms=round(memory_retrieval_ms, 1),
         memories_injected=memories_injected,
+        # Search turns log passed_budget=None so they're excluded from the pass-rate.
+        passed_budget=(None if search_meta["web_search_triggered"]
+                       else (first_audio < 1.5 if t_first_audio else False)),
+        **search_meta,
     )
 
     return {"stt": stt_latency, "first_audio": first_audio, "passed": passed}
@@ -350,6 +454,20 @@ def main():
 
     # Initialize memory (Ib-Lite: local SQLite, Core + Policy injected at session start)
     ib = IbLite(llm.model_name)
+
+    # Initialize web search (Stage 5 Part 3). build_provider returns None if disabled in
+    # echo_search.json. healthy() is a warn-don't-block probe — search is optional.
+    search_config = load_search_config()
+    search_provider = build_provider(search_config)
+    if search_provider is not None:
+        ok = search_provider.healthy()
+        print(
+            f"  Web search: {search_config.get('provider', 'searxng')} @ "
+            f"{search_config.get('searxng_base_url')} "
+            f"({'reachable' if ok else 'UNREACHABLE — will decline in character'})"
+        )
+    else:
+        print("  Web search: disabled (echo_search.json)")
 
     logger = SessionLogger()
     history: list[dict] = []
@@ -600,6 +718,8 @@ def main():
                     history=history, sm=sm,
                     session=session, vad_mode=vad_mode,
                     ib=ib,
+                    search_provider=search_provider,
+                    search_config=search_config,
                 )
 
                 if result and result.get("signoff"):
