@@ -1,8 +1,15 @@
-# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 1)
+# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 5 Part 5, 2026-07-14)
 
 This file exists to give Claude Code the decisions already made about the Echo
 project so that code written does not conflict with established architecture.
 Do not override these decisions without explicit user instruction.
+
+> **Current state (2026-07-14):** Stage 5 is complete across Parts 1–5 — Ib-Lite memory
+> (Part 1), Personality Layer (Part 2), Web Search (Part 3), Persona Persistence penciled to
+> Gemma 4 12B QAT Hauhaucs (Part 4), Location/Context Awareness (Part 5). The build-stage
+> table below (Stage 0) is **historical build-order context**, not current status — the ⚠
+> sections further down are the live architecture. Next track: Stage 6 Speaker Awareness
+> (backlog; see `tasks/todo.md`).
 
 ---
 
@@ -327,12 +334,17 @@ so a normal fact (default confidence 0.85) keeps its recall, while a fact dialed
 ## ⚠ Personality Layer (Stage 5 Part 2, 2026-06-24)
 
 Echo's character lives in **`echo_stage0/persona.py`** — `PERSONA_BLOCK`, `SNARK_CONTEXTS`,
-`ANTI_DRIFT_ANCHOR`, `build_persona_block(snark)`, and `build_system_prompt(exchange_count,
-snark, core_block, memory_block)`. Identity is here and ONLY here.
+`ANTI_DRIFT_ANCHOR`, `build_persona_block(snark)`, `LOCATION_CONTEXTS` (Part 5), and
+`build_system_prompt(exchange_count, snark, core_block, memory_block, search_block,
+mood_opener, location)`. Identity is here and ONLY here.
 
-- **System prompt assembly is now in `main.py`, not `ib_lite`.** Per turn it builds:
-  `persona block → mood opener (opening only) → core_block (ib.build_context_block) →
-  memory_block (ib.read_memory) → anti-drift anchor`. `IbLite.system_prompt_for_turn()`
+- **System prompt assembly is now in `main.py`, not `ib_lite`.** Per turn it builds
+  (full order as of Part 5): `persona block (+snark) → mood opener (exchange 1 only) →
+  location context (Part 5, every turn) → core_block (ib.build_context_block) →
+  memory_block (ib.read_memory) → web-search block (Part 3, search turns only) →
+  anti-drift anchor`. Only `memory_block` is ever trimmed to budget; everything else
+  (persona, mood, location, core, search, anchor) is never trimmed.
+  `IbLite.system_prompt_for_turn()`
   still exists but is **retired from the hot path** — do not reintroduce it as the assembler
   or the two orderings will diverge.
   Persona is built even when Ib-Lite is unavailable (empty core/memory), so the old generic
@@ -434,3 +446,64 @@ without announcing that you remember it."
 Do not inject empty block.
 
 **New JSONL fields:** memory_retrieval_ms, memories_injected, turn_memories_added
+
+---
+
+## ⚠ Web Search (Stage 5 Part 3, 2026-07-14)
+
+Echo can search the web — the **one deliberate exception** to the local-first spine, kept
+minimal. Backend is **SearXNG** (keyless metasearch proxy). Uses Michael's EXISTING host
+container on **`http://127.0.0.1:26`** (JSON API on, limiter off — already met the PRD reqs;
+NOT a dedicated Echo container). `searxng/docker-compose.yml` is a localhost-only **fallback**
+recipe (port 8890, not running by default); `searxng/README.md` documents the real setup.
+Config in **`echo_search.json`** (fail-soft, mirrors `echo_sampler.json`).
+
+- **`search.py`** — provider-abstracted (`SearchProvider` ABC → `SearXNGProvider`), uses
+  `httpx` (already an `openai` dep — no new dep). `search()`/`healthy()` **never raise**
+  ([]/False on any failure). `format_search_block()` builds the prompt block (empty results →
+  a graceful in-character "came up empty").
+- **`search_decision.py`** — the **separate-reasoning-call** pattern (Part 2 §6's reserved
+  slot). Stage A `prefilter_hit()` (regex + greeting stoplist, recall-biased) gates Stage B
+  `decide_search()`, an LLM JSON call that mirrors `significance.py:run_gate` —
+  `reasoning_effort="none"`, never raises, `{"search": false}` on failure. **CoT isolation:**
+  the query is built here; Echo's character pass only ever sees results, never the reasoning.
+- **Hot path (`main.py run_streaming_pipeline`):** search runs AFTER the sign-off/forget/
+  max-snark/location short-circuits, BEFORE assembly. On `search:true`, an in-character filler
+  is spoken immediately (latency cover + transparency cue) and `audio_q.start()` is called ONCE
+  so the filler + streamed answer share one playback cycle (filler enqueues first). Search turns
+  are **exempt from the <3s PASS/FAIL** (`passed_budget=None`).
+- **Toggle:** `web_search_enabled` in `echo_search.json` (→ `build_provider()` returns None);
+  voice off/on switch `is_stay_offline()`/`is_go_online()` → `session.web_search_off`.
+- **New JSONL fields:** web_search_triggered, search_prefilter_hit, search_decision_ms,
+  search_query, search_provider, search_latency_ms, results_count, search_engines_used.
+- **Road/Jeep note:** to reach SearXNG from the Jeep, the definitive test is a curl from the
+  Mac node over Tailscale (`http://100.86.181.37:26`); the recommended eventual architecture is
+  SearXNG **local on the Mac Mini** (one-line `searxng_base_url` swap) so road search needs no
+  home-PC dependency. See `tasks/todo.md`.
+
+---
+
+## ⚠ Location / Context Awareness (Stage 5 Part 5, 2026-07-14)
+
+Echo knows whether she's **home** (desk/downtime) or in the **jeep** (driving companion) and
+it shapes her register — same context-block mechanism as snark/mood. Fully local (reads
+Michael's own network); no exception to the spine needed.
+
+- **`location.py`** — `resolve_location() → "home"/"jeep"/"unknown"` from the default-gateway
+  MAC (+ known-host ping backup), Windows-native `subprocess` (no new dep), ~2s hard cap,
+  fail-soft, test seam (`force=` / injected `probe=`). **`unknown` fails to NEUTRAL/home
+  behavior, never jeep** — Jeep-telemetry talk when location is uncertain is the exact
+  awkwardness this removes. No home fingerprint configured → `unknown` (never guesses jeep).
+- **Config `echo_location.json`** — pre-filled with the real home gateway, **GITIGNORED**
+  (home-network fingerprint); `echo_location.example.json` is the committed template. On the
+  stationary desktop it always resolves `home`; the value of auto-detect is load-bearing only
+  once there's Jeep hardware.
+- **`persona.py` `LOCATION_CONTEXTS`** (home/jeep/unknown, Michael-approved persona content) +
+  the `location` arg on `build_system_prompt` — injected every turn after mood, before core;
+  never trimmed. Makes Part 2's "protective of the Jeep" trait know WHEN the Jeep half is live.
+- **Voice override** (`session.py is_location_override()` → `session.location`, handled in
+  `main.py` like max-snark — not gated, no counter advance): "Echo, we're in the Jeep" →
+  "Buckle up, Michael." / "Echo, we're home" → "Home it is, Michael." Session-scoped; next
+  launch re-resolves from the network.
+- **New JSONL field:** `location` (active location per turn).
+- Location is the **flag** future OBD-II/GPS telemetry will gate on — delivered standalone first.
