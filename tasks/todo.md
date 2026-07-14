@@ -12,6 +12,9 @@ Two tracks chosen by Michael, PRDs drafted, awaiting his review:
 - **Stage 5 Part 4 — Persona Persistence** → `Echo_Stage5_Part4_PersonaPersistence_PRD.md`
   (1) model-matrix eval harness, (2) self-check probe (background, gate-pattern),
   (3) dry-wit calibration examples. Goal: smallest model that still feels like Echo.
+- **Stage 5 Part 5 — Location / Context Awareness** → `Echo_Stage5_Part5_LocationAwareness_PRD.md`
+  Home-vs-Jeep via LAN presence (gateway-MAC fingerprint) + voice override. Reuses the
+  snark/mood context-block pattern; the flag future OBD/GPS telemetry gates on.
 
 **Recommended build order:** Part 4 calibration examples (cheap, changes baseline) →
 Part 4 eval harness (baseline models) → Part 3 web search (flagship feature) →
