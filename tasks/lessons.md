@@ -43,3 +43,35 @@ LM Studio fact — also retained to `axly-infra`.)
 
 **Prevention**: Any future structured-output call against an unknown LM Studio model should
 default to `reasoning_effort="none"` and validate the JSON, rather than trusting `content`.
+
+## 2026-07-13: "Not loading" — shared global Python lost the whole voice-pipeline stack
+
+**Problem**: `start-echo.bat` did nothing / exited immediately after ~3 weeks on the shelf.
+Launch died at the very first import (`audio.py` → `sounddevice`), which prints an error and
+calls `sys.exit()`, killing the whole process before any engine started.
+
+**Root cause**: `start-echo.bat` ran bare `python main.py` against *system* Python 3.11.9 (no
+venv). Since the last live run (2026-06-24), that shared global env had been silently clobbered:
+`torch` was downgraded to the CPU wheel (`2.11.0+cpu`, `cuda.is_available()=False`) and the
+entire audio stack — `sounddevice`, `soundfile`, `faster-whisper`, `ctranslate2`, `webrtcvad` —
+was gone. Only the Ib-Lite deps survived. Almost certainly another project's `pip install`
+stepping on the shared interpreter. The code and both servers (LM Studio :1234,
+Kokoro-FastAPI :8880) were fine the whole time.
+
+**Fix**: Gave Echo a dedicated venv at `echo_stage0/.venv` and pointed `start-echo.bat` at it
+(`.venv\Scripts\python.exe`, with a guard that errors clearly if the venv is missing).
+Reinstalled the full stack there. Did NOT reinstall CUDA torch: faster-whisper does CUDA via
+`ctranslate2` (independent of torch) and the Ib-Lite embedder is CPU-by-design — so the CPU
+torch wheel is correct and lighter. Verified faster-whisper loads `float16` on the RTX 5080.
+
+**Rule**: A project with heavy/native deps must NOT rely on the shared global Python — pin it to
+its own venv so another project's install can't clobber it. (Cross-project env lesson.)
+
+**Prevention**: `start-echo.bat` now fails loudly if `.venv` is missing (no silent bare-python
+fallback), so a wiped env surfaces immediately instead of a cryptic import death.
+
+**Also**: `webrtcvad` has no prebuilt wheel and fails to build on Windows/Py3.11 (needs a C
+compiler), which aborted the whole `pip install -r requirements.txt` (pip rolls back the batch).
+Made it optional in requirements.txt — PTT (SPACE) is the default input and `vad.py` degrades to
+PTT-only gracefully, so it's zero functional loss. For hands-free VAD later: `pip install
+webrtcvad-wheels` (drop-in, same `import webrtcvad`).

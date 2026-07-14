@@ -14,6 +14,27 @@ Don't branch before pushing to the default branch on this repo.
 
 ---
 
+## ⚠ Runtime Environment — dedicated venv (2026-07-13)
+
+Echo runs in a **dedicated virtualenv at `echo_stage0/.venv`** — NOT the shared global
+Python. `start-echo.bat` points at `.venv\Scripts\python.exe` and fails loudly if it's
+missing. This exists because the shared global env was silently clobbered while Echo sat on
+the shelf (a CPU torch replaced the CUDA one; the whole audio stack vanished — another
+project's `pip install`). See `tasks/lessons.md` 2026-07-13.
+
+- Recreate the venv: `python -m venv echo_stage0\.venv` then
+  `echo_stage0\.venv\Scripts\python -m pip install -r echo_stage0\requirements.txt`.
+- **Do NOT reinstall CUDA torch.** faster-whisper does CUDA via `ctranslate2` (torch-independent)
+  and the Ib-Lite embedder is CPU-by-design — the CPU torch wheel is correct here. Verified
+  faster-whisper loads `float16` on the RTX 5080.
+- `webrtcvad` is OPTIONAL and commented out in requirements.txt (no Windows/Py3.11 wheel; it
+  aborts the whole `pip install`). PTT (SPACE) is the default input; `vad.py` degrades to
+  PTT-only. For hands-free later: `pip install webrtcvad-wheels` (drop-in).
+- Both servers must be up: LM Studio :1234 (model loaded) and Kokoro-FastAPI :8880
+  (`H:\AxlyGitHub_H\Kokoro-FastAPI\start-kokoro.bat`).
+
+---
+
 ## What Echo Is
 
 Echo is a local-first AI voice companion. It runs entirely on the user's Windows PC.

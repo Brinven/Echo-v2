@@ -1,4 +1,31 @@
-# Echo — Stage 5 Part 2: Personality Layer — tasks/todo.md
+# Echo — tasks/todo.md
+
+## ▶ Next phase (2026-07-13) — Web Search + Persona Persistence
+
+Launch fixed (Echo now runs in `echo_stage0/.venv`; see `tasks/lessons.md` 2026-07-13).
+Two tracks chosen by Michael, PRDs drafted, awaiting his review:
+
+- **Stage 5 Part 3 — Web Search** → `Echo_Stage5_Part3_WebSearch_PRD.md`
+  Self-hosted **SearXNG** (Docker, localhost-only, keyless). Separate-reasoning-call
+  decides + builds the query (Part 2 §6's reserved pattern); results inject into the
+  character pass; in-character filler covers latency + announces going online.
+- **Stage 5 Part 4 — Persona Persistence** → `Echo_Stage5_Part4_PersonaPersistence_PRD.md`
+  (1) model-matrix eval harness, (2) self-check probe (background, gate-pattern),
+  (3) dry-wit calibration examples. Goal: smallest model that still feels like Echo.
+
+**Recommended build order:** Part 4 calibration examples (cheap, changes baseline) →
+Part 4 eval harness (baseline models) → Part 3 web search (flagship feature) →
+Part 4 self-check probe → re-run harness to prove the probe's lift. Part 3 and the
+self-check probe share the separate-reasoning-call infra.
+
+Open decision for Michael (Part 3 §6): search-decision on every turn vs keyword
+pre-filter first. CC recommends the pre-filter to protect the <3s budget.
+
+Build todo (checklist) gets written when Michael greenlights a track.
+
+---
+
+# Echo — Stage 5 Part 2: Personality Layer — tasks/todo.md (COMPLETE — history below)
 
 Adds Echo's coherent personality (persona block + snark + anti-drift + CoT isolation
 + sampler baseline) on top of Stage 5 Part 1 (Ib-Lite). Voice pipeline + memory untouched.
