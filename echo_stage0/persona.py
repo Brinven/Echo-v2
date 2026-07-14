@@ -15,6 +15,49 @@ emerge from accumulated memory (Ib-Lite). This block is the anti-drift scaffold 
 holds identity stable; the richness comes from the memory blocks assembled after it.
 """
 
+import re
+
+
+# ── Character invariants (single-sourced) ──────────────────────────────────
+#
+# The objective "must never" list and the "adopting Mike" detector. These are IDENTITY
+# content, so they live here — the runtime self-check probe (persona_check.py) reads them
+# rather than re-deriving its own copy, so editing the list in one place moves the probe too.
+# (PRD §10 banned phrases; the Michael Directive, PRD §2a.) The test harnesses keep their
+# own independent expectation copies on purpose — a test asserting against the module it
+# tests would hide drift.
+
+BANNED_PHRASES = [
+    "certainly", "absolutely!", "great question", "as an ai", "i don't have access",
+    "i remember that", "last time we spoke", "is there anything else", "fascinating",
+]
+
+# Adopting "Mike" as an address. Two shapes, both clause-local so they can't reach across a
+# sentence boundary into a mention:
+#   1. an agreement/greeting word shortly before "Mike"  ("okay Mike", "sure thing, Mike")
+#   2. a vocative comma-"Mike"                            ("..., Mike.")
+# Recall-biased but must NOT flag "Mike is what people call you when they're in a hurry" — the
+# persona's own deflection line. The vocative arm's negative lookahead skips "Mike is/was/'s…"
+# (mentions), and the keyword arm's [^.!?\n] class won't cross the preceding period.
+_MIKE_ADOPT = re.compile(
+    r"\b(?:call you|i'?ll call you|okay|ok|sure|fine|got it|will do|as you wish|you got it|"
+    r"hello|hi|hey|alright|noted|thanks|thank you|yep|no problem|you bet)\b[^.!?\n]{0,15}?\bmike\b"
+    r"|,\s+mike\b(?!\s+(?:is|was|'s|has|will|would|means|stands))",
+    re.IGNORECASE,
+)
+
+
+def banned_hits(text: str) -> list[str]:
+    """Banned phrases present in the text (case-insensitive)."""
+    low = text.lower()
+    return [b for b in BANNED_PHRASES if b in low]
+
+
+def adopts_mike(reply: str) -> bool:
+    """True if the reply adopts 'Mike' as an address (not merely mentions the word)."""
+    return bool(_MIKE_ADOPT.search(reply))
+
+
 # ── The persona block (PRD §2f — verbatim; do not alter without Michael's approval) ──
 #
 # {snark_context} is resolved at build time from the current day's snark level.
@@ -53,6 +96,29 @@ SNARK_CONTEXTS = {
 
 # Fallback bucket if a level somehow falls outside every range.
 _DEFAULT_SNARK_RANGE = (0, 3)
+
+
+# ── Dry-wit calibration examples (Stage 5 Part 4 §5 — Michael approves; persona content) ──
+#
+# Show, don't tell. Smaller models often can't infer "dry humor — the observation, not the
+# punchline" from description alone; a few grounded exchanges anchor the target tone. Injected
+# as part of the persona region (right after the persona block), part of the NEVER-trimmed
+# region. The header frames them as illustrations, NOT a script to continue — this guards
+# against the model parroting them verbatim (PRD §8 risk). Token-bounded (~150 tokens).
+#
+# These embody the DO that complements the persona block's DON'T. Mid snark (~5): dry
+# observation over joke, warmth under the dryness, concision, the Michael Directive in action.
+
+CALIBRATION_EXAMPLES = """Here is how you sound, for calibration only — do not repeat these lines, just match the register:
+
+Michael: I think I'm going to redo the whole cooling system this weekend.
+Echo: The same weekend you said you'd "just check the brakes"? I'll clear my calendar, Michael.
+
+Michael: Call me Mike.
+Echo: You're Michael. It suits you better. Mike is what people call you when they're in a hurry.
+
+Michael: Rough day.
+Echo: I gathered — you've asked me the time twice and it hasn't changed. Sit for a minute, Michael."""
 
 
 # ── Anti-drift anchor (PRD §5 — compact identity re-assertion, ~60 tokens) ──
@@ -153,6 +219,14 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def _correction_block(correction: str) -> str:
+    """Wrap a self-check nudge as its own bracketed block (parses like the anchor)."""
+    correction = (correction or "").strip()
+    if not correction:
+        return ""
+    return f"[correction]\n{correction}\n[/correction]"
+
+
 def build_system_prompt(
     exchange_count: int,
     snark_level: int,
@@ -161,14 +235,17 @@ def build_system_prompt(
     search_block: str = "",
     mood_opener: str = "",
     location: str = "",
+    correction: str = "",
 ) -> str:
     """Assemble the full per-turn system prompt.
 
-    Order (PRD §4, plus the mood opener + location context after the persona and the
-    web-search block after retrieved memory — Stage 5 Part 3 §7 / Part 5 §3):
-        PERSONA  →  MOOD OPENER (opening only)  →  LOCATION CONTEXT (every turn)
-                 →  CORE/POLICY slab  →  RETRIEVED MEMORY (if any)
-                 →  WEB SEARCH (this turn only)  →  ANTI-DRIFT ANCHOR
+    Order (PRD §4, plus the calibration examples with the persona, the mood opener +
+    location context after the persona, the web-search block after retrieved memory, and
+    the self-check correction after the anchor — Stage 5 Part 3 §7 / Part 4 §4-5 / Part 5 §3):
+        PERSONA  →  CALIBRATION EXAMPLES (every turn)  →  MOOD OPENER (opening only)
+                 →  LOCATION CONTEXT (every turn)  →  CORE/POLICY slab
+                 →  RETRIEVED MEMORY (if any)  →  WEB SEARCH (this turn only)
+                 →  ANTI-DRIFT ANCHOR  →  SELF-CHECK CORRECTION (one turn, on demand)
 
     Args:
         exchange_count: 1-based count of the exchange this prompt is being built for.
@@ -185,13 +262,17 @@ def build_system_prompt(
             ONLY on the first exchange of a session; empty otherwise.
         location: "home" / "jeep" / "unknown" (location.resolve_location()). Looked up
             in LOCATION_CONTEXTS; "unknown"/unrecognized → no block. Never trimmed.
+        correction: an on-demand self-check nudge (persona_check.py) to steer the NEXT
+            reply back into character. Pass session.consume_persona_correction() — it is
+            used for exactly one turn, then cleared (decays; not sticky). Never trimmed.
 
     Token budget (PRD §4): if the assembled prompt exceeds TOKEN_BUDGET, ONLY the
     retrieved-memory block is trimmed (last lines dropped toward k=3). Persona, mood,
-    location, core/policy, the search block, and the anchor are NEVER trimmed.
+    location, core/policy, the search block, the anchor, and the correction are NEVER trimmed.
     """
     persona = build_persona_block(snark_level)
     location_block = LOCATION_CONTEXTS.get(location, "")
+    correction_block = _correction_block(correction)
 
     # The anchor is decided on the value THIS turn carries: first real exchange is 1
     # (1 % 8 != 0 → no anchor), the eighth is 8 (8 % 8 == 0 → anchor). The caller must
@@ -203,11 +284,15 @@ def build_system_prompt(
     )
 
     # Everything except the retrieved memory is never trimmed. The search block is
-    # load-bearing for this exact turn (Echo answers from it), so it's fixed too.
-    fixed = (persona, mood_opener, location_block, core_block, search_block, anchor)
+    # load-bearing for this exact turn (Echo answers from it), so it's fixed too. The
+    # calibration examples sit with the persona (they illustrate it), and the self-check
+    # correction is a one-turn steer — both are never trimmed.
+    fixed = (persona, CALIBRATION_EXAMPLES, mood_opener, location_block,
+             core_block, search_block, anchor, correction_block)
     trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
     return _join_blocks(
-        persona, mood_opener, location_block, core_block, trimmed_memory, search_block, anchor
+        persona, CALIBRATION_EXAMPLES, mood_opener, location_block,
+        core_block, trimmed_memory, search_block, anchor, correction_block
     )
 
 

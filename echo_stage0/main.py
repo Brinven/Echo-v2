@@ -44,6 +44,7 @@ from session import (
 from summarizer import generate_summary
 from ib_lite import IbLite
 from persona import build_system_prompt, mood_opener
+from persona_check import SelfCheckRunner, SELF_CHECK_EVERY, RECENT_K
 from daily_state import get_daily_snark_level
 from search import build_provider, load_search_config, format_search_block
 from search_decision import decide_search
@@ -95,6 +96,12 @@ def _pick_filler(search_config: dict | None) -> str:
     return random.choice(lines)
 
 
+def _recent_echo_replies(history: list[dict], k: int) -> list[str]:
+    """The last k Echo (assistant) replies from history, oldest→newest — the probe's input."""
+    echoes = [m["content"] for m in history if m.get("role") == "assistant" and m.get("content")]
+    return echoes[-k:]
+
+
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 def run_streaming_pipeline(
@@ -111,6 +118,7 @@ def run_streaming_pipeline(
     ib: IbLite | None = None,
     search_provider=None,
     search_config: dict | None = None,
+    self_check: SelfCheckRunner | None = None,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
@@ -298,12 +306,18 @@ def run_streaming_pipeline(
         core_block = ib.build_context_block()
         memory_block, memory_retrieval_ms, memories_injected = ib.read_memory(transcript)
 
-    # Mood opener only on the opening exchange; it fades after that.
+    # Mood opener only on the opening exchange; it fades after that. The self-check
+    # correction (if the probe flagged a break on a prior cycle) is consumed here and
+    # cleared — it steers exactly this one turn back into character, then decays.
     opener = session.mood_opener if exchange_n == 1 else ""
+    correction = session.consume_persona_correction()
     system_prompt = build_system_prompt(
         exchange_n, snark_level, core_block, memory_block,
         search_block=search_block, mood_opener=opener, location=session.location,
+        correction=correction,
     )
+    if correction:
+        print("  [self-check: steering back to character this turn]")
 
     # ── LLM streaming -> TTS chunks -> audio queue (already started above) ──
     t_llm_start = time.perf_counter()
@@ -347,6 +361,14 @@ def run_streaming_pipeline(
         if ib and ib.available:
             turn_text = f"{session.user_name or 'Michael'}: {transcript}\nEcho: {full_response}"
             ib.write_memory(session.session_id, turn_text)
+
+        # ── Persona self-check (off the hot path): every N exchanges, judge Echo's recent
+        # replies on a background thread and queue a one-turn correction if she drifted.
+        # Single-flight and exempt under Max Snark (handled inside maybe_run).
+        if self_check is not None and exchange_n % SELF_CHECK_EVERY == 0:
+            self_check.maybe_run(
+                session, llm.model_name, _recent_echo_replies(history, RECENT_K), exchange_n
+            )
 
     # ── Timing ──
     actual_ttft = llm_timing.get("ttft", 0.0)
@@ -492,6 +514,10 @@ def main():
     else:
         print("  Web search: disabled (echo_search.json)")
 
+    # Persona self-check probe (Stage 5 Part 4): a background alignment check every N
+    # exchanges that catches drift and queues a one-turn correction. Off the hot path.
+    self_check = SelfCheckRunner()
+
     logger = SessionLogger()
     history: list[dict] = []
     vad_mode = "webrtcvad" if vad.available else "ptt-only"
@@ -524,6 +550,8 @@ def main():
           + ('  (say "Echo, we\'re in the Jeep" to switch)' if session.location != "jeep" else ""))
     if session.mood_opener:
         print("  Opening tone: adjusted to last session's mood")
+    print(f"  Self-check: every {SELF_CHECK_EVERY} exchanges "
+          "(silent; logs to sessions/persona_divergence.jsonl)")
     print()
     print('  Say "Echo, that\'s all for now" to end session')
     draw_status(status="READY", vad=vad_mode, session_id=session.session_id)
@@ -749,6 +777,7 @@ def main():
                     ib=ib,
                     search_provider=search_provider,
                     search_config=search_config,
+                    self_check=self_check,
                 )
 
                 if result and result.get("signoff"):

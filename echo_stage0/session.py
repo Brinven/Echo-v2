@@ -117,6 +117,11 @@ class Session:
         # location: 'home'/'jeep'/'unknown', resolved once at session start (like snark)
         # from the local network fingerprint; the voice override can flip it mid-session.
         self.location = "unknown"
+        # persona_correction: an on-demand self-check nudge (persona_check.py) injected into
+        # the NEXT turn's system prompt, then consumed (one-turn decay). Set on the probe's
+        # background thread, read+cleared on the main thread. A plain string swap is atomic
+        # under the GIL, so no lock — a lost/stale nudge is harmless (re-detected next probe).
+        self.persona_correction = ""
 
         SESSIONS_DIR.mkdir(exist_ok=True)
 
@@ -156,6 +161,16 @@ class Session:
     def effective_snark(self) -> int:
         """Current snark level: locked to 10 in Maximum Snark Mode, else the daily roll."""
         return 10 if self.max_snark else self.daily_snark
+
+    def set_persona_correction(self, nudge: str) -> None:
+        """Queue a self-check nudge for the next turn (called from the probe thread)."""
+        self.persona_correction = (nudge or "").strip()
+
+    def consume_persona_correction(self) -> str:
+        """Return the queued nudge and clear it (one-turn decay). Called on the main thread."""
+        nudge = self.persona_correction
+        self.persona_correction = ""
+        return nudge
 
     @property
     def turns(self) -> list[dict]:

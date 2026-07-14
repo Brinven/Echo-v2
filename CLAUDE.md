@@ -1,15 +1,22 @@
-# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 5 Part 5, 2026-07-14)
+# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 5 Part 4 built, 2026-07-14)
 
 This file exists to give Claude Code the decisions already made about the Echo
 project so that code written does not conflict with established architecture.
 Do not override these decisions without explicit user instruction.
 
 > **Current state (2026-07-14):** Stage 5 is complete across Parts 1–5 — Ib-Lite memory
-> (Part 1), Personality Layer (Part 2), Web Search (Part 3), Persona Persistence penciled to
-> Gemma 4 12B QAT Hauhaucs (Part 4), Location/Context Awareness (Part 5). The build-stage
-> table below (Stage 0) is **historical build-order context**, not current status — the ⚠
-> sections further down are the live architecture. Next track: Stage 6 Speaker Awareness
-> (backlog; see `tasks/todo.md`).
+> (Part 1), Personality Layer (Part 2), Web Search (Part 3), Location/Context Awareness
+> (Part 5). **Part 4 (Persona Persistence) is now BUILT** (was penciled): the model-matrix
+> eval harness, the persona self-check probe, and dry-wit calibration examples all shipped
+> and tested (offline + live). The persona-model pick remains Gemma 4 12B QAT Hauhaucs;
+> the harness exists to re-audition smaller models against it. The build-stage table below
+> (Stage 0) is **historical build-order context**, not current status — the ⚠ sections
+> further down are the live architecture. Next track: Stage 6 Speaker Awareness (backlog;
+> see `tasks/todo.md`).
+>
+> **Two Part-4 approval gates still open (character content is Michael's):** (1) sign off on
+> the `CALIBRATION_EXAMPLES` wording in `persona.py`, and (2) edit `persona_matrix_models.json`
+> to the real model ids to audition. Nothing is committed until (1) is approved.
 
 ---
 
@@ -334,16 +341,18 @@ so a normal fact (default confidence 0.85) keeps its recall, while a fact dialed
 ## ⚠ Personality Layer (Stage 5 Part 2, 2026-06-24)
 
 Echo's character lives in **`echo_stage0/persona.py`** — `PERSONA_BLOCK`, `SNARK_CONTEXTS`,
-`ANTI_DRIFT_ANCHOR`, `build_persona_block(snark)`, `LOCATION_CONTEXTS` (Part 5), and
-`build_system_prompt(exchange_count, snark, core_block, memory_block, search_block,
-mood_opener, location)`. Identity is here and ONLY here.
+`ANTI_DRIFT_ANCHOR`, `CALIBRATION_EXAMPLES` (Part 4), `build_persona_block(snark)`,
+`LOCATION_CONTEXTS` (Part 5), the single-sourced invariants `BANNED_PHRASES` / `adopts_mike()`
+/ `banned_hits()` (Part 4), and `build_system_prompt(exchange_count, snark, core_block,
+memory_block, search_block, mood_opener, location, correction)`. Identity is here and ONLY here.
 
 - **System prompt assembly is now in `main.py`, not `ib_lite`.** Per turn it builds
-  (full order as of Part 5): `persona block (+snark) → mood opener (exchange 1 only) →
-  location context (Part 5, every turn) → core_block (ib.build_context_block) →
-  memory_block (ib.read_memory) → web-search block (Part 3, search turns only) →
-  anti-drift anchor`. Only `memory_block` is ever trimmed to budget; everything else
-  (persona, mood, location, core, search, anchor) is never trimmed.
+  (full order as of Part 4/5): `persona block (+snark) → calibration examples (Part 4, every
+  turn) → mood opener (exchange 1 only) → location context (Part 5, every turn) →
+  core_block (ib.build_context_block) → memory_block (ib.read_memory) → web-search block
+  (Part 3, search turns only) → anti-drift anchor → self-check correction (Part 4, one turn
+  on demand)`. Only `memory_block` is ever trimmed to budget; everything else
+  (persona, calibration, mood, location, core, search, anchor, correction) is never trimmed.
   `IbLite.system_prompt_for_turn()`
   still exists but is **retired from the hot path** — do not reintroduce it as the assembler
   or the two orderings will diverge.
@@ -507,3 +516,78 @@ Michael's own network); no exception to the spine needed.
   launch re-resolves from the network.
 - **New JSONL field:** `location` (active location per turn).
 - Location is the **flag** future OBD-II/GPS telemetry will gate on — delivered standalone first.
+
+---
+
+## ⚠ Persona Persistence (Stage 5 Part 4, 2026-07-14 — built, was penciled)
+
+A **measurement-and-hardening** stage (no new user feature): make Echo's character survive
+model shrink so a smaller/faster model can eventually run alongside vision/STT/TTS. Three
+deliverables, all local-first, inference-only, CoT-isolated. PRD:
+`Echo_Stage5_Part4_PersonaPersistence_PRD.md`.
+
+### Character invariants are single-sourced (`persona.py`)
+`BANNED_PHRASES`, `adopts_mike()` (the "adopting Mike" detector), and `banned_hits()` live in
+`persona.py` — identity content. The runtime self-check probe reads them; the eval harness
+aliases `adopts_mike`. **The test files keep their OWN independent copies on purpose** — a test
+asserting against the module it tests would hide drift. If you edit the banned list, edit it
+in `persona.py`; the probe and harness follow automatically, the tests will flag the change.
+
+### Deliverable 1 — model-matrix eval harness (`eval_persona_matrix.py`)
+- Scores any model list on Echo's gates + latency, writes `sessions/persona_matrix_<ts>.json`
+  + a markdown table + a recommendation (smallest/fastest passer). Model list from `--models`,
+  `ECHO_MODEL`, or `persona_matrix_models.json`; each entry resolved against LM Studio's live
+  list (exact id or **unique** substring — ambiguous/not-loaded → SKIP, not FAIL).
+- **Hard gates** (pass/fail): zero banned phrases, Michael Directive holds, no unprompted
+  "as an AI". **Soft** (0–10 heuristics, advisory): snark separation (Jaccard+length),
+  memory naturalness, hold consistency → composite 0–100 (snark·0.3 + memory·0.4 + hold·0.3).
+  **Latency:** median TTFT + approx tok/s, **cold-start/JIT-load measured separately and
+  EXCLUDED** (the benchmark footgun). `--quick` skips the 20-turn hold.
+- **Parroting detector** (advisory): flags replies that echo a `CALIBRATION_EXAMPLES` line
+  near-verbatim (a shared 6-word run). Surfaced because small models DO reuse the examples as
+  canned lines — informs whether the calibration wording needs reworking (see approval gate).
+- **Two deliberate deviations from PRD §3** (documented, safer): the memory-naturalness test
+  injects the known fact via `build_system_prompt`'s `memory_block` arg, **NOT** the live
+  `echo.db` (never pollute Michael's production memory with test facts); the harness therefore
+  uses `LLMClient` directly, **no `IbLite`** (it writes no memory; the probe takes the model
+  name as a string like the gate).
+- Reuses the batteries in `test_personality.py` (`BANNED`/`PROMPTS`) + `test_hold_20turn.py`
+  (`SCRIPT`/`CORE`/`SNARK`). Offline scoring tests: `test_persona_matrix.py`.
+
+### Deliverable 2 — persona self-check probe (`persona_check.py`)
+- `run_self_check(recent_replies, model)` — a **separate reasoning call** that mirrors
+  `significance.py:run_gate` EXACTLY: own client + system prompt, `temperature 0.1`,
+  `max_tokens 150`, **`reasoning_effort="none"`** (Gemma QAT thinking gotcha — same as the
+  gate/character pass), best-effort JSON, empty-content guard, **fail-SAFE** (any error →
+  `{"in_character": true}` so it never fabricates a correction from a failure). Never raises.
+- **`SelfCheckRunner`** fires it single-flight on a background thread like `ib.write_memory`,
+  **off the hot path**, every `SELF_CHECK_EVERY` (=5) exchanges on the last `RECENT_K` (=3)
+  Echo replies. Exempt under Max Snark (intended off-baseline behavior — never "correct" it).
+- **Guardrails (`evaluate_correction`) — the over-correction firewall:** objective violations
+  (`deterministic_violations`: banned / Mike / as-an-AI, model-free) ALWAYS correct and
+  OVERRIDE the LLM verdict; an LLM `in_character:false` with `severity:"major"` also corrects
+  (nuanced servile/generic drift — the one subjective window, intentional so drift with no
+  banned-phrase signature is still catchable); `minor` with no objective violation is
+  SUPPRESSED (stylistic taste → no feedback loop).
+- **Action:** sets `session.persona_correction` (a nudge, **never a hard override**); consumed
+  by the next turn's `build_system_prompt(correction=...)` and cleared (one-turn decay). Set on
+  the probe thread, read+cleared on the main thread — a plain string swap, GIL-atomic, no lock;
+  a lost/stale nudge is harmless (re-detected next probe). Every result appends to
+  `sessions/persona_divergence.jsonl` — **never spoken, never shown.** Offline tests:
+  `test_persona_check.py`.
+
+### Deliverable 3 — dry-wit calibration examples (`persona.py CALIBRATION_EXAMPLES`)
+- 3 short `(Michael → Echo)` exchanges at mid snark, injected with the persona (never trimmed),
+  headed "for calibration only — do not repeat these lines" to fight parroting. **Character
+  content — Michael's to approve (open gate).**
+
+### M9 before/after (Michael-run) & approval gates
+- The harness `--probe` flag runs the self-check inline during the 20-turn hold (correction
+  steers the next turn). **M9 = run a marginal model once without `--probe` (baseline) and once
+  with, compare the Hold column + corrections count.** Live-validated on `gemma-4-e4b-it-qat`:
+  it PASSes hard gates but drifts robotic under pressure ("That is what I process") and the
+  probe caught it at exchange 5 — the Part 4 thesis in action.
+- **Open gates (character content, uncommitted until resolved):** (1) approve/rewrite the
+  `CALIBRATION_EXAMPLES` wording — the e4b parroted them 4× in one run; (2) edit
+  `persona_matrix_models.json` to the real ids to audition (the seeded `gemma-4-12b-it-qat` is
+  an *ambiguous* substring on Michael's box — matches `@q8_0`, `@q4_k_xl`, abliterated).

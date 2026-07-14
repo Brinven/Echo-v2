@@ -25,10 +25,15 @@ from persona import (
     build_system_prompt,
     build_persona_block,
     PERSONA_BLOCK,
+    CALIBRATION_EXAMPLES,
     ANTI_DRIFT_ANCHOR,
     SNARK_CONTEXTS,
     TOKEN_BUDGET,
 )
+
+# A phrase unique to CALIBRATION_EXAMPLES (not in the persona block) — used to assert the
+# calibration region is present and survives budget trimming.
+_CALIB_MARKER = "just check the brakes"
 
 # Banned phrases (PRD §10) — auto-fail if present in a response (case-insensitive).
 BANNED = [
@@ -89,17 +94,21 @@ def run_offline_checks() -> None:
     assert not has_anchor(0), "anchor present at exchange 0 (off-by-one)"
     print("  [PASS] anti-drift anchor fires at exchanges 8/16/24 only (no off-by-one)")
 
-    # 4. Persona is always first; empty core/memory leaves no dangling blocks.
+    # 4. Persona is always first; calibration examples present; empty core/memory leaves
+    #    no dangling blocks.
     p = build_system_prompt(1, 5, core_block="", memory_block="")
     assert p.startswith("You are Echo."), "persona is not the first block"
+    assert _CALIB_MARKER in p, "calibration examples missing from assembled prompt"
     assert "Rules you follow:" not in p, "dangling policy header with empty core"
-    print("  [PASS] persona-first assembly tolerates empty core/memory")
+    print("  [PASS] persona-first assembly + calibration present, tolerates empty core/memory")
 
-    # 5. Never-trim-persona: a huge memory block is trimmed; persona + core survive intact.
+    # 5. Never-trim persona/calibration: a huge memory block is trimmed; persona, calibration,
+    #    and core survive intact.
     core = "Michael lives in Magnolia, TX. He goes by Michael, never Mike."
     big_mem = "You know the following:\n" + "\n".join(f"- fact {i}: " + ("x" * 200) for i in range(40))
     assembled = build_system_prompt(2, 5, core_block=core, memory_block=big_mem)
     assert PERSONA_BLOCK.split("\n")[0] in assembled, "persona dropped under budget pressure"
+    assert _CALIB_MARKER in assembled, "calibration examples dropped under budget pressure"
     assert core in assembled, "core dropped under budget pressure"
     assert assembled.count("- fact ") < 40, "memory block was not trimmed under budget"
     assert assembled.count("- fact ") >= 3, "memory trimmed below the k=3 floor"

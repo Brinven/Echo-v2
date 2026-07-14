@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Model matrix for the Stage 5 Part 4 persona-persistence eval harness.",
+    "Edit `models` to whatever you actually want auditioned. Each entry is either a",
+    "plain string (a model id or a unique substring) or an object:",
+    "  {\"model\": \"<id-or-substring>\", \"params_b\": <billions>, \"label\": \"<display>\"}",
+    "params_b is optional — when present the harness also reports the SMALLEST passing model.",
+    "The `model` value is resolved against LM Studio's live model list the same way the",
+    "audition picker resolves --model: exact id wins, else a UNIQUE substring match. A model",
+    "that isn't loaded (no match) is marked SKIP, not failed. Copy exact ids from LM Studio",
+    "or the `L`-key picker if a substring is ambiguous.",
+    "Override at run time with:  python eval_persona_matrix.py --models id1,id2,id3"
+  ],
+  "models": [
+    {"model": "gemma-4-12b-it-qat", "params_b": 12, "label": "Gemma 4 12B QAT (baseline)"},
+    {"model": "gemma-4-e4b-it-qat", "params_b": 4, "label": "Gemma 4 e4B QAT"},
+    {"model": "gemma-4-4b-it-qat", "params_b": 4, "label": "Gemma 4 4B QAT"}
+  ]
+}

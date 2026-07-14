@@ -1,6 +1,98 @@
 # Echo — tasks/todo.md
 
-## ▶ ACTIVE (2026-07-14) — Stage 5 Part 3: Web Search
+## ▶ ACTIVE (2026-07-14) — Stage 5 Part 4: Persona Persistence (un-penciled)
+
+Michael's call this session: **build the Part 4 deliverables** that were penciled-DONE
+but never built. PRD: `Echo_Stage5_Part4_PersonaPersistence_PRD.md`. This is a
+measurement-and-hardening stage (no new user feature): make Echo's character *survive
+model shrink* so a smaller/faster model can eventually run alongside vision/STT/TTS.
+
+**Sequencing (PRD §6):** calibration examples → eval harness → self-check probe → re-run
+harness for the probe's before/after lift.
+
+### Decisions locked (for this build)
+- **Memory-naturalness test injects the known fact via the `memory_block` prompt arg,
+  NOT the live `echo.db`.** The harness must never pollute Michael's production memory
+  with test facts. (Documented deviation from PRD §3's "via Ib-Lite" — same intent, safer.)
+- **Harness uses `LLMClient` directly, no `IbLite`.** It writes no memory; the self-check
+  probe takes the model-name string directly (like the gate). `IbLite.set_model` only
+  matters in the live pipeline, not the harness.
+- **Self-check probe mirrors `significance.py:run_gate` exactly** — own client, own system
+  prompt, `temperature≈0.1`, small `max_tokens`, `reasoning_effort="none"`, best-effort JSON,
+  never raises, empty-content guard. Single-flight background thread like `ib.write_memory`.
+- **Probe cadence:** every N=5 exchanges (tunable), last K=3 Echo replies, skipped under
+  `max_snark` (intended off-baseline) and while a prior probe runs.
+- **Correction is a nudge, not an override**; injected after the anti-drift anchor; decays
+  after one turn (cleared on consume). Only CLEAR violations trigger it.
+
+### Approval gates (character content — Michael signs off, per PRD)
+- [ ] **Calibration example wording** (PRD §5 draft) — I build the code path with the draft;
+      Michael approves/replaces the exchanges before commit.
+- [ ] **Final model-matrix list** — I seed `persona_matrix_models.json`; Michael edits to what
+      he actually wants auditioned.
+
+### Build checklist (PRD §7 milestones)
+- [x] **M1 — Calibration examples.** `CALIBRATION_EXAMPLES` in `persona.py`, injected into the
+      never-trimmed persona region; `test_personality.py` never-trim assertion updated. ✅
+- [x] **M2 — Harness skeleton.** `eval_persona_matrix.py`: model list (`--models` / `ECHO_MODEL`
+      / json), resolves each vs LM Studio (exact/unique substring; SKIP if not loaded), pins to
+      skip the picker, JIT-load timed separately. ✅ Live: ran on the real roster.
+- [x] **M3 — Hard-gate scoring.** Banned + Michael Directive + "as an AI"; broken canned run →
+      FAIL. ✅ (`test_persona_matrix.py`)
+- [x] **M4 — Soft + latency scoring.** Snark separation, memory naturalness, hold consistency;
+      composite 0–100; median TTFT/tok-s; **cold-start excluded**. ✅ **+ parrot detector** (NTH,
+      caught the e4b echoing calibration lines).
+- [x] **M5 — Recommendation.** Smallest/fastest passer above soft floor; `--quick` mode. ✅
+- [x] **M6 — Self-check module.** `persona_check.py::run_self_check` — separate reasoning call,
+      reasoning off, strict JSON, never raises, empty-content guard, fail-SAFE. ✅ Live: clean→
+      `in_character:true`, broken→flags Certainly/As-an-AI/Mike + clean nudge.
+- [x] **M7 — Self-check wiring.** `SelfCheckRunner` background single-flight every N=5;
+      `session.persona_correction` set→consume→clear; `build_system_prompt(correction=...)`
+      injects `[correction]` after the anchor (never trimmed); `main.py` fires it off the hot
+      path beside `ib.write_memory`. ✅
+- [x] **M8 — Probe guardrails.** `evaluate_correction`: objective breaks always override;
+      major→correct; minor-with-no-objective suppressed; max-snark exempt; one-turn decay. ✅
+- [~] **M9 — Before/after proof.** `--probe` runs the self-check inline during the hold
+      (mechanism BUILT + live-validated on e4b: probe fired@5 on real robotic drift, correction
+      injected@6). **The actual before/after comparison on a marginal model is Michael-run:**
+      `eval_persona_matrix.py --models <marginal> ` then `--probe`, compare the Hold column.
+
+### Verification — DONE (offline, run here)
+- ✅ `test_personality.py` (calibration present + never-trimmed), `test_persona_matrix.py`
+  (broken FAILs / clean PASSes, all heuristics, parrot detection, recommendation), and
+  `test_persona_check.py` (JSON parse clean/broken/empty, guardrails, correction lifecycle,
+  `[correction]` inject + never-trim, runner max-snark exemption). All green.
+- ✅ `py_compile` on all touched files. Live: harness quick + full `--probe` runs on
+  `gemma-4-e4b-it-qat` (PASS, composite 100, TTFT ~0.085s, 148 tok/s); `run_self_check`
+  clean/broken.
+
+### ⚠ Open — Michael's gates before commit (character content is his)
+- [ ] **Approve/rewrite `CALIBRATION_EXAMPLES` wording.** Finding: the e4b **parroted** the
+      example lines 4× in one run (incl. the brakes one-liner on an unrelated project-car
+      prompt). The parrot count also includes the legit Mike-deflection line (benign reuse) —
+      the *situational* examples (brakes/coffee) are the ones to watch. Decide: keep, reword
+      more abstract, or trim to fewer examples.
+- [ ] **Edit `persona_matrix_models.json`** to the exact/unique ids to audition. The seeded
+      `gemma-4-12b-it-qat` is an *ambiguous* substring on the box (matches `@q8_0`, `@q4_k_xl`,
+      abliterated); `gemma-4-4b-it-qat` isn't loaded. Real persona pick lives under
+      `hauhaucs/…gemma4-12b-qat-…-balanced@q4_k_m` or `gemma-4-12b-it-qat@q4_k_xl`.
+- **Nothing committed** until the calibration wording is signed off.
+
+### Review
+**Status: BUILT & TESTED, awaiting Michael's calibration sign-off before commit.**
+Shipped: `persona.py` (`CALIBRATION_EXAMPLES` + single-sourced `BANNED_PHRASES`/`adopts_mike`/
+`banned_hits` + `correction` arg + `_correction_block`), `eval_persona_matrix.py` (harness +
+`--probe` + parrot detector), `persona_check.py` (probe + `SelfCheckRunner` + guardrails),
+`persona_matrix_models.json` (seed), `session.py` (`persona_correction` set/consume/clear),
+`main.py` (probe wiring + correction consume), `test_persona_matrix.py`, `test_persona_check.py`,
+`test_personality.py` (calibration assert).
+Key live finding: the **e4b QAT passes the hard gates but drifts robotic under pressure** and
+the probe catches it — exactly the small-model erosion Part 4 targets. The harness turns
+"does it still feel like Echo?" into a reproducible scorecard for auditioning the smaller models.
+
+---
+
+## ✅ DONE (2026-07-14) — Stage 5 Part 3: Web Search
 
 Michael's call (2026-07-14): build **Part 3 (Web Search)** → then **Part 5 (Location)**.
 Part 4 is **penciled DONE** (see below); revisit only if a model swap needs it.
