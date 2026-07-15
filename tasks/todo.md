@@ -31,7 +31,8 @@ audition loop doesn't survive 67 voices.
 - [x] **`persona.VOICE_PREVIEW_LINE`** — the spoken sample. In `persona.py` because it's character
       content he hears verbatim. **FIXED, not random**: auditioning voices is an A/B test, only fair
       if the line is identical each time. Written to be worth hearing twice and phonetically varied
-      (hard consonants, sibilants, long vowels, a natural pause). **⚠ OPEN GATE: Michael's to approve.**
+      (hard consonants, sibilants, long vowels, a natural pause). **APPROVED as-is (Michael, 2026-07-15)**
+      — gate closed, no character-content gates remain open on Echo.
 - [x] `tts.synthesize(text, voice=...)` one-off override — a preview must never become a commitment.
 - [x] `/api/voice/preview` → `control.pending_preview` → `main.do_voice_preview`, same park-for-the-
       main-loop contract. **Mic paused during playback** (else hands-free VAD hears it and Echo

@@ -805,8 +805,9 @@ and `ib.set_model` (gate) and preserves history.
 ### Voice preview button (Stage 8.2)
 - **`persona.VOICE_PREVIEW_LINE`** — the sample Echo speaks for the dashboard's ▶ Preview button.
   It lives in `persona.py` because it is **character content Michael hears verbatim** (not a system
-  prompt — it's literal text Kokoro says). **Michael's to approve.** Deliberately FIXED, not random:
-  auditioning ~67 voices is an A/B test, and it's only fair if the line is identical every time.
+  prompt — it's literal text Kokoro says). **APPROVED as-is by Michael 2026-07-15.** Deliberately
+  FIXED, not random: auditioning ~67 voices is an A/B test, only fair if the line is identical
+  every time.
 - **`tts.synthesize(text, voice=...)`** takes a one-off override that does NOT change the active
   voice — a preview must never become a commitment (asserted in `test_webui.py`).
 - **Same park-for-the-main-loop contract**: `/api/voice/preview` → `control.pending_preview` →
