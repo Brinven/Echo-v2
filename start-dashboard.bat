@@ -38,8 +38,28 @@ if not exist "%CHROME%" (
     exit /b 1
 )
 
-REM Is Echo actually serving? The kiosk has no address bar, so a dead dashboard just
-REM shows an error page you can't navigate away from by touch. Say so up front.
+REM Don't stack kiosks. Re-running this (or restarting Echo, which auto-launches it) would
+REM otherwise open a SECOND kiosk window on the same profile, and the panel has no window
+REM management by touch -- you'd be stuck looking at whichever landed on top.
+powershell -NoProfile -Command ^
+  "$a = [regex]::Escape('%KIOSK_PROFILE%');" ^
+  "if (Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object { $_.CommandLine -match $a }) { exit 9 } else { exit 0 }"
+if errorlevel 9 (
+    echo.
+    echo  Kiosk is already open on the touchscreen -- nothing to do.
+    echo  ^(stop-dashboard.bat closes it.^)
+    echo.
+    exit /b 0
+)
+
+REM --wait: poll until Echo is serving, THEN open. Used by start-echo.bat, which launches this
+REM in the background before main.py takes over the foreground -- the dashboard only exists once
+REM main.py is up, so opening immediately would land the kiosk on an error page it cannot
+REM navigate off (no address bar, no keyboard on the panel).
+if /i "%~1"=="--wait" goto wait_for_dash
+
+REM Manual run: Echo should already be up. Warn but still open -- a touch refresh is possible
+REM once it comes up, and Michael may be opening this deliberately ahead of Echo.
 curl -s -m 2 -o NUL "%DASH_URL%/api/state" 2>nul
 if errorlevel 1 (
     echo.
@@ -48,7 +68,28 @@ if errorlevel 1 (
     echo           Opening the kiosk anyway; refresh it once Echo is up.
     echo.
 )
+goto open_kiosk
 
+:wait_for_dash
+echo  Waiting for Echo to serve %DASH_URL% before opening the kiosk...
+set /a _dtries=0
+:dash_wait_loop
+curl -s -m 2 -o NUL "%DASH_URL%/api/state" 2>nul
+if not errorlevel 1 goto open_kiosk
+set /a _dtries+=1
+REM ~90s: Echo's startup loads STT, the MiniLM embedder, and possibly the ECAPA voice model.
+if %_dtries% GEQ 45 goto dash_giveup
+ping -n 3 127.0.0.1 >nul
+goto dash_wait_loop
+:dash_giveup
+echo.
+echo  Echo never came up at %DASH_URL% after ~90s -- NOT opening the kiosk.
+echo  (An empty kiosk can't be navigated off by touch.) Check the Echo window for errors,
+echo  then run start-dashboard.bat by hand once it's serving.
+echo.
+exit /b 1
+
+:open_kiosk
 echo.
 echo  Opening the Echo dashboard in kiosk mode on the touchscreen at %KIOSK_POS%...
 echo  (Alt+F4 to exit, or run stop-dashboard.bat)

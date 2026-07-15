@@ -19,13 +19,19 @@ REM   - Kokoro-FastAPI at 127.0.0.1:8880. This launcher AUTO-STARTS it if it isn
 REM     already running (from KOKORO_BAT below) and waits until it responds, so you
 REM     only have to run THIS file.
 REM
-REM Dashboard: once Echo is up, open http://127.0.0.1:7862 in a browser.
+REM Dashboard: comes up automatically, full-screen on the 10" touchscreen (see
+REM ECHO_KIOSK below). It's also at http://127.0.0.1:7862 in any browser.
 REM ============================================================================
 
 setlocal enableextensions
 
 REM Force UTF-8 so console output (em-dashes etc.) doesn't choke on cp1252.
 set "PYTHONUTF8=1"
+
+REM ---- Auto-open the dashboard on the 10" touchscreen ------------------------
+REM The panel runs Echo and nothing else (Michael, 2026-07-15), so one launcher brings up
+REM both. Set to 0 to stop taking the screen over -- start-dashboard.bat still works by hand.
+set "ECHO_KIOSK=1"
 
 cd /d "%~dp0echo_stage0"
 
@@ -80,6 +86,19 @@ echo  Kokoro    : not running, and its launcher was not found at:
 echo              %KOKORO_BAT%
 echo              Start Kokoro manually, or fix KOKORO_BAT in this file.
 :kokoro_done
+
+REM ---- Dashboard kiosk (background; opens once Echo is actually serving) ----
+REM Spawned BEFORE main.py because main.py holds the foreground until Echo exits -- anything
+REM after it would never run. It polls for the dashboard and only then opens, so it can't land
+REM on an error page. It also no-ops if a kiosk is already open, so a restart won't stack them.
+if "%ECHO_KIOSK%"=="1" (
+    if exist "%~dp0start-dashboard.bat" (
+        echo  Dashboard : will open on the touchscreen once Echo is serving.
+        start "Echo kiosk" /min "%~dp0start-dashboard.bat" --wait
+    ) else (
+        echo  Dashboard : start-dashboard.bat not found -- open http://127.0.0.1:7862 yourself.
+    )
+)
 
 echo.
 echo  Starting Echo...  (dashboard: http://127.0.0.1:7862)
