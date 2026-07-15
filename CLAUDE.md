@@ -584,8 +584,10 @@ in `persona.py`; the probe and harness follow automatically, the tests will flag
 
 ### Deliverable 3 — dry-wit calibration examples (`persona.py CALIBRATION_EXAMPLES`)
 - 3 short `(Michael → Echo)` exchanges at mid snark, injected with the persona (never trimmed),
-  headed "for calibration only — do not repeat these lines" to fight parroting. **Character
-  content — Michael's to approve (open gate).**
+  headed "for calibration only — do not repeat these lines" to fight parroting. **Character content —
+  APPROVED as-is by Michael 2026-07-15** (kept the 3 examples; the parroting was the marginal e4b,
+  not the 12B production model). Gate closed — see the header and "approval gates" below; do not
+  re-open it.
 
 ### M9 before/after (Michael-run) & approval gates
 - The harness `--probe` flag runs the self-check inline during the 20-turn hold (correction
