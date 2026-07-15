@@ -81,6 +81,28 @@ harness for the probe's before/after lift.
 - **Committed 2026-07-15** (the earlier "nothing committed until sign-off" note was overtaken —
   Part 4 code shipped in `b356f57`; this commit closes the two character-content gates on top of it).
 
+### Model-audition constraints (locked 2026-07-15, Michael)
+- **DENSE ONLY — no MoEs in the audition, ever.** In Echo the voice model *is* the Ib-Lite
+  gate model (significance gate + `search_decision` + `persona_check` are all structured-JSON
+  calls on the same loaded model). MoEs with 1–4B active silently emit malformed/decoupled JSON
+  under structured prompts (the LFM2-speeddemon 29/30-false-boolean pattern; axly-infra lesson),
+  which would corrupt memory *writes*, not just replies. The ladder is already all-dense (Gemma
+  e4b/e2b are *effective*-dense MatFormer, not sparse-expert). Stay dense.
+- **Harness gap to close before any real shrink:** `eval_persona_matrix.py` scores persona +
+  latency, NOT gate-JSON reliability. "e4b passes the persona gates" is necessary, not sufficient —
+  a swap candidate inherits gate/search/probe duty. If a shrink gets serious, ADD a JSON-discipline
+  gate (run the significance gate over a battery, count malformed/empty). Note: Ib-Lite's per-turn
+  gate is small-context / simple-schema (unlike the >10k-token consolidation that broke small models
+  in Hindsight), so a *dense* 4B may genuinely pass — but it's untested. Don't assume; measure.
+- **12B is natively multimodal → this inverts Part 4's shrink premise.** Gemma 12B does vision
+  itself. The "shrink persona to make room for vision" pressure assumed vision was a *separate*
+  VRAM-eating model; if the 12B pulls persona + vision double-duty, keeping it *collapses two
+  models into one slot* and may be MORE VRAM-efficient than small-persona + separate-vision.
+  Feeds Stage 6 camera-fusion (a recognized home-camera feed = a 2nd independent "we're home"
+  signal alongside Part 5's LAN fingerprint). Harness stays useful as *measurement*; the
+  strategic case for shrinking is weaker than it first looked. Michael: "hopeful we can use
+  that when the time comes."
+
 ### Review
 **Status: DONE — Part 4 built, tested, committed (`b356f57`); both character-content gates closed 2026-07-15.**
 Shipped: `persona.py` (`CALIBRATION_EXAMPLES` + single-sourced `BANNED_PHRASES`/`adopts_mike`/
