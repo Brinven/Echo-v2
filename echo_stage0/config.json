@@ -1,5 +1,6 @@
 {
   "user_name": "Michael",
   "user_pronouns": "he/him",
-  "last_model": "hauhaucs/gemma4-12b-qat-uncensored-hauhaucs-balanced@q4_k_m"
+  "last_model": "hauhaucs/gemma4-12b-qat-uncensored-hauhaucs-balanced@q4_k_m",
+  "voice": "bf_lily"
 }
