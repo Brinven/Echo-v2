@@ -23,6 +23,32 @@ so Echo just listens and answers). Four follow-ups from that session:
 - [x] Verified: full offline suite + live HTTP smoke (voice park/apply/reject, no-model state) + a
       real `test_personality.py` live run (exit 0).
 
+## ✅ DONE (2026-07-15) — Stage 8.3: tell the truth about VRAM
+
+Michael: "this machine is almost always doing SOMETHING with Local models... sometimes I forget I had
+one loaded (usually its Invoke running) so when we do something with a local model it might just fail
+out because VRAM is already in use." He raised it as awareness; it turned out Echo's error message
+would have actively **lied** in that exact case.
+
+- [x] **The lie:** `_detect_model` caught `APIConnectionError` → *"LM Studio not detected — please
+      start LM Studio"*. But LM Studio **drops the connection when a load OOMs**, so that's the same
+      exception — Echo sent him to check a server that was fine. Now: "Can't reach LM Studio…
+      Either it isn't running, or it's up but couldn't serve a model" + real VRAM numbers.
+- [x] **`gpu.py`** — `vram_usage()` / `vram_hint()` via nvidia-smi subprocess (no new dep, mirrors
+      `location.py`), 2s cap, fail-soft. Reports numbers instead of guessing a "too full" threshold.
+- [x] **`llm.model_state()`** — LM Studio's NATIVE `/api/v0/models` carries per-model
+      `"state": loaded|not-loaded`; `/v1/models` lists everything regardless, which is exactly why
+      an OOM is invisible there. Verified live: state `not-loaded` matched `lms ps`.
+- [x] **Dashboard**: Model-residency dot + VRAM tile (used/total; amber ≥55%, red ≥85%, advisory).
+      Health cached ~5s so nvidia-smi isn't hot. Unreadable GPU → "n/a", never a crash (asserted).
+- [x] **`_print_vram_hint()`** after any LLM timeout/error — the moment it actually bites, since the
+      model JIT-loads on the FIRST request.
+- [x] Verified live: `vram_usage()` → (2986, 16303); `model_state()` → `not-loaded` (matches
+      `lms ps`); simulated a dropped connection → the new message names VRAM. Full suite green.
+
+**Key insight worth keeping:** `not-loaded` is NOT an error — Echo's model is normally not resident
+until the first turn JIT-loads it. It only means trouble *next to a full card*. Don't "fix" that.
+
 ## ✅ DONE (2026-07-15) — Stage 8.2: voice Preview button
 
 Michael: "I would get bored quickly having to think of.. something.. to say" — fair, the pick-and-talk

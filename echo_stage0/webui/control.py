@@ -19,6 +19,7 @@ from pathlib import Path
 
 import httpx
 
+import gpu
 from session import vad_default_for_location
 
 # logs/stage0_log.jsonl lives at the repo root (see logger.LOG_FILE).
@@ -49,6 +50,7 @@ class EchoControl:
         vad_available: bool = False,
         list_models=None,
         list_voices=None,
+        model_state=None,
         voice_name: str = "",
         lm_studio_url: str = _DEFAULT_LM_URL,
         kokoro_url: str = _DEFAULT_KOKORO_URL,
@@ -69,6 +71,7 @@ class EchoControl:
         # mid-generation — which for the voice would mean changing voice mid-sentence.
         self._list_models = list_models
         self._list_voices = list_voices
+        self._model_state = model_state      # read-only probe, like the listers
         self.pending_model: str | None = None
         self.pending_voice: str | None = None
         self.pending_preview: str | None = None
@@ -286,14 +289,23 @@ class EchoControl:
         }
 
     def health(self) -> dict:
-        """LM Studio + Kokoro reachability (cached ~5s so polling doesn't hammer them)."""
+        """LM Studio + Kokoro reachability + VRAM (cached ~5s so polling doesn't hammer them).
+
+        VRAM is here because this machine usually has something else on the GPU (Invoke, or a model
+        left loaded). Echo's model JIT-loads on the first request, so a full card fails at the first
+        thing Michael says — showing the numbers lets him SEE it instead of debugging a lie.
+        """
         now = time.monotonic()
         if self._health_cache is not None and (now - self._health_ts) < _HEALTH_CACHE_S:
             return self._health_cache
+        vram = gpu.vram_usage()
         result = {
             "lm_studio": self._reachable(self._lm_url),
             "kokoro": self._reachable(self._kokoro_url),
             "model": self._model_name,
+            "model_state": self._model_state() if self._model_state else "unknown",
+            "vram_used_mb": vram[0] if vram else None,
+            "vram_total_mb": vram[1] if vram else None,
         }
         self._health_cache = result
         self._health_ts = now

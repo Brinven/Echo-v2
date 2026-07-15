@@ -54,6 +54,7 @@ from search_decision import decide_search
 from location import resolve_location
 from speaker_id import SpeakerRegistry, build_embedder
 from webui import EchoControl, start_webui
+import gpu
 
 
 # How much audio to keep while idle in LISTENING. Capture must begin when RECORDING starts, so the
@@ -121,6 +122,13 @@ def _pick_filler(search_config: dict | None) -> str:
     """Pick an in-character 'going online' filler line (rotates for variety)."""
     lines = (search_config or {}).get("filler_lines") or _DEFAULT_FILLERS
     return random.choice(lines)
+
+
+def _print_vram_hint() -> None:
+    """Print the VRAM suspect line after an LLM failure ('' → nothing, e.g. no nvidia-smi)."""
+    hint = gpu.vram_hint()
+    if hint:
+        print(f"  {hint}")
 
 
 def _recent_echo_replies(history: list[dict], k: int) -> list[str]:
@@ -462,8 +470,13 @@ def run_streaming_pipeline(
 
     except TimeoutError as e:
         print(f"  [LLM timeout: {e}]")
+        _print_vram_hint()
     except Exception as e:
+        # The likely culprit on this machine is VRAM, not code: the model JIT-loads on the first
+        # request, so if Invoke or a forgotten model owns the card the load OOMs here and LM Studio
+        # drops the connection — which reads as a bare, cryptic error. Say the real suspect out loud.
         print(f"  [LLM error: {e}]")
+        _print_vram_hint()
 
     audio_q.finish()
 
@@ -751,6 +764,7 @@ def main():
         model_name=llm.model_name, speaker_active=speaker_embedder is not None,
         vad_available=vad.available, list_models=llm.list_models,
         list_voices=tts.list_voices, voice_name=tts.voice,
+        model_state=llm.model_state,
     )
     _webui = start_webui(control)
     if _webui:

@@ -36,7 +36,7 @@
   .tag b{color:var(--ink);}
 
   /* health */
-  .health{display:grid; grid-template-columns:repeat(4,1fr); gap:12px;}
+  .health{display:grid; grid-template-columns:repeat(5,1fr); gap:12px;}
   .stat{display:flex; align-items:center; gap:12px; padding:14px; background:var(--panel2); border:1px solid var(--edge); border-radius:12px;}
   .dot{width:14px; height:14px; border-radius:50%; background:var(--dim); flex:none; box-shadow:0 0 0 0 rgba(0,0,0,0);}
   .dot.up{background:var(--good); box-shadow:0 0 10px var(--good);}
@@ -106,7 +106,8 @@
   <div class="health">
     <div class="stat"><span id="d-lm" class="dot"></span><div><div class="lbl">LM Studio</div><div class="val" id="v-lm">—</div></div></div>
     <div class="stat"><span id="d-ko" class="dot"></span><div><div class="lbl">Kokoro TTS</div><div class="val" id="v-ko">—</div></div></div>
-    <div class="stat"><span class="dot up"></span><div><div class="lbl">Model</div><div class="val" id="v-model">—</div></div></div>
+    <div class="stat"><span id="d-model" class="dot"></span><div><div class="lbl">Model</div><div class="val" id="v-model">—</div></div></div>
+    <div class="stat"><span id="d-vram" class="dot"></span><div><div class="lbl">VRAM</div><div class="val" id="v-vram">—</div></div></div>
     <div class="stat"><span class="dot up"></span><div><div class="lbl">Enrolled voices</div><div class="val" id="v-enrolled">—</div></div></div>
   </div>
 
@@ -270,6 +271,27 @@ function renderHealth(h){
   $("v-lm").textContent = h.lm_studio ? "reachable" : "down";
   $("d-ko").className = "dot " + (h.kokoro ? "up":"down");
   $("v-ko").textContent = h.kokoro ? "reachable" : "down";
+
+  // Model residency: "not-loaded" is NORMAL before the first turn (LM Studio JIT-loads it), so it's
+  // amber, not red — only meaningful next to VRAM. Amber + a full card = the load will fail.
+  const st = h.model_state || "unknown";
+  $("d-model").className = "dot " + (st==="loaded" ? "up" : "");
+  if(st==="loaded") $("d-model").style.background = "";
+
+  // VRAM: this box usually has Invoke or a forgotten model on the GPU. Echo's model loads on the
+  // first request, so a full card fails at the first thing you say. Show it before that happens.
+  if(h.vram_total_mb){
+    const usedG = h.vram_used_mb/1024, totG = h.vram_total_mb/1024, frac = h.vram_used_mb/h.vram_total_mb;
+    $("v-vram").textContent = `${usedG.toFixed(1)} / ${totG.toFixed(1)} GB`;
+    // Thresholds are advisory only — what's "too full" depends on the model being loaded.
+    const dot = $("d-vram");
+    dot.className = "dot" + (frac >= 0.85 ? " down" : frac >= 0.55 ? "" : " up");
+    dot.style.background = (frac >= 0.55 && frac < 0.85) ? "var(--warn)" : "";
+    dot.title = frac >= 0.55 ? "Something else may be holding VRAM (Invoke? a loaded model). `lms ps` lists it." : "";
+  } else {
+    $("v-vram").textContent = "n/a";
+    $("d-vram").className = "dot";
+  }
 }
 
 function renderScores(list){

@@ -12,7 +12,11 @@ import json
 import logging
 from pathlib import Path
 from collections.abc import Generator
+
+import httpx
 from openai import OpenAI, APIConnectionError, APITimeoutError
+
+import gpu
 
 logger = logging.getLogger(__name__)
 
@@ -153,10 +157,15 @@ class LLMClient:
         except APIConnectionError:
             # Nothing works without LM Studio, and the dropdown would be empty too — this one
             # stays a hard, actionable stop. start-echo.bat pre-flights it as well.
+            # Name VRAM too: LM Studio drops the connection when a load OOMs, which lands here
+            # looking exactly like "the server is down" (gpu.py explains why).
             print(
-                "\n ERROR: LM Studio not detected at localhost:1234.\n"
-                "  Please start LM Studio and load a model.\n"
+                "\n ERROR: Can't reach LM Studio at 127.0.0.1:1234.\n"
+                "  Either it isn't running, or it's up but couldn't serve a model.\n"
             )
+            hint = gpu.vram_hint()
+            if hint:
+                print(f"  {hint}\n")
             sys.exit(1)
 
         pin = pinned or os.environ.get("ECHO_MODEL")
@@ -196,6 +205,29 @@ class LLMClient:
         except Exception as e:
             logger.error(f"could not list models: {e}")
             return []
+
+    def model_state(self) -> str:
+        """Is the ACTIVE model actually resident in VRAM? 'loaded' | 'not-loaded' | 'unknown'.
+
+        The OpenAI-compatible /v1/models lists every model regardless of whether it's loaded, so it
+        can't answer this — LM Studio's native /api/v0/models carries a per-model `state`. That
+        distinction is the whole point: "not-loaded" plus a full card is the VRAM problem Michael
+        hits when Invoke (or a forgotten model) owns the GPU. Fail-soft: 'unknown' on any error.
+
+        Not an error by itself — Echo's model is normally 'not-loaded' until the first request
+        JIT-loads it. Read it alongside gpu.vram_usage().
+        """
+        if not self._model:
+            return "unknown"
+        try:
+            resp = httpx.get("http://127.0.0.1:1234/api/v0/models", timeout=2.0)
+            resp.raise_for_status()
+            for entry in resp.json().get("data", []):
+                if entry.get("id") == self._model:
+                    return entry.get("state") or "unknown"
+        except (httpx.HTTPError, ValueError, KeyError):
+            pass
+        return "unknown"
 
 
 

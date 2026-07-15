@@ -30,7 +30,7 @@ _FAKE_VOICES = ["af_heart", "bf_emma", "am_michael"]
 
 
 def _mk(speaker_active=True, registry=True, vad_available=True, list_models=None,
-        list_voices=None):
+        list_voices=None, model_state=None):
     session = Session(model="m", stt_backend="b", tts_backend="t", user_name="Michael")
     sm = StateMachine()
     # IMPORTANT: give the registry a TEMP path so save() (via /api/threshold) never touches
@@ -49,6 +49,7 @@ def _mk(speaker_active=True, registry=True, vad_available=True, list_models=None
         vad_available=vad_available,
         list_models=list_models if list_models is not None else (lambda: list(_FAKE_MODELS)),
         list_voices=list_voices if list_voices is not None else (lambda: list(_FAKE_VOICES)),
+        model_state=model_state if model_state is not None else (lambda: "loaded"),
         voice_name="af_heart",
     )
     return control, session, sm, reg, events
@@ -234,6 +235,30 @@ def run() -> None:
     finally:
         ctrlmod.httpx.get = real_get
     print("  [PASS] health(): reachable→up, connection error→down (cached, no hammering)")
+
+    # 9b. health() carries VRAM + model residency (Stage 8.3). This box usually has Invoke or a
+    # forgotten model on the GPU; Echo's model JIT-loads on the first request, so a full card fails
+    # at the first thing Michael says. The dashboard must show it BEFORE that.
+    real_get, real_vram = ctrlmod.httpx.get, ctrlmod.gpu.vram_usage
+    try:
+        ctrlmod.httpx.get = lambda url, timeout=None: object()
+        ctrlmod.gpu.vram_usage = lambda: (14000, 16303)
+        control._health_ts = 0.0
+        h = control.health()
+        assert h["vram_used_mb"] == 14000 and h["vram_total_mb"] == 16303
+        assert h["model_state"] == "loaded"
+        # A GPU that can't be read must degrade to n/a, never crash the health route.
+        ctrlmod.gpu.vram_usage = lambda: None
+        control._health_ts = 0.0
+        h = control.health()
+        assert h["vram_used_mb"] is None and h["vram_total_mb"] is None
+        # No model_state probe wired (or it fails) → "unknown", not a lie.
+        c5, _, _, _, _ = _mk(model_state=lambda: "not-loaded")
+        c5._health_ts = 0.0
+        assert c5.health()["model_state"] == "not-loaded"
+    finally:
+        ctrlmod.httpx.get, ctrlmod.gpu.vram_usage = real_get, real_vram
+    print("  [PASS] health() reports VRAM + model residency; unreadable GPU → n/a, not a crash")
 
     # 10. recent_scores returns a list (parses the JSONL log defensively).
     assert isinstance(control.recent_scores(5), list)

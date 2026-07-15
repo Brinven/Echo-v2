@@ -820,3 +820,35 @@ and `ib.set_model` (gate) and preserves history.
   muted must work — otherwise the preview would queue and never play.
 - Sample measures ~4.4–5.0s across voices; the UI button re-enables at 6s so it can't unlock
   mid-sentence.
+
+---
+
+## ⚠ Stage 8.3 (2026-07-15) — VRAM contention is the #1 local-model failure here
+
+**This machine almost always has something else on the GPU** — Invoke generating images, or a model
+Michael forgot he left loaded in LM Studio (his words, 2026-07-15). 16GB card. **When anything
+involving a local model fails, suspect VRAM before the code.**
+
+Why it hides so well:
+- Echo's 12B is **NOT resident at launch** — LM Studio JIT-loads it on the FIRST request. So a
+  shortage bites at the first thing Michael says, not at startup, and looks like a pipeline bug.
+- LM Studio **drops the connection** when a load OOMs → `APIConnectionError`, identical to "the
+  server is down". Echo used to print *"LM Studio not detected — please start LM Studio"*, sending
+  him to check a server that was running fine. That message is now fixed.
+- **`/v1/models` lists every model regardless of load state**, so it never hints at the problem.
+
+What's built:
+- **`gpu.py`** — `vram_usage()` → `(used_mb, total_mb)` and `vram_hint()` → one line with REAL
+  numbers. nvidia-smi via `subprocess` (Windows-native, **no new dep** — same approach as
+  `location.py`), 2s cap, fail-soft (`None`/`""`, callers just lose the hint). `vram_hint`
+  deliberately reports numbers rather than guessing a "too full" threshold: what counts as tight
+  depends on the model being loaded, and a wrong guess is worse than none.
+- **`llm.model_state()`** → `loaded` / `not-loaded` / `unknown` from LM Studio's **native**
+  `/api/v0/models` (the ONLY endpoint carrying per-model `state`; `/v1/models` can't answer this).
+  **`not-loaded` is NOT an error** — it's normal before the first turn. It only means trouble
+  *next to a full card*.
+- **Dashboard**: Model-residency dot + a **VRAM tile** (used/total, amber ≥55%, red ≥85% — advisory
+  only). Health is cached ~5s, so the nvidia-smi call is not hot.
+- **`main._print_vram_hint()`** after any LLM timeout/error, so the cryptic failure names its suspect.
+- Diagnosis by hand: `lms ps` (what's resident), `nvidia-smi` (idle desktop baseline ≈3.0/16.3 GB),
+  or set LM Studio's **Max Loaded Models = 1**. Cross-project gotcha — also in Hindsight `axly-infra`.
