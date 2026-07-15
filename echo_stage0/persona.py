@@ -196,6 +196,46 @@ LOCATION_CONTEXTS = {
 }
 
 
+# ── Speaker context (Stage 6 Part 1 — Michael approves, persona content) ──
+#
+# Voice fingerprinting (speaker_id.py) resolves WHO is talking, so Echo's already-specced
+# social rules (Part 2 §2e — Michael / known people / unknown people, previously gated on
+# vision) light up pre-camera. Injected every turn, right after the location context.
+#
+# DELIBERATELY CONSERVATIVE for Part 1: the "known" block is just warmth + greet-by-name;
+# the "unknown" block is courteous-but-guarded (don't hand a stranger Michael's private
+# business). The nuanced loyalty/secrecy *register* — the comedy of refusing to keep a
+# guest's secret from Michael, and reading when NOT to play that for laughs — is the
+# deliberately deferred later Part, NOT encoded here.
+
+SPEAKER_KNOWN = (
+    "You are speaking with {name}, someone Michael knows and has introduced to you. Be "
+    "warm and natural — you may greet {name} by name. You are still Michael's companion "
+    "first; {name} is a guest in that space."
+)
+
+SPEAKER_UNKNOWN = (
+    "You are speaking with someone you do not recognize — not Michael. Be courteous but a "
+    "little guarded: you are Michael's companion, and you do not volunteer details about "
+    "Michael, his life, or his world to someone you don't know."
+)
+
+
+def speaker_context(speaker: str, user_name: str = "Michael") -> str:
+    """Resolve the per-turn speaker block ('' for Michael/unset).
+
+    speaker is speaker_id's resolved label: an enrolled name, the literal "unknown", or
+    Michael himself (or "" when the feature is off). Michael → "" (the persona is already
+    Michael-centric). "unknown" → the guarded block. Any other name → the by-name known block.
+    """
+    s = (speaker or "").strip()
+    if not s or s.lower() == (user_name or "Michael").strip().lower():
+        return ""
+    if s.lower() == "unknown":
+        return SPEAKER_UNKNOWN
+    return SPEAKER_KNOWN.format(name=s)
+
+
 # Token budget for the assembled system prompt (PRD §4). A guide, not a hard cap —
 # only ever enforced by trimming the retrieved-memory block, never persona/core/policy.
 TOKEN_BUDGET = 1200
@@ -235,17 +275,20 @@ def build_system_prompt(
     search_block: str = "",
     mood_opener: str = "",
     location: str = "",
+    speaker: str = "",
     correction: str = "",
 ) -> str:
     """Assemble the full per-turn system prompt.
 
     Order (PRD §4, plus the calibration examples with the persona, the mood opener +
-    location context after the persona, the web-search block after retrieved memory, and
-    the self-check correction after the anchor — Stage 5 Part 3 §7 / Part 4 §4-5 / Part 5 §3):
+    location context after the persona, the speaker context after location, the web-search
+    block after retrieved memory, and the self-check correction after the anchor — Stage 5
+    Part 3 §7 / Part 4 §4-5 / Part 5 §3 / Stage 6 Part 1 §):
         PERSONA  →  CALIBRATION EXAMPLES (every turn)  →  MOOD OPENER (opening only)
-                 →  LOCATION CONTEXT (every turn)  →  CORE/POLICY slab
-                 →  RETRIEVED MEMORY (if any)  →  WEB SEARCH (this turn only)
-                 →  ANTI-DRIFT ANCHOR  →  SELF-CHECK CORRECTION (one turn, on demand)
+                 →  LOCATION CONTEXT (every turn)  →  SPEAKER CONTEXT (every turn)
+                 →  CORE/POLICY slab  →  RETRIEVED MEMORY (if any)
+                 →  WEB SEARCH (this turn only)  →  ANTI-DRIFT ANCHOR
+                 →  SELF-CHECK CORRECTION (one turn, on demand)
 
     Args:
         exchange_count: 1-based count of the exchange this prompt is being built for.
@@ -262,6 +305,9 @@ def build_system_prompt(
             ONLY on the first exchange of a session; empty otherwise.
         location: "home" / "jeep" / "unknown" (location.resolve_location()). Looked up
             in LOCATION_CONTEXTS; "unknown"/unrecognized → no block. Never trimmed.
+        speaker: the resolved speaker label (speaker_id) — an enrolled name, "unknown",
+            or Michael/"" when the feature is off. Resolved via speaker_context(); Michael
+            → no block, "unknown" → guarded block, a name → the by-name known block. Never trimmed.
         correction: an on-demand self-check nudge (persona_check.py) to steer the NEXT
             reply back into character. Pass session.consume_persona_correction() — it is
             used for exactly one turn, then cleared (decays; not sticky). Never trimmed.
@@ -272,6 +318,7 @@ def build_system_prompt(
     """
     persona = build_persona_block(snark_level)
     location_block = LOCATION_CONTEXTS.get(location, "")
+    speaker_block = speaker_context(speaker)
     correction_block = _correction_block(correction)
 
     # The anchor is decided on the value THIS turn carries: first real exchange is 1
@@ -287,11 +334,11 @@ def build_system_prompt(
     # load-bearing for this exact turn (Echo answers from it), so it's fixed too. The
     # calibration examples sit with the persona (they illustrate it), and the self-check
     # correction is a one-turn steer — both are never trimmed.
-    fixed = (persona, CALIBRATION_EXAMPLES, mood_opener, location_block,
+    fixed = (persona, CALIBRATION_EXAMPLES, mood_opener, location_block, speaker_block,
              core_block, search_block, anchor, correction_block)
     trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
     return _join_blocks(
-        persona, CALIBRATION_EXAMPLES, mood_opener, location_block,
+        persona, CALIBRATION_EXAMPLES, mood_opener, location_block, speaker_block,
         core_block, trimmed_memory, search_block, anchor, correction_block
     )
 

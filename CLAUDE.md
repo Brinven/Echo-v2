@@ -1,4 +1,4 @@
-# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 5 Part 4 gates closed, 2026-07-15)
+# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 6 Part 1 Speaker Awareness built, 2026-07-15)
 
 This file exists to give Claude Code the decisions already made about the Echo
 project so that code written does not conflict with established architecture.
@@ -11,8 +11,10 @@ Do not override these decisions without explicit user instruction.
 > and tested (offline + live). The persona-model pick remains Gemma 4 12B QAT Hauhaucs;
 > the harness exists to re-audition smaller models against it. The build-stage table below
 > (Stage 0) is **historical build-order context**, not current status — the ⚠ sections
-> further down are the live architecture. Next track: Stage 6 Speaker Awareness (backlog;
-> see `tasks/todo.md`).
+> further down are the live architecture. **Stage 6 Part 1 (Speaker Awareness) is now BUILT
+> and offline-verified** — voice fingerprinting (SpeechBrain ECAPA) so Echo knows who's talking;
+> see the ⚠ section at the end. Two things remain Michael's: the live enrollment pass (which
+> includes the one-time SpeechBrain/torchaudio install) and sign-off on the speaker persona strings.
 >
 > **Both Part-4 approval gates CLOSED (2026-07-15):** (1) `CALIBRATION_EXAMPLES` wording —
 > Michael signed off to KEEP the 3 examples as-is (the parroting was the marginal e4b, not the
@@ -595,3 +597,66 @@ in `persona.py`; the probe and harness follow automatically, the tests will flag
   `hauhaucs/gemma4-12b-qat-uncensored-hauhaucs-balanced@q4_k_m` (baseline) + `gemma-4-e4b-it-qat`
   (plain-QAT control) + `gemma-4-e4b-uncensored-hauhaucs-aggressive` + `gemma-4-e2b-uncensored-hauhaucs-aggressive`.
   A VRAM-fit ladder for the "run alongside vision/STT/TTS in 16GB" goal.
+
+---
+
+## ⚠ Speaker Awareness (Stage 6 Part 1, 2026-07-15 — voice-ID + attribution mechanics)
+
+Echo knows **who** is talking — Michael, a known guest, or someone she doesn't recognize —
+by fingerprinting each utterance's voice, *before* any camera exists. This is the mechanics
+layer only (PoC plan: `~/.claude/plans/lexical-baking-hippo.md`). The nuanced loyalty/secrecy
+**register** policy (the comedy of not keeping a guest's secret from Michael, and reading when
+NOT to play that for laughs) is a **deliberately deferred later Part** — none of this depends on it.
+
+- **`speaker_id.py`** — provider-abstracted like `search.py`: `SpeakerEmbedder` ABC →
+  `ECAPAEmbedder` (SpeechBrain `spkrec-ecapa-voxceleb`, **192-dim, CPU-only** — VRAM stays with
+  the 12B, same principle as the MiniLM embedder). `build_embedder()` returns **None** on any
+  import/load failure (mirrors `build_provider`) → the pipeline assumes Michael (pre-Stage-6
+  behavior). `SpeakerRegistry` owns `echo_speakers.json` (config + voiceprints); `identify(emb)`
+  is pure cosine on L2-normalized vectors (a dot product), skips prints tagged with a different
+  model. **Never raises into the voice loop.**
+- **Model = SpeechBrain ECAPA** (not Resemblyzer): the noise-robust *endgame* model (good in the
+  Jeep too), actively maintained, reuses the existing `transformers`/`torch`/`hf_hub` deps with
+  **no C-extension** (Resemblyzer would have re-introduced the `webrtcvad` Windows build pain),
+  and picking it now avoids re-enrolling everyone later. One-time keyless ~89 MB HF download, then
+  offline. **NEW DEP: `speechbrain` (pulls `torchaudio`)** — torchaudio MUST be the CPU wheel
+  matching the pinned CPU torch; do NOT let pip pull CUDA torch or bump torch (ref
+  `tasks/lessons.md` 2026-07-13, the venv-clobber). See the `requirements.txt` comment for the
+  exact install order.
+- **Config `echo_speakers.json`** — fail-soft loader like `echo_location.json`; **GITIGNORED**
+  (biometric voiceprints), `echo_speakers.example.json` is the committed template. Starts
+  `enabled:false` so an ordinary launch never triggers the model download; the embedder is built
+  ONLY when enabled AND ≥1 profile exists. `match_threshold` (default 0.30) is **empirical** —
+  tune from the logged `speaker_score` values (like `retrieval.MIN_SCORE`).
+- **Enrollment — both paths.** `enroll.py` CLI (`python enroll.py Michael [--seconds N] [--samples K]`,
+  `--list`/`--rm`; records via `audio.AudioRecorder`, averages samples, auto-flips `enabled:true`
+  on the first profile). In-conversation: **"Echo, this is Jon"** (`session.is_enroll_command`,
+  short-utterance + stopword guarded) arms `session.enrolling`; the NEXT utterance's audio becomes
+  the print; "Echo, cancel" aborts. Both handled as early guards in `run_streaming_pipeline`
+  (not gated, no exchange-counter advance) like max-snark/location.
+- **`persona.py`** — `SPEAKER_KNOWN`/`SPEAKER_UNKNOWN` + `speaker_context(speaker)` (Michael/""
+  → no block, "unknown" → guarded, a name → warm by-name). Lights up Part 2 §2e's known/unknown
+  rules pre-vision. `build_system_prompt` gained a `speaker` arg, injected **every turn after
+  location, before core; never trimmed** (added to the `fixed` tuple). **Persona content — Michael's
+  to approve (open gate).**
+- **Attribution guardrail (the conservative Part-1 choice):** `session.current_speaker` (default
+  Michael) is resolved each real turn; the turn label uses it, and **`ib.write_memory` is skipped
+  unless `session.current_speaker_is_michael`** — a guest's/unknown's words are NEVER attributed
+  to Michael or stored. So `ib_lite/significance.py` stays Michael-only **by construction and is
+  untouched this Part**; `fact_memory` has no speaker column yet. Facts *about* a guest told *by
+  Michael* ("Jon loves hiking") still save (it's Michael's turn). Guest-memory attribution +
+  speaker-aware retrieval = a later Part.
+- **Unknown fails to guarded/neutral, never silently to Michael for memory** (the Part-5 "unknown
+  → neutral, never jeep" principle). If voice-ID is enabled but Michael isn't enrolled, his turns
+  read as "unknown" and aren't saved — the startup line WARNS about this; **enroll Michael first.**
+- **New JSONL fields:** `speaker`, `speaker_score`, `speaker_known` (passed straight into
+  `logger.log_run(**kwargs)` — no `logger.py` change needed). Inline `[speaker: X (score)]` print
+  per turn; startup line shows enrolled count / active state.
+- **Tests:** `test_speaker_id.py` — fully offline/model-free (inject fake embedding vectors):
+  identify math + threshold + model/shape-skip, registry round-trip, enroll-command parsing,
+  `speaker_context` + prompt order + never-trim, session flags + the guardrail decision. All green;
+  `py_compile` clean; `main.py`/`enroll.py` import clean; `build_embedder` verified to degrade to
+  None without SpeechBrain.
+- **Michael-run (not yet done):** install SpeechBrain into `.venv` (torchaudio=CPU wheel),
+  `python enroll.py Michael` + a guest, live session to tune `match_threshold` and confirm the
+  guardrail (guest turn writes no fact; Michael's still does), and approve the two speaker strings.

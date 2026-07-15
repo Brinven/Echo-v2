@@ -39,7 +39,7 @@ from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
 from session import (
     Session, is_signoff, is_forget, is_max_snark, is_stay_offline, is_go_online,
-    is_location_override, load_config, save_config,
+    is_location_override, is_enroll_command, is_enroll_cancel, load_config, save_config,
 )
 from summarizer import generate_summary
 from ib_lite import IbLite
@@ -49,6 +49,7 @@ from daily_state import get_daily_snark_level
 from search import build_provider, load_search_config, format_search_block
 from search_decision import decide_search
 from location import resolve_location
+from speaker_id import SpeakerRegistry, build_embedder
 
 
 # ── Console UI ───────────────────────────────────────────────────────────
@@ -119,6 +120,8 @@ def run_streaming_pipeline(
     search_provider=None,
     search_config: dict | None = None,
     self_check: SelfCheckRunner | None = None,
+    speaker_embedder=None,
+    speaker_registry: SpeakerRegistry | None = None,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
@@ -145,6 +148,43 @@ def run_streaming_pipeline(
     if not transcript.strip():
         print("  [No speech detected]")
         return None
+
+    # ── In-conversation enrollment capture (Stage 6 Part 1) ──
+    # If a prior turn armed enrollment ("Echo, this is Jon"), THIS utterance's audio is the
+    # voiceprint sample. Not a real exchange — no counter advance, never gated to memory.
+    if session.enrolling and speaker_embedder is not None and speaker_registry is not None:
+        pending = session.enrolling
+        print_conversation("You", transcript)
+        session.add_user_turn(transcript, stt_latency)
+        if is_enroll_cancel(transcript):
+            session.enrolling = None
+            reply = "Alright, cancelled — no new voice saved."
+        elif len(audio) < SAMPLE_RATE * 2.0:
+            # Too little audio for a reliable print — keep enrolling armed and re-prompt.
+            reply = f"That was too short to learn your voice, {pending}. Give me a full sentence when you're ready."
+        else:
+            try:
+                emb = speaker_embedder.embed(audio)
+                speaker_registry.enroll(pending, emb)
+                speaker_registry.config["enabled"] = True
+                speaker_registry.save()
+                session.enrolling = None
+                reply = f"Got it — I'll know your voice now, {pending}."
+            except Exception as e:
+                print(f"  [enroll error: {e}]")
+                session.enrolling = None
+                reply = "Something went wrong saving that voice. We can try again another time."
+        print_conversation("Echo", reply)
+        audio_q.start()
+        try:
+            tts_audio, tts_sr = tts.synthesize(reply)
+            audio_q.enqueue(tts_audio, tts_sr)
+            sm.transition(State.SPEAKING)
+        except Exception as e:
+            print(f"  [TTS error on enroll: {e}]")
+        audio_q.finish()
+        session.add_echo_turn(reply, 0.0)
+        return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
 
     # ── Sign-off check ──
     if is_signoff(transcript):
@@ -239,6 +279,46 @@ def run_streaming_pipeline(
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
 
+    # ── Voice enrollment start: "Echo, this is Jon" ──
+    # Arms enrollment; the NEXT utterance's audio becomes the voiceprint. Not a real
+    # exchange — no counter advance, never gated. Only when speaker awareness is active.
+    enroll_name = is_enroll_command(transcript)
+    if enroll_name and speaker_embedder is not None and speaker_registry is not None:
+        print_conversation("You", transcript)
+        session.add_user_turn(transcript, stt_latency)
+        session.enrolling = enroll_name
+        reply = f"Say a few words so I can learn your voice, {enroll_name} — a full sentence is plenty."
+        print_conversation("Echo", reply)
+        audio_q.start()
+        try:
+            tts_audio, tts_sr = tts.synthesize(reply)
+            audio_q.enqueue(tts_audio, tts_sr)
+            sm.transition(State.SPEAKING)
+        except Exception as e:
+            print(f"  [TTS error on enroll-start: {e}]")
+        audio_q.finish()
+        session.add_echo_turn(reply, 0.0)
+        return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
+
+    # ── Speaker identification (Stage 6 Part 1) ──
+    # Fingerprint this utterance and resolve who is talking. Feature off (embedder None) or no
+    # enrolled roster → assume Michael (pre-Stage-6 behavior). No match → "unknown" (guarded,
+    # and the memory guardrail below withholds the write — never misattributed to Michael).
+    speaker_score = 0.0
+    speaker_known = True
+    if speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 0:
+        try:
+            _emb = speaker_embedder.embed(audio)
+            _name, speaker_score = speaker_registry.identify(_emb)
+        except Exception as e:
+            print(f"  [speaker-id error: {e}]")
+            _name = None
+        session.current_speaker = _name or "unknown"
+        speaker_known = _name is not None
+        print(f"  [speaker: {session.current_speaker} ({speaker_score:.2f})]")
+    else:
+        session.current_speaker = session.user_name or "Michael"
+
     print_conversation("You", transcript)
     session.add_user_turn(transcript, stt_latency)
 
@@ -314,7 +394,7 @@ def run_streaming_pipeline(
     system_prompt = build_system_prompt(
         exchange_n, snark_level, core_block, memory_block,
         search_block=search_block, mood_opener=opener, location=session.location,
-        correction=correction,
+        speaker=session.current_speaker, correction=correction,
     )
     if correction:
         print("  [self-check: steering back to character this turn]")
@@ -358,9 +438,15 @@ def run_streaming_pipeline(
         session.add_echo_turn(full_response, (t_first_audio - t0) if t_first_audio else 0.0)
 
         # ── Memory write (off the hot path): significance gate, background thread ──
-        if ib and ib.available:
-            turn_text = f"{session.user_name or 'Michael'}: {transcript}\nEcho: {full_response}"
+        # Guardrail (Stage 6 Part 1): only Michael's turns write to memory. A guest's or an
+        # unknown speaker's words are NOT attributed to Michael and are not stored — the gate
+        # stays Michael-only by construction. (Guest-memory attribution is a later Part.)
+        # Facts ABOUT a guest told BY Michael ("Jon loves hiking") still save — that's Michael's turn.
+        if ib and ib.available and session.current_speaker_is_michael:
+            turn_text = f"{session.current_speaker}: {transcript}\nEcho: {full_response}"
             ib.write_memory(session.session_id, turn_text)
+        elif ib and ib.available:
+            print(f"  [memory: skipped — speaker is {session.current_speaker}, not Michael]")
 
         # ── Persona self-check (off the hot path): every N exchanges, judge Echo's recent
         # replies on a background thread and queue a one-turn correction if she drifted.
@@ -403,6 +489,9 @@ def run_streaming_pipeline(
         memory_retrieval_ms=round(memory_retrieval_ms, 1),
         memories_injected=memories_injected,
         location=session.location,
+        speaker=session.current_speaker,
+        speaker_score=round(speaker_score, 4),
+        speaker_known=speaker_known,
         # Search turns log passed_budget=None so they're excluded from the pass-rate.
         passed_budget=(None if search_meta["web_search_triggered"]
                        else (first_audio < 1.5 if t_first_audio else False)),
@@ -517,6 +606,25 @@ def main():
     # Persona self-check probe (Stage 5 Part 4): a background alignment check every N
     # exchanges that catches drift and queues a one-turn correction. Off the hot path.
     self_check = SelfCheckRunner()
+
+    # Speaker awareness (Stage 6 Part 1): voice fingerprinting so Echo knows who is talking.
+    # Fail-soft — the embedder is built only when enabled AND at least one voiceprint exists
+    # (so an ordinary launch never triggers the one-time ECAPA download); build_embedder
+    # returns None on any failure, and the pipeline then assumes Michael (pre-Stage-6 behavior).
+    speaker_registry = SpeakerRegistry()
+    speaker_embedder = None
+    if speaker_registry.enabled and speaker_registry.count > 0:
+        speaker_embedder = build_embedder(speaker_registry.config)
+    if speaker_embedder is not None:
+        owner = (user_name or "Michael").lower()
+        michael_enrolled = any(n.lower() == owner for n in speaker_registry.names)
+        print(f"  Speaker ID: on ({speaker_registry.count} enrolled: {', '.join(speaker_registry.names)})"
+              + ("" if michael_enrolled
+                 else "  [WARN: Michael not enrolled — his turns read as 'unknown' and won't be saved]"))
+    elif speaker_registry.enabled and speaker_registry.count == 0:
+        print("  Speaker ID: enabled, no voiceprints yet — assuming Michael (run: python enroll.py Michael)")
+    else:
+        print("  Speaker ID: off (echo_speakers.json)")
 
     logger = SessionLogger()
     history: list[dict] = []
@@ -778,6 +886,8 @@ def main():
                     search_provider=search_provider,
                     search_config=search_config,
                     self_check=self_check,
+                    speaker_embedder=speaker_embedder,
+                    speaker_registry=speaker_registry,
                 )
 
                 if result and result.get("signoff"):

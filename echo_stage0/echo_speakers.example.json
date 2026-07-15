@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to echo_speakers.json (gitignored — it holds biometric voiceprints). Enroll people with: python enroll.py <name>. The enroll tool auto-sets enabled=true once the first profile exists. Set enabled=false to turn speaker awareness off (the pipeline then assumes Michael, the pre-Stage-6 behavior). match_threshold is EMPIRICAL — watch the logged speaker_score values and tune it: raise it if guests get matched as Michael, lower it if Michael reads as 'unknown'. IMPORTANT: enroll Michael FIRST (python enroll.py Michael) or his turns won't be attributed and won't be saved to memory.",
+  "_profile_shape": "profiles: [ { name: 'Michael', model: 'ecapa', embedding: [192 floats], enrolled_at: '<iso8601>' }, ... ]  — written by enroll.py, not by hand.",
+  "enabled": true,
+  "match_threshold": 0.30,
+  "model": "ecapa",
+  "model_source": "speechbrain/spkrec-ecapa-voxceleb",
+  "savedir": "models/ecapa",
+  "enroll_seconds": 5,
+  "profiles": []
+}

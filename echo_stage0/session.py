@@ -84,6 +84,48 @@ def is_location_override(transcript: str) -> str | None:
     return None
 
 
+# In-conversation voice enrollment (Stage 6 Part 1): "Echo, this is Jon" starts capture;
+# the NEXT utterance's audio becomes Jon's voiceprint. Deliberately narrow — requires
+# "echo" + an introduction verb + a name token. A word/length guard (below) keeps it from
+# firing on ordinary sentences like "Echo, this is important because...".
+_ENROLL_PATTERNS = [
+    re.compile(r"\becho\b,?\s+this\s+is\s+([a-z][a-z'\-]{1,20})\b", re.IGNORECASE),
+    # Possessive form: keep the apostrophe OUT of the name class so "Jon's" captures "Jon".
+    re.compile(r"\becho\b,?\s+remember\s+([a-z][a-z\-]{1,20})'?s\s+voice\b", re.IGNORECASE),
+]
+# Tokens that match the name slot but are never a person being introduced.
+_ENROLL_STOPWORDS = {
+    "me", "here", "back", "home", "there", "him", "her", "them", "us", "it",
+    "that", "this", "important", "done", "everything", "all", "my", "our", "a", "the",
+}
+# Cancel an in-progress enrollment capture.
+_ENROLL_CANCEL_PATTERN = re.compile(r"\b(?:cancel|never\s*mind|stop|forget\s+it)\b", re.IGNORECASE)
+
+
+def is_enroll_command(transcript: str) -> str | None:
+    """Return the name to enroll if the transcript is an 'Echo, this is <name>' command.
+
+    Guarded against false positives: the utterance must be short (an introduction, not a
+    sentence that happens to contain 'this is'), and the captured token must not be a
+    common non-name word. Returns the name Title-Cased, or None.
+    """
+    if len((transcript or "").split()) > 8:
+        return None
+    for pat in _ENROLL_PATTERNS:
+        m = pat.search(transcript)
+        if m:
+            name = m.group(1).strip()
+            if name.lower() in _ENROLL_STOPWORDS:
+                return None
+            return name[:1].upper() + name[1:]
+    return None
+
+
+def is_enroll_cancel(transcript: str) -> bool:
+    """True if the transcript cancels an in-progress enrollment capture."""
+    return bool(_ENROLL_CANCEL_PATTERN.search(transcript))
+
+
 class Session:
     """Manages a single conversation session."""
 
@@ -117,6 +159,13 @@ class Session:
         # location: 'home'/'jeep'/'unknown', resolved once at session start (like snark)
         # from the local network fingerprint; the voice override can flip it mid-session.
         self.location = "unknown"
+        # current_speaker: who is talking THIS turn (speaker_id voice fingerprint). Defaults
+        # to Michael (the pre-Stage-6 assumption, preserved when speaker awareness is off);
+        # recomputed each real turn when active. "unknown" when a voice matches no profile.
+        self.current_speaker = user_name or "Michael"
+        # enrolling: a pending in-conversation enrollment. "Echo, this is Jon" sets the name;
+        # the NEXT utterance's audio is captured as Jon's voiceprint. None when not enrolling.
+        self.enrolling: str | None = None
         # persona_correction: an on-demand self-check nudge (persona_check.py) injected into
         # the NEXT turn's system prompt, then consumed (one-turn decay). Set on the probe's
         # background thread, read+cleared on the main thread. A plain string swap is atomic
@@ -161,6 +210,16 @@ class Session:
     def effective_snark(self) -> int:
         """Current snark level: locked to 10 in Maximum Snark Mode, else the daily roll."""
         return 10 if self.max_snark else self.daily_snark
+
+    @property
+    def current_speaker_is_michael(self) -> bool:
+        """True if the current speaker is Michael (the owner) — gates the memory write.
+
+        When speaker awareness is off, current_speaker stays Michael, so this is True and
+        memory behaves exactly as before Stage 6.
+        """
+        owner = (self._user_name or "Michael").strip().lower()
+        return (self.current_speaker or "").strip().lower() == owner
 
     def set_persona_correction(self, nudge: str) -> None:
         """Queue a self-check nudge for the next turn (called from the probe thread)."""

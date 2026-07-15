@@ -17,6 +17,12 @@ echo_daily_state.json
 # Home-network fingerprint (personal; per-machine). Commit echo_location.example.json instead.
 echo_location.json
 
+# Enrolled voiceprints (personal biometric data; per-machine). Commit echo_speakers.example.json instead.
+echo_speakers.json
+
+# ECAPA speaker model cache (downloaded once from HuggingFace; not source).
+models/
+
 # OpenMemory / Hindsight archives kept locally for reference; never committed.
 archived-openmemory-*/
 archived-hindsight-*/

@@ -1,6 +1,62 @@
 # Echo — tasks/todo.md
 
-## ▶ ACTIVE (2026-07-14) — Stage 5 Part 4: Persona Persistence (un-penciled)
+## ▶ ACTIVE (2026-07-15) — Stage 6 Part 1: Speaker Awareness (voice-ID + attribution)
+
+Michael greenlit Stage 6. Part 1 = the **mechanics only** (voice fingerprinting + who's-talking
+attribution); the loyalty/secrecy-**register** policy is a deliberately deferred later Part.
+Plan: `~/.claude/plans/lexical-baking-hippo.md`. Full architecture: CLAUDE.md ⚠ section.
+
+### Decisions locked (this session)
+- **Scope:** mechanics first; privacy-register policy is a later Part.
+- **Model:** **SpeechBrain ECAPA-TDNN** (192-dim, noise-robust endgame → no re-enrollment for the
+  Jeep), behind a swappable `SpeakerEmbedder` ABC. Chosen over Resemblyzer: no C-extension build,
+  reuses existing transformers/torch/hf deps, actively maintained. CPU-only (VRAM → 12B).
+- **Enrollment:** **both** — `enroll.py` CLI and in-conversation "Echo, this is Jon".
+- **Guardrail:** only Michael's turns write to memory → the gate stays Michael-only *by
+  construction*; `ib_lite/significance.py` untouched. Unknown → guarded, never misattributed.
+
+### Build checklist (milestones)
+- [x] **M1** `speaker_id.py` — `SpeakerEmbedder` ABC + `ECAPAEmbedder` (CPU, L2-norm) +
+      `SpeakerRegistry` (identify/enroll/remove/save) + `build_embedder` fail-soft + config loader.
+- [x] **M2** `echo_speakers.json` (gitignored, `enabled:false` seed) + `.example.json` + `.gitignore`
+      (voiceprints + `models/`); `requirements.txt` `speechbrain==1.1.0` with the torchaudio-CPU caveat.
+- [x] **M3** `enroll.py` CLI (record → embed → save; `--seconds`/`--samples`/`--list`/`--rm`;
+      auto-enables on first profile).
+- [x] **M4** `persona.py` — `SPEAKER_KNOWN`/`SPEAKER_UNKNOWN` + `speaker_context()` +
+      `build_system_prompt(speaker=…)` after location / before core, never trimmed.
+- [x] **M5** `session.py` — `current_speaker`, `enrolling`, `is_enroll_command`/`is_enroll_cancel`,
+      `current_speaker_is_michael` (the guardrail decision).
+- [x] **M6** `main.py` — startup embedder build (only when enabled + ≥1 profile), per-turn
+      identify + resolve, inline `[speaker: …]` line, startup status + Michael-not-enrolled warn.
+- [x] **M7** `main.py` — enrollment state machine (command turn arms → capture turn saves;
+      cancel / too-short re-prompt), both as non-gated early guards.
+- [x] **M8** `main.py` — attribution guardrail (label = current_speaker; skip `write_memory` when
+      ≠ Michael) + `speaker`/`speaker_score`/`speaker_known` JSONL fields.
+- [x] **M9** `test_speaker_id.py` — offline/model-free: identify math + threshold + model/shape
+      skip, registry round-trip, enroll-command parsing, `speaker_context` + prompt order +
+      never-trim, session flags + guardrail decision.
+
+### Verification — DONE (offline, run here)
+- ✅ `test_speaker_id.py` all green (10 checks). `test_persona_check.py` + `test_persona_matrix.py`
+  still green (the `build_system_prompt` `speaker` arg didn't regress callers — verified no
+  positional `correction` caller exists). `py_compile` clean on all 5 touched files. `main.py` /
+  `enroll.py` import clean. `build_embedder` verified to degrade to None (→ assume Michael) with
+  SpeechBrain absent.
+
+### Open — Michael's (not yet done)
+- [ ] **Live pass** (mic + model): `pip install torchaudio --index-url .../whl/cpu` then
+      `pip install speechbrain==1.1.0` into `.venv`; `python enroll.py Michael` + a guest (first run
+      pulls ~89 MB ECAPA); run a session — confirm Michael IDs, a known guest is greeted by name, an
+      unknown voice gets the guarded register, **tune `match_threshold`** from logged scores, and
+      verify a guest turn writes NO fact to `echo.db` while Michael's still does.
+- [ ] **Approval gate — speaker persona strings** (`SPEAKER_KNOWN`/`SPEAKER_UNKNOWN`, persona
+      content, like the Part-5 LOCATION_CONTEXTS gate). Approve/tweak, then it's closed out.
+- Commit: built + offline-verified code is ready to push to `main` (solo-repo workflow) —
+  pending Michael's go / whether to fold in the live-pass tweaks first.
+
+---
+
+## ✅ DONE (2026-07-15) — Stage 5 Part 4: Persona Persistence (un-penciled)
 
 Michael's call this session: **build the Part 4 deliverables** that were penciled-DONE
 but never built. PRD: `Echo_Stage5_Part4_PersonaPersistence_PRD.md`. This is a
@@ -209,6 +265,10 @@ tunable from logs. Reversible.
 ## 🔮 Backlog / Later (idea captured, not yet specced)
 
 ### Stage 6 (tentative) — Speaker Awareness ("who is talking to her")
+
+> **Part 1 (voice-ID + attribution mechanics) is BUILT — see the ACTIVE section at the top.**
+> The design notes below remain the reference for the LATER Parts (guest-memory attribution,
+> speaker-aware retrieval, and the loyalty/secrecy-register policy Michael wants to sit with).
 
 **Problem:** today Echo has zero speaker awareness — Whisper transcribes *what* is
 said, not *who*; she just assumes the config `user_name` ("Michael").
