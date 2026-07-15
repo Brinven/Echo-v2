@@ -613,20 +613,25 @@ def main():
     # Fail-soft — the embedder is built only when enabled AND at least one voiceprint exists
     # (so an ordinary launch never triggers the one-time ECAPA download); build_embedder
     # returns None on any failure, and the pipeline then assumes Michael (pre-Stage-6 behavior).
+    # Build the embedder whenever speaker-ID is ENABLED (not only when profiles exist) — enrollment
+    # (GUI button / "Echo, this is X") needs the model loaded before anyone is on file. Identification
+    # still requires >=1 profile (guarded in the pipeline). Default enabled=false keeps ordinary
+    # launches free of the model load; opting in downloads it once, then loads in a few seconds.
     speaker_registry = SpeakerRegistry()
-    speaker_embedder = None
-    if speaker_registry.enabled and speaker_registry.count > 0:
-        speaker_embedder = build_embedder(speaker_registry.config)
+    speaker_embedder = build_embedder(speaker_registry.config) if speaker_registry.enabled else None
     if speaker_embedder is not None:
         owner = (user_name or "Michael").lower()
         michael_enrolled = any(n.lower() == owner for n in speaker_registry.names)
-        print(f"  Speaker ID: on ({speaker_registry.count} enrolled: {', '.join(speaker_registry.names)})"
-              + ("" if michael_enrolled
-                 else "  [WARN: Michael not enrolled — his turns read as 'unknown' and won't be saved]"))
-    elif speaker_registry.enabled and speaker_registry.count == 0:
-        print("  Speaker ID: enabled, no voiceprints yet — assuming Michael (run: python enroll.py Michael)")
+        if speaker_registry.count == 0:
+            print("  Speaker ID: on — no voices enrolled yet (enroll via the dashboard, or: python enroll.py Michael)")
+        else:
+            print(f"  Speaker ID: on ({speaker_registry.count} enrolled: {', '.join(speaker_registry.names)})"
+                  + ("" if michael_enrolled
+                     else "  [WARN: Michael not enrolled — his turns read as 'unknown' and won't be saved]"))
+    elif speaker_registry.enabled:
+        print("  Speaker ID: enabled but the voice model couldn't load — assuming Michael (see logs)")
     else:
-        print("  Speaker ID: off (echo_speakers.json)")
+        print("  Speaker ID: off (echo_speakers.json — enable it to use voice-ID)")
 
     logger = SessionLogger()
     history: list[dict] = []
