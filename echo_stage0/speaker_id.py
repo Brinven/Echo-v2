@@ -116,6 +116,17 @@ class ECAPAEmbedder(SpeakerEmbedder):
         except ImportError:  # older/newer layout
             from speechbrain.inference import EncoderClassifier
 
+        # Windows blocks symlinks without admin / Developer Mode (WinError 1314), and
+        # SpeechBrain's default fetch strategy symlinks the model into savedir. Force a COPY
+        # so it works for a normal (non-admin) user. Version-guarded — older SpeechBrain that
+        # lacks LocalStrategy just uses its default.
+        fetch_kwargs = {}
+        try:
+            from speechbrain.utils.fetching import LocalStrategy
+            fetch_kwargs["local_strategy"] = LocalStrategy.COPY
+        except ImportError:
+            pass
+
         self._torch = torch
         save_path = Path(savedir)
         if not save_path.is_absolute():
@@ -125,6 +136,7 @@ class ECAPAEmbedder(SpeakerEmbedder):
             source=source,
             savedir=str(save_path),
             run_opts={"device": "cpu"},
+            **fetch_kwargs,
         )
 
     @property

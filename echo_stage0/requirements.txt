@@ -19,12 +19,14 @@ sqlite-vec==0.1.9
 sentence-transformers==5.4.1
 
 # Speaker awareness (Stage 6) — SpeechBrain ECAPA-TDNN voice fingerprinting, CPU-only.
-# NEW DEP: pulls torchaudio. The watch item is torchaudio — it MUST be the CPU wheel that
-# matches the already-installed CPU torch; do NOT let pip pull a CUDA build or bump torch
-# (ref tasks/lessons.md 2026-07-13, the venv-clobber). transformers/huggingface_hub already
-# come via sentence-transformers, so speechbrain shares them (no conflict, no C-extension).
-# First use downloads the ~89 MB spkrec-ecapa-voxceleb model once (keyless), then runs offline.
-# Install into echo_stage0/.venv, verifying torchaudio is the +cpu wheel:
-#     pip install torchaudio --index-url https://download.pytorch.org/whl/cpu
-#     pip install speechbrain==1.1.0
+# INSTALL (verified 2026-07-15 in this venv — torch 2.13.0+cpu, Python 3.11):
+#     echo_stage0\.venv\Scripts\python.exe -m pip install speechbrain==1.1.0
+# That's it. speechbrain brings a compatible torchaudio (2.11.0 from PyPI) that imports and
+# runs fine against torch 2.13.0 — do NOT pin torchaudio to the torch version (the CPU index
+# tops out at 2.11.0) and do NOT let anything upgrade/downgrade torch (ref tasks/lessons.md
+# 2026-07-13, the venv-clobber). transformers/huggingface_hub already come via
+# sentence-transformers, so speechbrain shares them (no conflict, no C-extension).
+# First use downloads the ~89 MB spkrec-ecapa-voxceleb model once (keyless) into models/ecapa,
+# then runs offline. On Windows the model is COPIED (not symlinked) into savedir — see
+# speaker_id.ECAPAEmbedder — so no admin/Developer Mode is needed.
 speechbrain==1.1.0
