@@ -1,4 +1,4 @@
-# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 5 Part 4 built, 2026-07-14)
+# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 5 Part 4 gates closed, 2026-07-15)
 
 This file exists to give Claude Code the decisions already made about the Echo
 project so that code written does not conflict with established architecture.
@@ -14,9 +14,11 @@ Do not override these decisions without explicit user instruction.
 > further down are the live architecture. Next track: Stage 6 Speaker Awareness (backlog;
 > see `tasks/todo.md`).
 >
-> **Two Part-4 approval gates still open (character content is Michael's):** (1) sign off on
-> the `CALIBRATION_EXAMPLES` wording in `persona.py`, and (2) edit `persona_matrix_models.json`
-> to the real model ids to audition. Nothing is committed until (1) is approved.
+> **Both Part-4 approval gates CLOSED (2026-07-15):** (1) `CALIBRATION_EXAMPLES` wording —
+> Michael signed off to KEEP the 3 examples as-is (the parroting was the marginal e4b, not the
+> 12B production model). (2) `persona_matrix_models.json` — Michael chose the Gemma small-ladder
+> (12B Hauhaucs baseline + e4b plain-QAT control + e4b Hauhaucs + e2b Hauhaucs), wired with exact
+> live LM Studio ids. Part 4 is fully closed out.
 
 ---
 
@@ -587,7 +589,9 @@ in `persona.py`; the probe and harness follow automatically, the tests will flag
   with, compare the Hold column + corrections count.** Live-validated on `gemma-4-e4b-it-qat`:
   it PASSes hard gates but drifts robotic under pressure ("That is what I process") and the
   probe caught it at exchange 5 — the Part 4 thesis in action.
-- **Open gates (character content, uncommitted until resolved):** (1) approve/rewrite the
-  `CALIBRATION_EXAMPLES` wording — the e4b parroted them 4× in one run; (2) edit
-  `persona_matrix_models.json` to the real ids to audition (the seeded `gemma-4-12b-it-qat` is
-  an *ambiguous* substring on Michael's box — matches `@q8_0`, `@q4_k_xl`, abliterated).
+- **Gates CLOSED (2026-07-15):** (1) `CALIBRATION_EXAMPLES` — **kept as-is** (the e4b parroting is
+  audition data, not a 12B production defect; the header already frames them as non-scripts). (2)
+  `persona_matrix_models.json` — **Gemma small-ladder** wired with exact live ids:
+  `hauhaucs/gemma4-12b-qat-uncensored-hauhaucs-balanced@q4_k_m` (baseline) + `gemma-4-e4b-it-qat`
+  (plain-QAT control) + `gemma-4-e4b-uncensored-hauhaucs-aggressive` + `gemma-4-e2b-uncensored-hauhaucs-aggressive`.
+  A VRAM-fit ladder for the "run alongside vision/STT/TTS in 16GB" goal.

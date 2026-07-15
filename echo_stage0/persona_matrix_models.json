@@ -12,8 +12,9 @@
     "Override at run time with:  python eval_persona_matrix.py --models id1,id2,id3"
   ],
   "models": [
-    {"model": "gemma-4-12b-it-qat", "params_b": 12, "label": "Gemma 4 12B QAT (baseline)"},
-    {"model": "gemma-4-e4b-it-qat", "params_b": 4, "label": "Gemma 4 e4B QAT"},
-    {"model": "gemma-4-4b-it-qat", "params_b": 4, "label": "Gemma 4 4B QAT"}
+    {"model": "hauhaucs/gemma4-12b-qat-uncensored-hauhaucs-balanced@q4_k_m", "params_b": 12, "label": "Gemma 4 12B QAT Hauhaucs (baseline/pick)"},
+    {"model": "gemma-4-e4b-it-qat", "params_b": 4, "label": "Gemma 4 e4B QAT (plain, control)"},
+    {"model": "gemma-4-e4b-uncensored-hauhaucs-aggressive", "params_b": 4, "label": "Gemma 4 e4B Hauhaucs"},
+    {"model": "gemma-4-e2b-uncensored-hauhaucs-aggressive", "params_b": 2, "label": "Gemma 4 e2B Hauhaucs (small extreme)"}
   ]
 }

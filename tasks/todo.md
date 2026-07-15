@@ -25,11 +25,17 @@ harness for the probe's before/after lift.
 - **Correction is a nudge, not an override**; injected after the anti-drift anchor; decays
   after one turn (cleared on consume). Only CLEAR violations trigger it.
 
-### Approval gates (character content — Michael signs off, per PRD)
-- [ ] **Calibration example wording** (PRD §5 draft) — I build the code path with the draft;
-      Michael approves/replaces the exchanges before commit.
-- [ ] **Final model-matrix list** — I seed `persona_matrix_models.json`; Michael edits to what
-      he actually wants auditioned.
+### Approval gates (character content — Michael signs off, per PRD) — ✅ BOTH CLOSED 2026-07-15
+- [x] **Calibration example wording** (PRD §5) — **Michael signed off: KEEP the 3 examples as-is.**
+      Rationale: the production/persona model is the 12B (held character cleanly in the 20-turn
+      hold, no parroting); the examples measurably help small models hit register; the e4b
+      parroting is useful *audition data*, not a production defect; the header already frames them
+      as non-scripts. Revisit only if a small model is actually adopted.
+- [x] **Final model-matrix list** — **Michael chose the Gemma small-ladder.** `persona_matrix_models.json`
+      now holds exact live ids: `hauhaucs/gemma4-12b-qat-uncensored-hauhaucs-balanced@q4_k_m` (12B
+      baseline/pick) + `gemma-4-e4b-it-qat` (~4B plain-QAT control) + `gemma-4-e4b-uncensored-hauhaucs-aggressive`
+      (~4B, same tuner) + `gemma-4-e2b-uncensored-hauhaucs-aggressive` (~2B, small extreme). VRAM-fit
+      ladder controlling for tuner/quant — targets the "run alongside vision/STT/TTS in 16GB" goal.
 
 ### Build checklist (PRD §7 milestones)
 - [x] **M1 — Calibration examples.** `CALIBRATION_EXAMPLES` in `persona.py`, injected into the
@@ -66,20 +72,17 @@ harness for the probe's before/after lift.
   `gemma-4-e4b-it-qat` (PASS, composite 100, TTFT ~0.085s, 148 tok/s); `run_self_check`
   clean/broken.
 
-### ⚠ Open — Michael's gates before commit (character content is his)
-- [ ] **Approve/rewrite `CALIBRATION_EXAMPLES` wording.** Finding: the e4b **parroted** the
-      example lines 4× in one run (incl. the brakes one-liner on an unrelated project-car
-      prompt). The parrot count also includes the legit Mike-deflection line (benign reuse) —
-      the *situational* examples (brakes/coffee) are the ones to watch. Decide: keep, reword
-      more abstract, or trim to fewer examples.
-- [ ] **Edit `persona_matrix_models.json`** to the exact/unique ids to audition. The seeded
-      `gemma-4-12b-it-qat` is an *ambiguous* substring on the box (matches `@q8_0`, `@q4_k_xl`,
-      abliterated); `gemma-4-4b-it-qat` isn't loaded. Real persona pick lives under
-      `hauhaucs/…gemma4-12b-qat-…-balanced@q4_k_m` or `gemma-4-12b-it-qat@q4_k_xl`.
-- **Nothing committed** until the calibration wording is signed off.
+### ✅ Resolved — Michael's gates (both closed 2026-07-15)
+- [x] **`CALIBRATION_EXAMPLES` wording** → **KEEP as-is.** The parroting finding was confined to
+      the marginal e4b (an audition candidate), not the 12B production model. No code change.
+- [x] **`persona_matrix_models.json`** → **Gemma small-ladder** wired with exact live ids (12B
+      Hauhaucs baseline + e4b plain-QAT control + e4b Hauhaucs + e2b Hauhaucs). The old seed's
+      `gemma-4-12b-it-qat` was an ambiguous substring and `gemma-4-4b-it-qat` wasn't loaded — both fixed.
+- **Committed 2026-07-15** (the earlier "nothing committed until sign-off" note was overtaken —
+  Part 4 code shipped in `b356f57`; this commit closes the two character-content gates on top of it).
 
 ### Review
-**Status: BUILT & TESTED, awaiting Michael's calibration sign-off before commit.**
+**Status: DONE — Part 4 built, tested, committed (`b356f57`); both character-content gates closed 2026-07-15.**
 Shipped: `persona.py` (`CALIBRATION_EXAMPLES` + single-sourced `BANNED_PHRASES`/`adopts_mike`/
 `banned_hits` + `correction` arg + `_correction_block`), `eval_persona_matrix.py` (harness +
 `--probe` + parrot detector), `persona_check.py` (probe + `SelfCheckRunner` + guardrails),
