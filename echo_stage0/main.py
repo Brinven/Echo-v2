@@ -137,6 +137,26 @@ def _recent_echo_replies(history: list[dict], k: int) -> list[str]:
     return echoes[-k:]
 
 
+def tag_utterance(transcript: str, speaker: str, multi_speaker: bool) -> str:
+    """Prefix an utterance with who said it, for the model's message stream.
+
+    The system prompt alone could not carry this. Voice-ID resolved Hillary correctly, but her
+    line still arrived as a bare `user` message after a run of Michael's, so the model read one
+    continuous Michael monologue and answered her "I have a headache" with "Then let's lean into
+    it, Michael." The tag puts the attribution ON the turn, where it also survives into history —
+    which is what lets Echo tell "she" from "you" a few turns later.
+
+    Bracket form, not "Hillary: ...", specifically because CALIBRATION_EXAMPLES are shaped
+    `Michael: … / Echo: …` — a colon-tagged user message reads as that script and invites the
+    model to complete with a spoken "Echo:" prefix. Off (returns the transcript untouched) unless
+    more than one voice is enrolled; persona.MULTI_SPEAKER_NOTE explains the convention whenever
+    it's on. See tasks/lessons.md 2026-07-15.
+    """
+    if not multi_speaker:
+        return transcript
+    return f"[{speaker or 'unknown'}] {transcript}"
+
+
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 def run_streaming_pipeline(
@@ -354,8 +374,14 @@ def run_streaming_pipeline(
         session.current_speaker = session.user_name or "Michael"
     session.last_speaker_score = speaker_score
 
-    print_conversation("You", transcript)
-    session.add_user_turn(transcript, stt_latency)
+    # Tag utterances with WHO said them once there's more than one voice on file. Resolved per
+    # turn, not at startup: enrollment can add a voice mid-session. A solo roster (or the feature
+    # off) leaves the message stream byte-identical to pre-Stage-6 — no regression on the path
+    # Michael actually uses 99% of the time.
+    multi_speaker = speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 1
+
+    print_conversation(session.current_speaker if multi_speaker else "You", transcript)
+    session.add_user_turn(transcript, stt_latency, speaker=session.current_speaker)
 
     # ── Web search (Stage 5 Part 3): a SEPARATE reasoning call decides whether this
     # turn needs the web and builds the query; results inject into the character pass.
@@ -439,7 +465,7 @@ def run_streaming_pipeline(
     system_prompt = build_system_prompt(
         exchange_n, snark_level, core_block, memory_block,
         search_block=search_block, mood_opener=opener, location=session.location,
-        speaker=session.current_speaker, correction=correction,
+        speaker=session.current_speaker, multi_speaker=multi_speaker, correction=correction,
     )
     if correction:
         print("  [self-check: steering back to character this turn]")
@@ -451,8 +477,12 @@ def run_streaming_pipeline(
     full_response = ""
     chunk_count = 0
 
+    # The model sees the tagged utterance; everything else (search queries, the memory gate,
+    # the session log) keeps the raw transcript.
+    user_msg = tag_utterance(transcript, session.current_speaker, multi_speaker)
+
     try:
-        for sentence in llm.stream_sentences(transcript, history, timing=llm_timing, system_prompt=system_prompt):
+        for sentence in llm.stream_sentences(user_msg, history, timing=llm_timing, system_prompt=system_prompt):
             full_response += sentence + " "
 
             try:
@@ -483,7 +513,9 @@ def run_streaming_pipeline(
     full_response = full_response.strip()
     if full_response:
         print_conversation("Echo", full_response)
-        history.append({"role": "user", "content": transcript})
+        # The TAGGED text goes into history, so a turn keeps its attribution for the rest of the
+        # conversation — that's what lets Echo track who "she" and "you" refer to later.
+        history.append({"role": "user", "content": user_msg})
         history.append({"role": "assistant", "content": full_response})
         session.add_echo_turn(full_response, (t_first_audio - t0) if t_first_audio else 0.0)
 

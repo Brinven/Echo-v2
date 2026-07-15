@@ -70,6 +70,19 @@ def run() -> None:
     assert st["state"] == "LISTENING" and st["enrolled"] == ["Michael"] and st["match_threshold"] == 0.30
     print("  [PASS] /api/state returns the full live snapshot")
 
+    # 1b. Each transcript turn carries the name recorded when it was SPOKEN, so the UI never has
+    # to fall back on the live current_speaker — doing that re-labelled the entire backlog to
+    # whoever talked last, and the readout quietly lied about who said what.
+    session.add_user_turn("morning", 0.1)
+    session.add_echo_turn("Morning, Michael.", 0.4)
+    session.current_speaker = "Hillary"
+    session.add_user_turn("I have a headache", 0.1, speaker="Hillary")
+    turns = client.get("/api/state").get_json()["transcript"]
+    assert [(t["speaker"], t["name"]) for t in turns] == [
+        ("user", "Michael"), ("echo", None), ("user", "Hillary"),
+    ], turns
+    print("  [PASS] /api/state transcript keeps per-turn speaker names (not the live speaker)")
+
     # 2. mute toggle flips control.muted + sets the event.
     assert control.muted is False
     r = client.post("/api/mute").get_json()

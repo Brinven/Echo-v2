@@ -202,22 +202,49 @@ LOCATION_CONTEXTS = {
 # social rules (Part 2 §2e — Michael / known people / unknown people, previously gated on
 # vision) light up pre-camera. Injected every turn, right after the location context.
 #
-# DELIBERATELY CONSERVATIVE for Part 1: the "known" block is just warmth + greet-by-name;
-# the "unknown" block is courteous-but-guarded (don't hand a stranger Michael's private
+# DELIBERATELY CONSERVATIVE for Part 1: the "known" block is warmth + greet-by-name; the
+# "unknown" block is courteous-but-guarded (don't hand a stranger Michael's private
 # business). The nuanced loyalty/secrecy *register* — the comedy of refusing to keep a
 # guest's secret from Michael, and reading when NOT to play that for laughs — is the
 # deliberately deferred later Part, NOT encoded here.
+#
+# These blocks MUST state who to address, not just how to feel about them (Michael approved
+# this wording 2026-07-15, after the first live multi-speaker session). The original wording
+# described a disposition ("be warm, you may greet {name} by name") and never said "reply to
+# {name}". That lost every time: voice-ID resolved Hillary correctly, but the same prompt also
+# carries the persona block, the calibration examples (all shaped `Michael: … Echo: …Michael`),
+# the location block ("You are with Michael at home") and Michael's Core/memory slabs — so one
+# paragraph of disposition sat under five blocks of Michael and the model answered Hillary's
+# "I have a headache" with "Then let's lean into it, Michael. Close your eyes for a few
+# minutes." The speaker LABELS on the turns themselves (main.py) are the other half of this
+# fix; neither half is sufficient alone. See tasks/lessons.md 2026-07-15.
 
 SPEAKER_KNOWN = (
-    "You are speaking with {name}, someone Michael knows and has introduced to you. Be "
-    "warm and natural — you may greet {name} by name. You are still Michael's companion "
-    "first; {name} is a guest in that space."
+    "The person speaking to you right now is {name}, not Michael — someone Michael knows and "
+    "has introduced to you. Reply to {name} directly and address {name} by name. Never call "
+    "{name} 'Michael', and never answer as though Michael said it — Michael may not even be in "
+    "the room. Be warm and natural. You are still Michael's companion first; {name} is a guest "
+    "in that space."
 )
 
 SPEAKER_UNKNOWN = (
-    "You are speaking with someone you do not recognize — not Michael. Be courteous but a "
-    "little guarded: you are Michael's companion, and you do not volunteer details about "
-    "Michael, his life, or his world to someone you don't know."
+    "The person speaking to you right now is not Michael, and you do not recognize their voice. "
+    "Reply to them, not to Michael, and do not address them as Michael or answer as though "
+    "Michael said it. Be courteous but a little guarded: you are Michael's companion, and you "
+    "do not volunteer details about Michael, his life, or his world to someone you don't know."
+)
+
+# The other half of the multi-speaker fix, and the mechanical one: main.py tags each utterance in
+# the MESSAGE STREAM with who said it ("[Hillary] I have a headache") once more than one voice is
+# enrolled, so past turns keep their attribution instead of reading as one long Michael monologue.
+# This note teaches the convention and — importantly — tells her not to echo the tags back, since
+# whatever she writes gets spoken aloud by Kokoro. Injected only while tagging is active; a solo
+# session's prompt is unchanged. Mechanical convention, not identity: kept OUT of the approved
+# speaker blocks above on purpose.
+MULTI_SPEAKER_NOTE = (
+    "More than one person is in this conversation. Each line you are given is tagged with who said "
+    "it, like [Michael] or [Hillary]. The tag is not part of what they said. Never write a tag "
+    "yourself and never read one aloud — just speak your reply to whoever just spoke."
 )
 
 
@@ -287,6 +314,7 @@ def build_system_prompt(
     mood_opener: str = "",
     location: str = "",
     speaker: str = "",
+    multi_speaker: bool = False,
     correction: str = "",
 ) -> str:
     """Assemble the full per-turn system prompt.
@@ -296,7 +324,8 @@ def build_system_prompt(
     block after retrieved memory, and the self-check correction after the anchor — Stage 5
     Part 3 §7 / Part 4 §4-5 / Part 5 §3 / Stage 6 Part 1 §):
         PERSONA  →  CALIBRATION EXAMPLES (every turn)  →  MOOD OPENER (opening only)
-                 →  LOCATION CONTEXT (every turn)  →  SPEAKER CONTEXT (every turn)
+                 →  LOCATION CONTEXT (every turn)  →  MULTI-SPEAKER NOTE (while tagging)
+                 →  SPEAKER CONTEXT (every turn)
                  →  CORE/POLICY slab  →  RETRIEVED MEMORY (if any)
                  →  WEB SEARCH (this turn only)  →  ANTI-DRIFT ANCHOR
                  →  SELF-CHECK CORRECTION (one turn, on demand)
@@ -319,6 +348,11 @@ def build_system_prompt(
         speaker: the resolved speaker label (speaker_id) — an enrolled name, "unknown",
             or Michael/"" when the feature is off. Resolved via speaker_context(); Michael
             → no block, "unknown" → guarded block, a name → the by-name known block. Never trimmed.
+        multi_speaker: True when main.py is tagging utterances with "[Name] ..." in the message
+            stream (i.e. more than one voice is enrolled). Injects MULTI_SPEAKER_NOTE so the model
+            reads the tags as metadata and doesn't speak them back. Never trimmed. Note this is
+            independent of `speaker`: Michael's own turns are tagged too in a multi-speaker
+            session, and those carry the note but no speaker block.
         correction: an on-demand self-check nudge (persona_check.py) to steer the NEXT
             reply back into character. Pass session.consume_persona_correction() — it is
             used for exactly one turn, then cleared (decays; not sticky). Never trimmed.
@@ -329,6 +363,7 @@ def build_system_prompt(
     """
     persona = build_persona_block(snark_level)
     location_block = LOCATION_CONTEXTS.get(location, "")
+    multi_block = MULTI_SPEAKER_NOTE if multi_speaker else ""
     speaker_block = speaker_context(speaker)
     correction_block = _correction_block(correction)
 
@@ -345,12 +380,12 @@ def build_system_prompt(
     # load-bearing for this exact turn (Echo answers from it), so it's fixed too. The
     # calibration examples sit with the persona (they illustrate it), and the self-check
     # correction is a one-turn steer — both are never trimmed.
-    fixed = (persona, CALIBRATION_EXAMPLES, mood_opener, location_block, speaker_block,
-             core_block, search_block, anchor, correction_block)
+    fixed = (persona, CALIBRATION_EXAMPLES, mood_opener, location_block, multi_block,
+             speaker_block, core_block, search_block, anchor, correction_block)
     trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
     return _join_blocks(
-        persona, CALIBRATION_EXAMPLES, mood_opener, location_block, speaker_block,
-        core_block, trimmed_memory, search_block, anchor, correction_block
+        persona, CALIBRATION_EXAMPLES, mood_opener, location_block, multi_block,
+        speaker_block, core_block, trimmed_memory, search_block, anchor, correction_block
     )
 
 

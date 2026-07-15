@@ -24,8 +24,13 @@ import numpy as np
 
 import speaker_id
 from speaker_id import SpeakerRegistry, load_speaker_config, _MODEL_TAG
-from persona import speaker_context, build_system_prompt, SPEAKER_KNOWN, SPEAKER_UNKNOWN
+from persona import (
+    speaker_context, build_system_prompt, SPEAKER_KNOWN, SPEAKER_UNKNOWN, MULTI_SPEAKER_NOTE,
+)
 from session import is_enroll_command, is_enroll_cancel, Session
+# main imports the audio stack (sounddevice/torch); tag_utterance is pure string work, but it
+# lives in main.py next to the pipeline that uses it, so the import cost rides along.
+from main import tag_utterance
 
 
 def _reg(profiles, **cfg) -> SpeakerRegistry:
@@ -115,17 +120,27 @@ def run() -> None:
 
     # 8. build_system_prompt: speaker block present, ordered after location / before core.
     p = build_system_prompt(1, 5, core_block="CORE-SLAB", location="home", speaker="Jon")
-    assert "speaking with Jon" in p
-    assert p.index("home") < p.index("speaking with Jon") < p.index("CORE-SLAB"), "prompt order wrong"
+    assert "right now is Jon" in p
+    assert p.index("home") < p.index("right now is Jon") < p.index("CORE-SLAB"), "prompt order wrong"
     # Michael → no known/unknown block injected.
     pm = build_system_prompt(1, 5, core_block="CORE-SLAB", speaker="Michael")
     assert "do not recognize" not in pm and "someone Michael knows" not in pm
     print("  [PASS] prompt: speaker block after location / before core; Michael → no block")
 
+    # 8b. The speaker blocks must INSTRUCT the addressing, not merely describe a disposition —
+    # the point of the 2026-07-15 rewrite. The old wording ("be warm, you may greet Jon by name")
+    # lost to the five Michael-shaped blocks around it: Echo answered Hillary's "I have a
+    # headache" with "Then let's lean into it, Michael."
+    known = speaker_context("Jon")
+    assert "not Michael" in known and "Reply to Jon directly" in known
+    assert "Never call Jon 'Michael'" in known
+    assert "not to Michael" in SPEAKER_UNKNOWN and "do not address them as Michael" in SPEAKER_UNKNOWN
+    print("  [PASS] speaker blocks instruct WHO to address, not just how to feel")
+
     # 9. never trimmed: the speaker block survives an over-budget memory block.
     big_mem = "You know the following:\n" + "\n".join(f"- fact {i}: " + ("x" * 200) for i in range(40))
     p2 = build_system_prompt(2, 5, core_block="core", memory_block=big_mem, speaker="Jon")
-    assert "speaking with Jon" in p2, "speaker block trimmed under budget pressure"
+    assert "right now is Jon" in p2, "speaker block trimmed under budget pressure"
     assert p2.count("- fact ") < 40, "memory not trimmed (test setup wrong)"
     print("  [PASS] speaker block never trimmed when memory is over budget")
 
@@ -140,6 +155,45 @@ def run() -> None:
     assert s.current_speaker_is_michael is True             # case-insensitive owner
     assert s.enrolling is None
     print("  [PASS] session: current_speaker default Michael; guardrail decision True only for owner")
+
+    # ── Multi-speaker attribution (2026-07-15): the system prompt alone could not carry this. ──
+
+    # 11. tag_utterance: off for a solo roster (byte-identical to pre-Stage-6), on above one.
+    assert tag_utterance("hello there", "Michael", False) == "hello there"
+    assert tag_utterance("hello there", "Hillary", True) == "[Hillary] hello there"
+    assert tag_utterance("hello there", "Michael", True) == "[Michael] hello there"   # owner tagged too
+    assert tag_utterance("hello there", "", True) == "[unknown] hello there"          # never a bare tag
+    print("  [PASS] tag_utterance: solo → untouched, multi → [Name] prefix, empty → [unknown]")
+
+    # 12. MULTI_SPEAKER_NOTE rides with the tagging, not with the speaker block: Michael's own
+    # turns are tagged in a multi-speaker session and carry the note with NO speaker block.
+    pn = build_system_prompt(1, 5, core_block="CORE-SLAB", speaker="Michael", multi_speaker=True)
+    assert MULTI_SPEAKER_NOTE in pn and "someone Michael knows" not in pn
+    assert build_system_prompt(1, 5, speaker="Michael").count(MULTI_SPEAKER_NOTE) == 0   # solo → absent
+    pn2 = build_system_prompt(2, 5, core_block="core", memory_block=big_mem,
+                              speaker="Jon", multi_speaker=True)
+    assert MULTI_SPEAKER_NOTE in pn2, "multi-speaker note trimmed under budget pressure"
+    print("  [PASS] multi-speaker note: only while tagging, independent of the speaker block, never trimmed")
+
+    # 13. Turns record WHO SPOKE at the time. current_speaker is live, so anything that renders
+    # history with it re-attributes the backlog to whoever talked last (the dashboard did).
+    s2 = Session(model="m", stt_backend="b", tts_backend="t", user_name="Michael")
+    s2.add_user_turn("morning", 0.1)                       # defaults to current_speaker (Michael)
+    s2.add_echo_turn("Morning, Michael.", 0.5)
+    s2.current_speaker = "Hillary"
+    s2.add_user_turn("I have a headache", 0.1, speaker="Hillary")
+    assert [t.get("speaker_name") for t in s2.turns if t["speaker"] == "user"] == ["Michael", "Hillary"]
+    assert s2.turns[0]["speaker"] == "user", "role field must stay the role"
+
+    # 14. …and the sign-off summary sees those names. This is a SECOND write path into memory
+    # (summary_text → episodic) that does NOT pass the per-turn guardrail: labelling everyone
+    # "User" while asking the summarizer for "facts expressed by Michael" filed Hillary's
+    # headache under Michael.
+    text = s2.get_conversation_text()
+    assert "Michael: morning" in text and "Hillary: I have a headache" in text
+    assert "Echo: Morning, Michael." in text
+    assert "User:" not in text, "guest turns still anonymised into the summary prompt"
+    print("  [PASS] per-turn attribution survives into the dashboard payload + the summary prompt")
 
     print("  OFFLINE: all speaker-awareness checks passed.")
 

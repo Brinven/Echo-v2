@@ -1,5 +1,52 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-15) — Stage 6 Part 1 follow-up: Echo replies to the person who spoke
+
+Michael's first live multi-speaker session (Hillary enrolled): "it works, and the readout shows
+Hillary's comments under her name, and mine under mine, it seems like its replying only to me."
+Confirmed straight out of `logs/stage0_log.jsonl` — voice-ID was perfect (`speaker: Hillary,
+0.5655, known=True`), Echo answered her headache with "Then let's lean into it, **Michael**."
+
+- [x] **Tagged the message stream** (`main.tag_utterance`) — `[Hillary] …` on the user message AND
+      in `history`, so a turn keeps its attribution for the rest of the conversation. Only when
+      >1 voice is enrolled: the solo path is byte-identical. **This was the load-bearing half** —
+      see the A/B below.
+- [x] **Rewrote `SPEAKER_KNOWN`/`SPEAKER_UNKNOWN`** (Michael approved 2026-07-15) to instruct the
+      addressing ("Reply to {name} directly… never call {name} 'Michael'") instead of describing a
+      disposition ("be warm… you may greet {name} by name"). `PERSONA_BLOCK` untouched — its
+      "address Michael as Michael" is about Mike-vs-Michael, not about who's talking.
+- [x] **`persona.MULTI_SPEAKER_NOTE`** — teaches the tag convention and, importantly, "never write
+      a tag yourself and never read one aloud" (Kokoro speaks whatever she writes). Injected only
+      while tagging; independent of the speaker block (Michael's own turns are tagged too).
+- [x] **Per-turn attribution** — `session.add_user_turn(speaker=…)` records `speaker_name` when the
+      turn is SPOKEN. `speaker` stays the ROLE field everything else keys on.
+- [x] **Fixed the lying readout** — the dashboard labelled every user turn with the LIVE
+      `current_speaker`, so Hillary speaking re-labelled Michael's entire backlog to her. Silent
+      bug he hadn't spotted (each new line appears correct *as it arrives*).
+- [x] **Closed the sign-off memory leak** — `get_conversation_text()` labelled everyone "User" and
+      feeds the summarizer, whose prompt asks for "facts expressed by Michael" → episodic memory.
+      The per-turn guardrail skips guests; the summary is a second write path that did not.
+- [x] **Copy/paste fixed** — the 1s poll did an unconditional `innerHTML` rewrite, eating any
+      selection mid-drag. Now re-renders only on change, plus a ⧉ Copy button (with an
+      `execCommand` fallback: `navigator.clipboard` needs a secure context, which the plain-http
+      LAN address for the touchscreen is not).
+- [x] **Verified.** Full offline suite green (`test_speaker_id` +4 checks, `test_webui` +1,
+      audio/persona/matrix unchanged). **Live A/B on the real 12B, replaying the logged failure:**
+      rewritten block but untagged → STILL "Close your eyes for a minute, **Michael**"; both halves
+      → "Rest is the only logical cure for a headache, **Hillary**. Go on and find your spot.
+      **Michael**, try not to let the silence get too heavy while she's horizontal." Follow-up turn
+      resolves she/you correctly. No tag leakage into speech.
+
+### Open / next
+- [ ] **Michael's live pass**: real 3-way conversation with Hillary, confirm the register holds and
+      that no `[Name]` tag is ever spoken aloud. Tune `match_threshold` from the logged scores —
+      Hillary hit 0.3566 on one turn against a 0.30 floor, which is close.
+- [ ] **Guest memory attribution** (deferred later Part, unchanged): `fact_memory` has no speaker
+      column, so a guest's words are still never stored. Facts *about* a guest told *by* Michael
+      still save. Speaker-aware retrieval belongs with it.
+- [ ] The loyalty/secrecy **register** (the comedy of not keeping a guest's secret from Michael)
+      remains the deliberately deferred Part — none of the above depends on it.
+
 ## ✅ DONE (2026-07-15) — Stage 8.1: launch tweaks after Michael's first good live session
 
 VAD + the dashboard tested well ("works great" — he has a mic with a touch sensor for hardware mute,

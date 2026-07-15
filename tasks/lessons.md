@@ -147,3 +147,74 @@ assume about exclusivity that is no longer true?
 
 **Tooling**: for a hung/unresponsive loop, `py-spy dump --pid <pid>` gives every thread's stack of a
 LIVE process without restarting or instrumenting it. It found this in one shot after theory failed.
+
+## 2026-07-15: Echo answered a guest as if Michael said it — the prompt lost to the message stream
+
+**Problem**: First live multi-speaker session (Hillary's voice enrolled). Voice-ID worked
+perfectly — the logs show `speaker: Hillary, score 0.5655, known=True`. Echo still replied to
+Michael:
+
+> **Hillary**: "It will be a bit quieter, but that would be really much better too, because I
+> have a headache."
+> **Echo**: "Then let's lean into it, **Michael**. Close your eyes for a few minutes and let the
+> house settle; the software can wait until your head clears."
+
+She took Hillary's headache, addressed it to Michael, and told *him* to lie down. The next turn
+was worse: Hillary said "it sounds like she was thinking it was you" and Echo answered "that's a
+fair assumption for **her** to make" — third-personing the person she was talking to.
+
+**Root cause — two halves, and the obvious one was the weaker one.**
+
+1. *The speaker block described a disposition, not an instruction.* `SPEAKER_KNOWN` said "You are
+   speaking with Hillary… be warm and natural — you may greet Hillary by name. You are still
+   Michael's companion first." It never said **reply to Hillary**. And it was one paragraph
+   against five Michael-shaped blocks in the same prompt: the persona block, the calibration
+   examples (all literally `Michael: … / Echo: …Michael`), the location block ("You are with
+   Michael at home"), the Core slab, and the retrieved memories.
+2. *The message stream had no attribution at all.* `history` was `{"role": "user", "content":
+   transcript}` — bare text. Hillary's line landed as message #9 in what read to the model as one
+   continuous Michael monologue, so it continued the pattern. It also had no way to resolve "she"
+   vs "you" a few turns later, because nothing in the history said who said what.
+
+**The A/B that settled it** (replayed the exact logged exchange against the 12B): with the
+rewritten speaker block but *untagged* turns, it STILL said "Close your eyes for a minute,
+Michael." With tagging as well: "Rest is the only logical cure for a headache, **Hillary**. Go on
+and find your spot. **Michael**, try not to let the silence get too heavy while she's horizontal."
+
+**Rule**: **Per-turn facts belong on the turn, not in the system prompt.** A system prompt sets
+standing disposition; it cannot win an argument against the shape of the conversation itself. If a
+fact changes per turn (who is speaking), it has to ride on that turn in the message stream. The
+prompt block is worth having — it carries the *register* — but never ship it as the only carrier
+of a per-turn fact and assume it will hold.
+
+**Corollary — write instructions, not vibes.** "Be warm with {name}" is a feeling. "Reply to
+{name} directly, never call {name} 'Michael'" is an instruction. Under prompt pressure only the
+second one survives.
+
+**Tag format**: `[Hillary] text`, not `Hillary: text` — the calibration examples are shaped
+`Michael: … / Echo: …`, so a colon-tagged user message reads as that script and invites the model
+to complete with a spoken "Echo:" prefix. Whatever she writes gets read aloud by Kokoro.
+
+**Bug autopsy — the category.** Both halves of this are the same mistake: *assuming a signal is
+present because it exists somewhere in context.* The speaker WAS resolved, it WAS in the prompt,
+and the dashboard DID display it — but the model's actual input never carried it where it
+mattered. Worth asking on any new per-turn signal (the camera will be next): does this reach the
+model on the turn it describes, or only as a standing note that something like it might be true?
+
+**Two silent bugs found in the same sweep** — both the same "current value, historical data"
+confusion:
+- The dashboard labelled *every* user turn with the LIVE `current_speaker`, so the moment Hillary
+  spoke, Michael's whole backlog silently re-labelled to "Hillary". Michael never noticed because
+  each new line appears under the right name *as it arrives*. Fix: turns record `speaker_name` at
+  the time they're spoken; the UI renders that.
+- `get_conversation_text()` labelled everyone "User", and it feeds the sign-off summarizer, whose
+  prompt asks for "facts expressed by Michael" → `summary_text` → episodic memory. **The
+  Stage 6 memory guardrail held per-turn and leaked at sign-off**: the per-turn gate correctly
+  skips guests, but the summary is a SECOND write path that nobody had gated. A guardrail is only
+  as good as the number of write paths you checked.
+
+**Copy/paste in the dashboard**: `renderState` polls every 1000ms and did an unconditional
+`t.innerHTML = …`, destroying any text selection mid-drag ("nothing stays selected"). Fix: only
+re-render when the payload actually changed, plus a ⧉ Copy button. **Rule**: a polling renderer
+must be a no-op when nothing changed — the DOM is user state (selection, focus, scroll), not just
+output.

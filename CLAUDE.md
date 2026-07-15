@@ -641,8 +641,8 @@ NOT to play that for laughs) is a **deliberately deferred later Part** — none 
 - **`persona.py`** — `SPEAKER_KNOWN`/`SPEAKER_UNKNOWN` + `speaker_context(speaker)` (Michael/""
   → no block, "unknown" → guarded, a name → warm by-name). Lights up Part 2 §2e's known/unknown
   rules pre-vision. `build_system_prompt` gained a `speaker` arg, injected **every turn after
-  location, before core; never trimmed** (added to the `fixed` tuple). **Persona content — APPROVED
-  as-is by Michael 2026-07-15.**
+  location, before core; never trimmed** (added to the `fixed` tuple). **Persona content — the
+  rewritten wording was APPROVED by Michael 2026-07-15; see the multi-speaker section below.**
 - **Attribution guardrail (the conservative Part-1 choice):** `session.current_speaker` (default
   Michael) is resolved each real turn; the turn label uses it, and **`ib.write_memory` is skipped
   unless `session.current_speaker_is_michael`** — a guest's/unknown's words are NEVER attributed
@@ -667,8 +667,46 @@ NOT to play that for laughs) is a **deliberately deferred later Part** — none 
   `LocalStrategy.COPY`. ECAPA load + embed validated headless. The ~89 MB model is downloaded.
 - **Michael-run (not yet done — now folded into the Stage 7 GUI live-pass):** enroll Michael + a
   guest and tune `match_threshold` **via the dashboard** (enroll button + live-score threshold
-  slider), confirm the guardrail (guest turn writes no fact; Michael's still does). The two speaker
-  persona strings are APPROVED as-is (2026-07-15).
+  slider), confirm the guardrail (guest turn writes no fact; Michael's still does).
+
+### ⚠ Multi-speaker attribution — the prompt is NOT the carrier (2026-07-15)
+
+First live multi-speaker session (Hillary enrolled) exposed the Part-1 design's real gap. Voice-ID
+was perfect (`speaker: Hillary, 0.5655, known=True`) and Echo *still* answered her "I have a
+headache" with **"Then let's lean into it, Michael. Close your eyes for a few minutes."** She had
+the fact and used it wrong, because it never reached the model on the turn it described.
+
+- **A per-turn fact must ride on the turn.** `main.tag_utterance()` prefixes the user message with
+  `[Hillary] …` and the **tagged** text goes into `history`, so a turn keeps its attribution for the
+  rest of the conversation (that is also what lets Echo resolve "she" vs "you" later). Active ONLY
+  when `speaker_registry.count > 1`, resolved per turn (enrollment can add a voice mid-session), so
+  the solo path stays byte-identical. Raw `transcript` still goes to the search decider, the memory
+  gate, and the log — only the model sees the tag.
+- **This is the load-bearing half.** Live A/B replaying the logged failure on the 12B: rewritten
+  speaker block + UNtagged turns → still "Close your eyes for a minute, Michael." Both halves →
+  "Rest is the only logical cure for a headache, **Hillary**… **Michael**, try not to let the
+  silence get too heavy while she's horizontal." **Do not "simplify" this back to a prompt block.**
+- **Tag format is `[Name] text`, never `Name: text`** — `CALIBRATION_EXAMPLES` are shaped
+  `Michael: … / Echo: …`, so a colon-tagged user message reads as that script and invites a spoken
+  "Echo:" prefix. Kokoro says whatever she writes.
+- **`persona.MULTI_SPEAKER_NOTE`** teaches the convention + "never write a tag yourself and never
+  read one aloud". Injected only while tagging, **after location, before the speaker block**, never
+  trimmed. Independent of `speaker`: Michael's own turns are tagged too and carry the note with no
+  speaker block. Mechanical convention — deliberately kept OUT of the approved persona strings.
+- **The speaker blocks INSTRUCT, they don't describe.** The original "be warm… you may greet {name}
+  by name" was a disposition and lost to the five Michael-shaped blocks in the same prompt (persona,
+  calibration, location, Core, memory). Now: "Reply to {name} directly… never call {name} 'Michael'…
+  Michael may not even be in the room." **APPROVED by Michael 2026-07-15.** `PERSONA_BLOCK` was NOT
+  touched — its "address Michael as Michael. Always." is about Mike-vs-Michael, not about assuming
+  who is talking.
+- **Attribution is recorded per turn, never read from the live value.** `session.add_user_turn(
+  speaker=…)` stores `speaker_name` at the time of speaking (`speaker` remains the ROLE field).
+  The dashboard used to label every user turn with the live `current_speaker`, so a guest speaking
+  silently re-labelled Michael's whole backlog — the readout lied about history.
+- **The memory guardrail leaked at sign-off.** `get_conversation_text()` labelled everyone "User"
+  and feeds `generate_summary`, whose prompt asks for "facts expressed by Michael" → `summary_text`
+  → episodic memory. The per-turn gate skips guests; the summary is a **second write path** that
+  didn't. It now uses the real names. **Any new memory write path needs the same attribution check.**
 
 ---
 
@@ -703,6 +741,13 @@ by touch). Plan: `~/.claude/plans/lexical-baking-hippo.md`.
 - **Security:** default `host 127.0.0.1` (this PC only). For the touchscreen/another device set `host`
   to the LAN/Tailscale IP — **binding off-loopback lets anyone on that network control Echo** (talk,
   mute, quit); only do it on a trusted/Tailscale network (same caution as the SearXNG :26 note).
+- **Transcript rendering must be a no-op when nothing changed.** The `/api/state` poll runs ~1×/sec
+  and used to rewrite `#transcript`'s `innerHTML` unconditionally, which destroyed any text
+  selection mid-drag — Michael: "it wont let me copy (nothing stays selected)". It now diffs a
+  signature first and skips identical payloads; a **⧉ Copy** button covers the rest. The DOM holds
+  user state (selection, focus, scroll), not just output — the same rule applies to any tile added
+  later (cameras, sensors). Copy falls back to `execCommand` because `navigator.clipboard` needs a
+  secure context, which the plain-http LAN/Tailscale address for the touchscreen is not.
 - **Tests:** `test_webui.py` — offline, no mic/model: Flask `test_client` asserts `/api/state` shape
   and that each POST flips the right session flag / sets the right Event / updates the live threshold;
   health probes stubbed; enroll refused when speaker awareness off; threshold no-op without a registry.

@@ -261,7 +261,11 @@ class EchoControl:
     # ── reads for the dashboard ──
     def snapshot(self) -> dict:
         s = self.session
-        turns = [{"speaker": t.get("speaker"), "content": t.get("content", "")}
+        # speaker_name is per-turn (who actually spoke); `speaker` is the role. The UI needs both:
+        # it used to label every user turn with the LIVE current_speaker, so the moment a guest
+        # spoke, every earlier line silently re-labelled to them — the readout lied about history.
+        turns = [{"speaker": t.get("speaker"), "name": t.get("speaker_name"),
+                  "content": t.get("content", "")}
                  for t in s.turns[-12:]]
         return {
             "state": self.sm.label,

@@ -48,8 +48,13 @@
   main{display:grid; grid-template-columns:1.1fr 1fr; gap:12px; flex:1; min-height:0;}
   .col{display:flex; flex-direction:column; gap:12px; min-height:0;}
 
-  #transcript{flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; min-height:0;}
-  .turn{padding:10px 12px; border-radius:10px; background:var(--panel2); line-height:1.35;}
+  .card-head{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .card-head h2{margin-bottom:0;}
+  button.mini{min-height:36px; padding:4px 14px; font-size:14px; font-weight:600;}
+  #transcript{flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; min-height:0; margin-top:10px;}
+  /* Selectable on purpose: the transcript is the one thing worth copying out of here. */
+  .turn{padding:10px 12px; border-radius:10px; background:var(--panel2); line-height:1.35;
+    user-select:text; -webkit-user-select:text;}
   .turn .who{font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:.05em; display:block; margin-bottom:2px;}
   .turn.echo .who{color:var(--echo);}
   .turn.you .who{color:var(--you);}
@@ -114,7 +119,10 @@
   <main>
     <div class="col">
       <div class="card grow" style="display:flex; flex-direction:column; min-height:0;">
-        <h2>Conversation</h2>
+        <div class="card-head">
+          <h2>Conversation</h2>
+          <button id="copy-transcript" class="mini">⧉ Copy</button>
+        </div>
         <div id="transcript"><div class="empty">Press &amp; hold Talk to speak…</div></div>
       </div>
     </div>
@@ -189,6 +197,26 @@ async function api(path, method="GET", body=null){
 }
 
 let thr = 0.30;
+let lastTranscriptSig = "";   // skip no-op re-renders (they'd eat your text selection)
+let lastTranscript = [];      // what ⧉ Copy copies
+
+async function copyText(text){
+  // navigator.clipboard requires a secure context — fine on 127.0.0.1, but NOT on the plain-http
+  // LAN/Tailscale address the touchscreen uses. Fall back to the old execCommand path there.
+  try{
+    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); return true; }
+  }catch(e){ /* fall through */ }
+  try{
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed"; ta.style.top = "0"; ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  }catch(e){ return false; }
+}
 
 function renderState(s){
   if(!s) return;
@@ -251,16 +279,25 @@ function renderState(s){
     $("score-fill").style.width = Math.max(0,Math.min(100, sc*100))+"%";
   }
 
-  // transcript
+  // Transcript — rebuilt ONLY when it actually changed. This poll runs every second, and an
+  // unconditional innerHTML rewrite destroys any text selection mid-drag: that is why copying
+  // out of the dashboard "wouldn't stay selected". Each turn is labelled with the name recorded
+  // when it was SPOKEN (x.name), never the live current_speaker — that re-labelled the whole
+  // backlog to whoever talked last.
   const t = $("transcript");
   if(s.transcript && s.transcript.length){
-    const atBottom = t.scrollHeight - t.scrollTop - t.clientHeight < 60;
-    t.innerHTML = s.transcript.map(x=>{
-      const cls = x.speaker==="echo" ? "echo" : "you";
-      const who = x.speaker==="echo" ? "Echo" : (s.current_speaker||"You");
-      return `<div class="turn ${cls}"><span class="who">${esc(who)}</span>${esc(x.content)}</div>`;
-    }).join("");
-    if(atBottom) t.scrollTop = t.scrollHeight;
+    const sig = JSON.stringify(s.transcript);
+    if(sig !== lastTranscriptSig){
+      lastTranscriptSig = sig;
+      lastTranscript = s.transcript;
+      const atBottom = t.scrollHeight - t.scrollTop - t.clientHeight < 60;
+      t.innerHTML = s.transcript.map(x=>{
+        const cls = x.speaker==="echo" ? "echo" : "you";
+        const who = x.speaker==="echo" ? "Echo" : (x.name || s.user_name || "You");
+        return `<div class="turn ${cls}"><span class="who">${esc(who)}</span>${esc(x.content)}</div>`;
+      }).join("");
+      if(atBottom) t.scrollTop = t.scrollHeight;
+    }
   }
 }
 function esc(s){ return String(s??"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
@@ -320,6 +357,17 @@ talk.addEventListener("pointerdown", press);
 talk.addEventListener("pointerup", release);
 talk.addEventListener("pointerleave", e=>{ if(talk.classList.contains("holding")) release(e); });
 talk.addEventListener("pointercancel", release);
+
+$("copy-transcript").onclick = async ()=>{
+  const btn = $("copy-transcript");
+  if(!lastTranscript.length){ return; }
+  const text = lastTranscript.map(x=>{
+    const who = x.speaker==="echo" ? "Echo" : (x.name || "You");
+    return who + ": " + x.content;
+  }).join("\n");
+  btn.textContent = (await copyText(text)) ? "✓ Copied" : "✗ Failed";
+  setTimeout(()=>{ btn.textContent = "⧉ Copy"; }, 1500);
+};
 
 $("mute").onclick = ()=> api("/api/mute","POST").then(loopState);
 $("max").onclick  = ()=> api("/api/snark","POST",{max:true}).then(loopState);

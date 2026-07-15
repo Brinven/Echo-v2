@@ -243,13 +243,24 @@ class Session:
     def turns(self) -> list[dict]:
         return self._turns
 
-    def add_user_turn(self, content: str, stt_latency_s: float) -> dict:
-        """Record a user turn."""
+    def add_user_turn(self, content: str, stt_latency_s: float, speaker: str | None = None) -> dict:
+        """Record a user turn.
+
+        speaker: WHO said it (speaker_id's resolved label — a name, or "unknown"). Defaults to
+        the session's current_speaker, which is Michael whenever speaker awareness is off.
+
+        Stored as `speaker_name`, deliberately NOT as `speaker` — that field is the ROLE
+        ("user"/"echo") the dashboard, the session file, and get_conversation_text all key on.
+        It is recorded PER TURN because current_speaker is a live value: anything that renders
+        past turns with it re-attributes the whole conversation to whoever spoke last (the
+        dashboard did exactly that until 2026-07-15).
+        """
         self._turn_counter += 1
         turn = {
             "turn_id": self._turn_counter,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "speaker": "user",
+            "speaker_name": (speaker or self.current_speaker or self._user_name or "Michael"),
             "content": content,
             "stt_latency_s": round(stt_latency_s, 4),
             "first_audio_s": None,
@@ -282,11 +293,22 @@ class Session:
         }
 
     def get_conversation_text(self) -> str:
-        """Format all turns as readable text for the summary LLM pass."""
+        """Format all turns as readable text for the summary LLM pass.
+
+        User turns are labelled with WHO actually spoke, not a generic "User". The sign-off
+        summary is a SECOND write path into memory (summary_text/mood → episodic_memory), and
+        it does not go through the per-turn guardrail that skips guests. Labelling everyone
+        "User" handed the summarizer a transcript where a guest's words looked like Michael's,
+        while the prompt asked it for "facts expressed by Michael" — so Hillary's headache
+        could be recorded as Michael's. The real names let it attribute correctly.
+        """
         lines = []
         for turn in self._turns:
-            speaker = "User" if turn["speaker"] == "user" else "Echo"
-            lines.append(f"{speaker}: {turn['content']}")
+            if turn["speaker"] == "echo":
+                who = "Echo"
+            else:
+                who = turn.get("speaker_name") or self._user_name or "User"
+            lines.append(f"{who}: {turn['content']}")
         return "\n".join(lines)
 
     def save_session_file(self) -> Path:
