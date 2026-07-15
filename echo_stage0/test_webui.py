@@ -200,7 +200,23 @@ def run() -> None:
     cl4 = create_app(c4).test_client()
     assert cl4.get("/api/voices").get_json()["voices"] == []
     assert cl4.post("/api/voice", json={"name": "bf_emma"}).get_json()["ok"] is False
-    print("  [PASS] /api/voices fail-soft when Kokoro is down")
+    assert cl4.post("/api/voice/preview", json={"name": "bf_emma"}).get_json()["ok"] is False
+    print("  [PASS] /api/voices + preview fail-soft when Kokoro is down")
+
+    # 8i. Preview parks a sample line WITHOUT adopting the voice — a preview is not a commitment.
+    control.set_voice_name("af_heart")
+    r = client.post("/api/voice/preview", json={"name": "am_michael"}).get_json()
+    assert r["ok"] is True and control.pending_preview == "am_michael"
+    st = client.get("/api/state").get_json()
+    assert st["voice"] == "af_heart", "preview must NOT change the active voice"
+    assert control.pending_voice is None, "preview must NOT park a voice change"
+    assert control.take_pending_preview() == "am_michael" and control.pending_preview is None
+    assert control.take_pending_preview() is None
+    r = client.post("/api/voice/preview", json={"name": "not_a_voice"}).get_json()
+    assert r["ok"] is False and control.pending_preview is None
+    r = client.post("/api/voice/preview", json={}).get_json()
+    assert r["ok"] is False and control.pending_preview is None
+    print("  [PASS] /api/voice/preview parks a sample without adopting the voice")
 
     # 9. health() returns a dict; probes stubbed (no network).
     real_get = ctrlmod.httpx.get

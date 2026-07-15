@@ -137,6 +137,13 @@ def create_app(control):
         ok = control.request_voice(data.get("name", ""))
         return jsonify(ok=ok, pending_voice=control.pending_voice)
 
+    @app.post("/api/voice/preview")
+    def api_voice_preview():
+        """Speak a fixed sample line in a voice WITHOUT adopting it. Played by the main loop."""
+        data = request.get_json(silent=True) or {}
+        ok = control.request_preview(data.get("name", ""))
+        return jsonify(ok=ok, pending_preview=control.pending_preview)
+
     @app.post("/api/enroll")
     def api_enroll():
         data = request.get_json(silent=True) or {}

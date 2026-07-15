@@ -801,3 +801,19 @@ and `ib.set_model` (gate) and preserves history.
   picker; they now pass `last_model=load_config().get("last_model")` (ECHO_MODEL/--model still win).
   Side benefit: `test_personality.py` now runs **fully unattended, offline + live** — it previously
   died on `EOFError` at the picker without a TTY.
+
+### Voice preview button (Stage 8.2)
+- **`persona.VOICE_PREVIEW_LINE`** — the sample Echo speaks for the dashboard's ▶ Preview button.
+  It lives in `persona.py` because it is **character content Michael hears verbatim** (not a system
+  prompt — it's literal text Kokoro says). **Michael's to approve.** Deliberately FIXED, not random:
+  auditioning ~67 voices is an A/B test, and it's only fair if the line is identical every time.
+- **`tts.synthesize(text, voice=...)`** takes a one-off override that does NOT change the active
+  voice — a preview must never become a commitment (asserted in `test_webui.py`).
+- **Same park-for-the-main-loop contract**: `/api/voice/preview` → `control.pending_preview` →
+  `main.do_voice_preview` plays it while idle. **The mic is paused for the duration** — in LISTENING
+  the stream is live, so hands-free VAD would hear the preview and Echo would answer herself.
+  Playback is synchronous (`audio_q.finish` blocks), so the mic is back before it returns.
+- **Also serviced in the MUTED branch**: mute is about the MIC, not the speaker, so auditioning while
+  muted must work — otherwise the preview would queue and never play.
+- Sample measures ~4.4–5.0s across voices; the UI button re-enables at 6s so it can't unlock
+  mid-sentence.

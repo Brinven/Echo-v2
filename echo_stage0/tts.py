@@ -105,12 +105,14 @@ class TTSEngine:
                 with self._lock:
                     self._do_warmup()
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+    def synthesize(self, text: str, voice: str | None = None) -> tuple[np.ndarray, int]:
         """
         Synthesize text to audio.
 
         Args:
             text: Text to speak
+            voice: One-off voice override (the dashboard's Preview button). Does NOT change the
+                active voice — a preview must not become a commitment.
 
         Returns:
             Tuple of (audio_array as float32, sample_rate)
@@ -119,7 +121,7 @@ class TTSEngine:
             try:
                 response = self._client.audio.speech.create(
                     model="kokoro",
-                    voice=self._voice,
+                    voice=voice or self._voice,
                     input=text,
                     response_format="wav",
                     speed=1.15,

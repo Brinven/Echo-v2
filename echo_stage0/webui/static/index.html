@@ -138,6 +138,7 @@
         <div class="snark-row" style="margin-top:10px;">
           <span class="lbl" style="color:var(--dim); min-width:52px;">VOICE</span>
           <select id="voice-sel"></select>
+          <button id="voice-preview" style="flex:none; min-height:48px; padding:10px 16px;">▶ Preview</button>
         </div>
         <div class="snark-row" style="margin-top:12px;">
           <span class="lbl" style="color:var(--dim);">SNARK</span>
@@ -359,6 +360,18 @@ $("voice-sel").onchange = e=>{
   // Applied between turns: synthesis is chunk-by-chunk, so a live swap would change
   // voice mid-sentence. You'll hear the new voice on her next reply.
   api("/api/voice","POST",{name:e.target.value}).then(loopState);
+};
+// Preview speaks a fixed sample line in the SELECTED voice without you having to think of
+// something to say. The main loop plays it while idle, with the mic paused.
+$("voice-preview").onclick = async ()=>{
+  const btn = $("voice-preview"), name = $("voice-sel").value;
+  if(!name) return;
+  btn.disabled = true; btn.textContent = "▶ …";
+  await api("/api/voice/preview","POST",{name});
+  // The sample measures ~4.4-5.0s across voices, and the main loop may not pick it up instantly
+  // (it plays while idle), so re-enable a bit past that rather than mid-sentence. Cosmetic only:
+  // the button is just a trigger, and a second click would simply re-park the same preview.
+  setTimeout(()=>{ btn.disabled = false; btn.textContent = "▶ Preview"; }, 6000);
 };
 loadVoices();
 setInterval(()=>{ if(!voicesLoaded) loadVoices(); }, 15000);

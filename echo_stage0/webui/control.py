@@ -71,6 +71,7 @@ class EchoControl:
         self._list_voices = list_voices
         self.pending_model: str | None = None
         self.pending_voice: str | None = None
+        self.pending_preview: str | None = None
         self._voice_name = voice_name
         self._models_cache: list[str] = []
         self._models_ts = 0.0
@@ -199,6 +200,25 @@ class EchoControl:
     def set_voice_name(self, name: str) -> None:
         """Main loop only: report the voice actually in use, after a completed change."""
         self._voice_name = name
+
+    def request_preview(self, name: str) -> bool:
+        """Park a voice PREVIEW for the main loop (speaks a fixed sample line in `name`).
+
+        Parked rather than synthesized here for the same reason as everything else: the web thread
+        must not touch the pipeline, and playing audio from it could collide with a live reply or
+        be heard by the open mic. The main loop plays it while idle, with the mic paused.
+        """
+        name = (name or "").strip()
+        if not name or name not in self.voices():
+            return False
+        self.pending_preview = name
+        return True
+
+    def take_pending_preview(self) -> str | None:
+        """Main loop only: claim the pending preview (read + clear)."""
+        name = self.pending_preview
+        self.pending_preview = None
+        return name
 
     def set_web_search(self, off: bool) -> bool:
         self.session.web_search_off = bool(off)

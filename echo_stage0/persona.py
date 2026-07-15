@@ -221,6 +221,17 @@ SPEAKER_UNKNOWN = (
 )
 
 
+# Spoken aloud by the dashboard's voice Preview button (Stage 8.2) — NOT a system prompt: this
+# is literal text Kokoro says, so it is the one persona string Michael hears verbatim.
+# Michael's to approve. Deliberately fixed, not random: auditioning ~67 voices is an A/B test, and
+# the line is only a fair comparison if it's identical every time. It is written to be worth
+# hearing twice — in character (dry, unhurried, uses his name) and phonetically varied enough
+# to judge a voice on: hard consonants, sibilants, long vowels, and a natural pause.
+VOICE_PREVIEW_LINE = (
+    "Hey Michael. This is how I'd sound — same me, just a different set of vocal cords."
+)
+
+
 def speaker_context(speaker: str, user_name: str = "Michael") -> str:
     """Resolve the per-turn speaker block ('' for Michael/unset).
 

@@ -23,8 +23,23 @@ so Echo just listens and answers). Four follow-ups from that session:
 - [x] Verified: full offline suite + live HTTP smoke (voice park/apply/reject, no-model state) + a
       real `test_personality.py` live run (exit 0).
 
-**Possible later:** a "preview voice" button (speak a sample without a turn) — for now, picking a
-voice and talking IS the audition loop.
+## ✅ DONE (2026-07-15) — Stage 8.2: voice Preview button
+
+Michael: "I would get bored quickly having to think of.. something.. to say" — fair, the pick-and-talk
+audition loop doesn't survive 67 voices.
+
+- [x] **`persona.VOICE_PREVIEW_LINE`** — the spoken sample. In `persona.py` because it's character
+      content he hears verbatim. **FIXED, not random**: auditioning voices is an A/B test, only fair
+      if the line is identical each time. Written to be worth hearing twice and phonetically varied
+      (hard consonants, sibilants, long vowels, a natural pause). **⚠ OPEN GATE: Michael's to approve.**
+- [x] `tts.synthesize(text, voice=...)` one-off override — a preview must never become a commitment.
+- [x] `/api/voice/preview` → `control.pending_preview` → `main.do_voice_preview`, same park-for-the-
+      main-loop contract. **Mic paused during playback** (else hands-free VAD hears it and Echo
+      answers herself). Serviced in **LISTENING and MUTED** (mute is the mic, not the speaker).
+- [x] ▶ Preview button next to the voice dropdown; re-enables at 6s (sample is ~4.4–5.0s).
+- [x] Verified END-TO-END: real Flask + real HTTP + real Kokoro → **preview actually played through
+      the speakers** in `bm_george` (5.2s incl. playback) while the active voice stayed `af_heart`.
+      Offline asserts pin "preview parks a sample without adopting the voice". Full suite green.
 
 ## ▶ ACTIVE (2026-07-15) — Stage 8: dashboard-only control (kill the global keyboard) + VAD
 

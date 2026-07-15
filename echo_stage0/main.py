@@ -46,7 +46,7 @@ from session import (
 from summarizer import generate_summary
 from ib_lite import IbLite
 from ib_lite.embedder import preload as embedder_preload
-from persona import build_system_prompt, mood_opener
+from persona import build_system_prompt, mood_opener, VOICE_PREVIEW_LINE
 from persona_check import SelfCheckRunner, SELF_CHECK_EVERY, RECENT_K
 from daily_state import get_daily_snark_level
 from search import build_provider, load_search_config, format_search_block
@@ -842,6 +842,33 @@ def main():
         control.set_model_name(new_model)
         print(f"  [Now using {new_model} — first reply may pause while LM Studio loads it]")
 
+    def do_voice_preview(name: str):
+        """Speak the sample line in `name` WITHOUT adopting it. Main loop only, while idle.
+
+        The mic is paused for the duration: in LISTENING the stream is live, so hands-free VAD
+        would hear the preview and Echo would answer herself. Playback is synchronous
+        (audio_q.finish blocks), so the mic is back before we return.
+        """
+        if not name:
+            return
+        clear_status_line()
+        print(f"  [Preview: {name}]")
+        try:
+            audio_stream.stop()
+        except Exception:
+            pass
+        try:
+            preview_audio, preview_sr = tts.synthesize(VOICE_PREVIEW_LINE, voice=name)
+            audio_q.start()
+            audio_q.enqueue(preview_audio, preview_sr)
+            audio_q.finish()
+        except Exception as e:
+            print(f"  [preview error: {e}]")
+        try:
+            audio_stream.start()
+        except Exception:
+            pass
+
     def do_voice_swap(new_voice: str):
         """Change Kokoro's voice. Called ONLY from the main loop, between turns.
 
@@ -887,6 +914,9 @@ def main():
                         break  # re-enter LISTENING cleanly (resets buffers, redraws status)
                     if control.pending_voice:
                         do_voice_swap(control.take_pending_voice())
+                        break
+                    if control.pending_preview:
+                        do_voice_preview(control.take_pending_preview())
                         break
                     if mute_toggle_event.is_set():
                         mute_toggle_event.clear()
@@ -996,6 +1026,14 @@ def main():
                     if quit_event.is_set():
                         sm.transition(State.SHUTDOWN)
                         break
+                    # Auditioning voices while muted is perfectly reasonable — mute is about the
+                    # MIC, not the speaker. Without this the preview would queue and never play.
+                    if control.pending_preview:
+                        do_voice_preview(control.take_pending_preview())
+                        draw_status(
+                            status="MUTED", vad="paused", mute="ON",
+                            stt=last_stt, fa=last_fa, turn=session.turn_count,
+                        )
                     if mute_toggle_event.is_set():
                         mute_toggle_event.clear()
                         if not control.muted:
