@@ -103,6 +103,28 @@ def create_app(control):
         data = request.get_json(silent=True) or {}
         return jsonify(ok=True, web_search_off=control.set_web_search(data.get("off", False)))
 
+    @app.post("/api/vad")
+    def api_vad():
+        """Hands-free toggle. ok=False when webrtcvad isn't installed (nothing to turn on)."""
+        data = request.get_json(silent=True) or {}
+        if "enabled" in data:
+            enabled = control.set_vad(bool(data["enabled"]))
+        else:
+            enabled = control.toggle_vad()
+        return jsonify(ok=control.vad_available, vad_enabled=enabled)
+
+    # ── model swap (Stage 8: replaces the L key's blocking picker) ──
+    @app.get("/api/models")
+    def api_models():
+        return jsonify(models=control.models(), current=control.snapshot()["model"])
+
+    @app.post("/api/model")
+    def api_model():
+        """Park a swap for the main loop; it applies between turns, never mid-generation."""
+        data = request.get_json(silent=True) or {}
+        ok = control.request_model(data.get("name", ""))
+        return jsonify(ok=ok, pending_model=control.pending_model)
+
     @app.post("/api/enroll")
     def api_enroll():
         data = request.get_json(silent=True) or {}

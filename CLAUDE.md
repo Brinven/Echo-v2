@@ -709,3 +709,62 @@ by touch). Plan: `~/.claude/plans/lexical-baking-hippo.md`.
   stdin), sign-off/"save & end" button, memory editing, control-API auth, WebSocket push, fully
   headless operation. **Combined live-pass (Michael):** launch Echo → open the dashboard on the PC,
   then the touchscreen (set `host`); enroll + tune + exercise controls.
+
+---
+
+## ⚠ Stage 8 (2026-07-15) — dashboard is the ONLY control surface + hands-free VAD
+
+**There is no keyboard handler any more. Do not reintroduce one.** `main.py` used to install
+`keyboard.hook(on_key)`, a **system-wide** low-level Windows hook that fired for every keystroke on
+the machine regardless of focus. That was survivable while Echo was CLI-only, but Stage 7 added a
+**text input** (the enroll name box) and the two are fundamentally incompatible: typing "Michae**l**"
+into the dashboard toggled mute on the `m` and fired the blocking model picker on the `l`, which
+stopped the mic, killed SPACE, and wedged the main loop in `input()`. A focus gate (`console_focus.py`,
+now **deleted**) narrowed it but could not close it — Windows Terminal tabs are indistinguishable, so
+typing in Claude Code's WT tab still drove Echo. Michael's call: remove the hook entirely and put
+every control on the dashboard (and later on a Steam-Deck-style button pad). Full autopsy:
+`tasks/lessons.md` 2026-07-15.
+
+- **`keyboard` is OUT of requirements.txt** with a do-not-reintroduce note. `import keyboard`,
+  `on_key`, `keyboard.hook`, `unhook_all`, the Q double-press, `swap_requested` and `picker_active`
+  are all gone. **Ctrl+C** still stops the process.
+- **The dashboard is now load-bearing, not optional.** If `start_webui` returns None (disabled /
+  flask missing / port taken) Echo has NO control surface — the startup line says so LOUDLY. The
+  voice loop still runs, but only Ctrl+C and the sign-off phrase can end it.
+- **Talk stays PRESS-AND-HOLD** (Michael chose this over a toggle, 2026-07-15).
+
+### The capture bug PTT was hiding (`trim_to_preroll`)
+`audio_vad_callback` appends whenever `sm.can_record` — i.e. in **LISTENING as well as RECORDING** —
+and the buffer was only cleared on LISTENING *entry*. So a press captured everything said since the
+last turn: press-speak-release looked silent, and the NEXT press answered the PREVIOUS sentence
+("hit talk, speak, nothing; hit talk again → Echo answers the first thing"). Fix: while idle in
+LISTENING the buffer is trimmed to a rolling **`PRE_ROLL_S = 0.5s`** (`trim_to_preroll`, module-level
+and unit-tested in `test_audio_capture.py`). The pre-roll is deliberately **KEPT** entering RECORDING —
+VAD only fires ~3 frames (90ms) after speech starts, and a press always lands slightly late. Capture
+must begin when RECORDING begins; don't "simplify" this back to clearing on LISTENING entry.
+
+### Hands-free VAD is location-aware
+- **NEW DEP `webrtcvad-wheels==2.0.14`** — the drop-in prebuilt fork (same `import webrtcvad`), so
+  `vad.py` is unchanged. Never `webrtcvad` (no Windows wheel; it aborts the whole `pip install -r`).
+  Verified torch stayed **2.13.0+cpu**.
+- **`session.vad_default_for_location()`**: home → on, jeep → off (road noise/radio/passengers),
+  **unknown → on** (the Stage 5 Part 5 rule: `unknown` fails to NEUTRAL/home, never jeep).
+- Applied at session start AND re-applied on every location change (`control.set_location`), so
+  "Echo, we're in the Jeep" also stops hands-free. The dashboard toggle overrides any time.
+- **`vad_active()` = `vad.available and session.vad_enabled`**, read live on every audio callback —
+  never cached, so the toggle takes effect immediately (same reasoning as effective snark per turn).
+  No flag can fake `vad.available`; without webrtcvad the UI button is disabled and `/api/vad`
+  returns `ok:false` rather than lying.
+
+### Model swap moved to the dashboard (and is no longer blocking)
+The `L`-key picker's `input()` is what wedged the loop. Now: `/api/models` (read-only, cached ~10s)
++ `/api/model` → `control.request_model()` parks the id in **`control.pending_model`**; the **MAIN
+LOOP** claims it (`take_pending_model`) at the next LISTENING tick and calls `do_model_swap(name)`.
+This preserves EchoControl's **"never touches the pipeline"** invariant — it gets a read-only
+`list_models` callable, NOT the `LLMClient` — and means a swap can never land mid-generation.
+`request_model` rejects anything LM Studio doesn't list. The swap still updates BOTH `llm.set_model`
+and `ib.set_model` (gate) and preserves history.
+
+### New/changed JSONL + state
+`/api/state` gained `vad_available`, `vad_enabled`, `pending_model`. `vad_mode` still logs engine
+availability (`webrtcvad`/`ptt-only`), not the session toggle.

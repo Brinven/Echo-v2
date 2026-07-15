@@ -6,12 +6,14 @@ Streaming pipeline with session management and the Ib-Lite memory subsystem
 into the system prompt at session start; relevant Facts/Episodes are retrieved
 per turn; a background significance gate decides what to save after each turn.
 
-Controls:
-  SPACE  -- push-to-talk (hold to record, release to process)
-  M      -- toggle mute
-  S      -- toggle Maximum Snark Mode (locks snark to 10 for the session)
-  L      -- swap the LLM mid-conversation (filter-picker; keeps the chat + history)
-  Q      -- quit (double-press required mid-conversation)
+Controls (Stage 8): ALL controls live on the dashboard — http://127.0.0.1:7862 by default.
+There are NO keyboard commands. The old global `keyboard` hook fired for every keystroke on
+the machine regardless of focus, so typing anywhere (the dashboard's own enroll box, another
+terminal tab, Discord) drove Echo — 'm' muted it, 'q' quit it, 'l' wedged it in a blocking
+model picker. One input surface now; Ctrl+C still stops the process.
+
+  Talk (press & hold)  -- push-to-talk; hands-free VAD runs at home (see vad_default_for_location)
+  Mute / Max Snark / Home / Jeep / Web / Model / Stop -- dashboard buttons
   Say "Echo, that's all for now" to end session gracefully
   Say "Echo, maximum snark mode" to lock snark to 10
 
@@ -25,7 +27,6 @@ import time
 import random
 import threading
 
-import keyboard
 import numpy as np
 
 from audio import AudioRecorder, SAMPLE_RATE
@@ -40,6 +41,7 @@ from state import State, StateMachine
 from session import (
     Session, is_signoff, is_forget, is_max_snark, is_stay_offline, is_go_online,
     is_location_override, is_enroll_command, is_enroll_cancel, load_config, save_config,
+    vad_default_for_location,
 )
 from summarizer import generate_summary
 from ib_lite import IbLite
@@ -53,6 +55,27 @@ from speaker_id import SpeakerRegistry, build_embedder
 from webui import EchoControl, start_webui
 
 
+# How much audio to keep while idle in LISTENING. Capture must begin when RECORDING starts, so the
+# idle buffer is trimmed to this rolling pre-roll instead of growing for the whole idle period.
+# It is KEPT (not cleared) entering RECORDING for two reasons: VAD only fires ~3 frames (90ms) after
+# speech begins, and a press-and-hold Talk press always lands slightly after Michael starts talking.
+# 0.5s comfortably covers both without dragging in the previous turn. (tasks/lessons.md 2026-07-15)
+PRE_ROLL_S = 0.5
+PRE_ROLL_SAMPLES = int(SAMPLE_RATE * PRE_ROLL_S)
+
+
+def trim_to_preroll(buffer: list, max_samples: int = PRE_ROLL_SAMPLES) -> None:
+    """Drop the OLDEST chunks in-place until `buffer` holds at most `max_samples`.
+
+    Called from the audio callback while idle in LISTENING. Always leaves at least one chunk so
+    a press that lands between callbacks still has audio. Chunk-granular by design: it trims whole
+    callback blocks (30ms each) rather than slicing arrays, so the hot path stays allocation-free.
+    """
+    buffered = sum(len(chunk) for chunk in buffer)
+    while buffered > max_samples and len(buffer) > 1:
+        buffered -= len(buffer.pop(0))
+
+
 # ── Console UI ───────────────────────────────────────────────────────────
 
 def draw_status(status="--", vad="--", mute="off", stt=0.0, fa=0.0, session_id="", turn=0):
@@ -63,7 +86,8 @@ def draw_status(status="--", vad="--", mute="off", stt=0.0, fa=0.0, session_id="
     if stt > 0:
         timing = f"  |  STT {stt:.2f}s, 1st-audio {fa:.2f}s"
     session_str = f"  |  turn {turn}" if turn > 0 else ""
-    line = f"  [{status}]{mute_str}{vad_str}{session_str}{timing}  [SPACE:talk M:mute S:snark L:model Q:quit]"
+    # No key hints: Stage 8 removed the keyboard hook — every control lives on the dashboard.
+    line = f"  [{status}]{mute_str}{vad_str}{session_str}{timing}  [controls: dashboard]"
 
     sys.stdout.write(f"\r\033[K{line}")
     sys.stdout.flush()
@@ -653,6 +677,10 @@ def main():
     # Location context (Stage 5 Part 5): resolve home/jeep/unknown once from the local
     # network fingerprint. Fail-soft to "unknown" (neutral); the voice override can flip it.
     session.location = resolve_location()
+    # Hands-free is location-aware (Stage 8): on at home (quiet, hands busy), off in the Jeep
+    # (road noise would trigger it constantly). The dashboard toggle overrides this any time,
+    # and a location change re-applies the default.
+    session.vad_enabled = vad_default_for_location(session.location)
 
     # Opening-tone modulation: nudge Echo warmer/lighter based on how the LAST session
     # ended (Ib-Lite episodic mood_signal). Applied only on the first exchange.
@@ -686,8 +714,6 @@ def main():
     mute_toggle_event = threading.Event()
     space_pressed = threading.Event()
     space_released = threading.Event()
-    swap_requested = threading.Event()   # L key — request a mid-chat model swap
-    picker_active = threading.Event()    # set while the swap picker owns the terminal
 
     # ── Web dashboard / control panel (Stage 7) ──
     # EchoControl bridges the loop and the dashboard: the web drives Echo through the SAME
@@ -699,23 +725,44 @@ def main():
         space_pressed=space_pressed, space_released=space_released,
         mute_toggle_event=mute_toggle_event, quit_event=quit_event,
         model_name=llm.model_name, speaker_active=speaker_embedder is not None,
+        vad_available=vad.available, list_models=llm.list_models,
     )
     _webui = start_webui(control)
-    print(f"  Dashboard: {_webui[1]}" if _webui else "  Dashboard: off (echo_webui.json / flask / port)")
-
-    # Q double-press tracking
-    q_first_press_time = 0.0
-    q_warned = False
+    if _webui:
+        print(f"  Dashboard: {_webui[1]}   <- ALL controls live here (no keyboard commands)")
+    else:
+        # Stage 8 removed the global keyboard hook, so the dashboard is the ONLY control surface.
+        # If it didn't start there is no way to talk, mute, or sign off — say so loudly rather
+        # than let Michael discover it by pressing keys that no longer do anything.
+        print("  Dashboard: OFF — WARNING: Echo has NO control surface (no keyboard commands "
+              "since Stage 8). Fix echo_webui.json / flask / port 7862. Ctrl+C to quit.")
 
     # ── VAD audio callback ──
     vad_buffer = []
+
+    def vad_active() -> bool:
+        """Hands-free listening right now: engine present AND enabled for this session.
+
+        Read live on every audio callback (never cached) so the dashboard toggle and location
+        changes take effect immediately — the same reason effective snark is recomputed per turn.
+        """
+        return vad.available and session.vad_enabled
 
     def audio_vad_callback(indata, frames, time_info, status):
         if not sm.can_record:
             return
         recorder._buffer.append(indata.copy())
 
-        if vad.available and sm.state == State.LISTENING:
+        # Capture must start when RECORDING starts — not when LISTENING did. While idle we keep
+        # only a short pre-roll and drop the rest. Before 2026-07-15 the whole idle period was
+        # captured, so pressing Talk replayed everything said since the last turn: press-speak-
+        # release looked silent, and the NEXT press answered the PREVIOUS sentence. The pre-roll
+        # is deliberately KEPT on the way into RECORDING so VAD never clips the speech onset
+        # (it only fires ~3 frames / 90ms in). See tasks/lessons.md 2026-07-15.
+        if sm.state == State.LISTENING:
+            trim_to_preroll(recorder._buffer)
+
+        if vad_active() and sm.state == State.LISTENING:
             mono = indata[:, 0] if indata.ndim > 1 else indata.flatten()
             vad_buffer.extend(mono)
             while len(vad_buffer) >= FRAME_SIZE:
@@ -724,7 +771,7 @@ def main():
                 if vad.process_frame(frame) == "speech_start":
                     speech_start_event.set()
 
-        elif vad.available and sm.state == State.RECORDING:
+        elif vad_active() and sm.state == State.RECORDING:
             mono = indata[:, 0] if indata.ndim > 1 else indata.flatten()
             vad_buffer.extend(mono)
             while len(vad_buffer) >= FRAME_SIZE:
@@ -733,48 +780,13 @@ def main():
                 if vad.process_frame(frame) == "speech_end":
                     speech_end_event.set()
 
-    # ── Keyboard handlers ──
-    def on_key(event):
-        nonlocal q_first_press_time, q_warned
-        # While the model picker owns the terminal, ignore all keys so the user's typed
-        # filter/number goes to input() and doesn't trip PTT/mute/etc.
-        if picker_active.is_set():
-            return
-        if event.event_type != keyboard.KEY_DOWN:
-            if event.name == "space":
-                space_released.set()
-            return
-
-        if event.name == "q":
-            if not session.has_turns:
-                # No conversation yet — exit immediately
-                quit_event.set()
-            else:
-                now = time.monotonic()
-                if q_warned and (now - q_first_press_time) < 3.0:
-                    # Second Q within 3 seconds — force exit
-                    quit_event.set()
-                else:
-                    # First Q — warn
-                    q_first_press_time = now
-                    q_warned = True
-                    clear_status_line()
-                    print("  [Press Q again within 3s to exit without saving session]")
-        elif event.name == "m":
-            control.toggle_mute()
-        elif event.name == "s":
-            # Toggle Maximum Snark Mode (locks snark to 10 for the session).
-            control.toggle_max_snark()
-            clear_status_line()
-            state = "ON (snark locked to 10)" if session.max_snark else "off (back to daily)"
-            print(f"  [Maximum Snark Mode: {state}]")
-        elif event.name == "l":
-            # Request a mid-chat model swap; serviced at the next LISTENING tick.
-            swap_requested.set()
-        elif event.name == "space":
-            space_pressed.set()
-
-    keyboard.hook(on_key)
+    # Stage 8: there is NO keyboard handler any more. `keyboard.hook` was a system-wide low-level
+    # hook — it fired for every keystroke on the machine regardless of focus, so typing anywhere
+    # (the dashboard's enroll box, Claude Code in a Windows Terminal tab, Discord) drove Echo:
+    # 'm' muted, 'q' quit, 'l' wedged the loop in a blocking model picker. Gating it on console
+    # focus narrowed but could not close that hole (Windows Terminal tabs are indistinguishable
+    # from each other). Every control now lives on the dashboard — one input surface, no hook.
+    # See tasks/lessons.md 2026-07-15.
 
     # ── Start audio stream ──
     import sounddevice as sd
@@ -784,33 +796,26 @@ def main():
     )
     audio_stream.start()
 
-    def do_model_swap():
-        """Mid-chat hot-swap: pause the mic, run the filter-picker, swap voice + gate model.
+    def do_model_swap(new_model: str):
+        """Mid-chat hot-swap to an explicitly chosen model. Called ONLY from the main loop.
 
         Conversation history is preserved (plain message dicts), so the new model continues the
         SAME chat. The new model JIT-loads in LM Studio, so the first reply after a swap may pause.
+
+        The dashboard only ever sets `control.pending_model` (a string); the swap itself happens
+        here, on the main thread, between turns. That keeps EchoControl's "never touches the
+        pipeline" invariant AND means no swap can ever land mid-generation. It also replaces the
+        old L-key picker, whose blocking input() wedged the whole loop (tasks/lessons.md 2026-07-15).
         """
-        picker_active.set()
-        try:
-            audio_stream.stop()
-        except Exception:
-            pass
+        if not new_model or new_model == llm.model_name:
+            return
         clear_status_line()
-        print("\n  ── Swap model (keeps this conversation) ──")
-        new_model = llm.pick_model_interactive()
-        if new_model and new_model != llm.model_name:
-            llm.set_model(new_model)
-            ib.set_model(new_model)   # keep the significance gate in sync with the voice
-            config["last_model"] = new_model
-            save_config(config)
-            print(f"  [Now using {new_model} — first reply may pause while LM Studio loads it]")
-        else:
-            print(f"  [Model unchanged — staying on {llm.model_name}]")
-        try:
-            audio_stream.start()
-        except Exception:
-            pass
-        picker_active.clear()
+        llm.set_model(new_model)
+        ib.set_model(new_model)   # keep the significance gate in sync with the voice
+        config["last_model"] = new_model
+        save_config(config)
+        control.set_model_name(new_model)
+        print(f"  [Now using {new_model} — first reply may pause while LM Studio loads it]")
 
     signoff_triggered = False
 
@@ -819,7 +824,7 @@ def main():
             # ── LISTENING ──
             if sm.state == State.LISTENING:
                 draw_status(
-                    status="LISTENING", vad="active" if vad.available else "off",
+                    status="LISTENING", vad="active" if vad_active() else "off",
                     mute="ON" if control.muted else "off",
                     stt=last_stt, fa=last_fa, turn=session.turn_count,
                 )
@@ -831,15 +836,13 @@ def main():
                 recorder._buffer = []
                 vad_buffer.clear()
                 vad.reset()
-                q_warned = False  # reset Q warning on new listening cycle
 
                 while not sm.is_shutdown:
                     if quit_event.is_set():
                         sm.transition(State.SHUTDOWN)
                         break
-                    if swap_requested.is_set():
-                        swap_requested.clear()
-                        do_model_swap()
+                    if control.pending_model:
+                        do_model_swap(control.take_pending_model())
                         break  # re-enter LISTENING cleanly (resets buffers, redraws status)
                     if mute_toggle_event.is_set():
                         mute_toggle_event.clear()
@@ -847,7 +850,7 @@ def main():
                             sm.transition(State.MUTED)
                             break
                         draw_status(
-                            status="LISTENING", vad="active" if vad.available else "off",
+                            status="LISTENING", vad="active" if vad_active() else "off",
                             mute="ON" if control.muted else "off",
                             stt=last_stt, fa=last_fa, turn=session.turn_count,
                         )
@@ -864,7 +867,7 @@ def main():
             # ── RECORDING ──
             elif sm.state == State.RECORDING:
                 draw_status(
-                    status="RECORDING...", vad="active" if vad.available else "off",
+                    status="RECORDING...", vad="active" if vad_active() else "off",
                     mute="off", stt=last_stt, fa=last_fa, turn=session.turn_count,
                 )
 
@@ -959,7 +962,6 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        keyboard.unhook_all()
         try:
             audio_stream.stop()
             audio_stream.close()

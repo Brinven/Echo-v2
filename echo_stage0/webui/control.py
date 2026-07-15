@@ -19,6 +19,8 @@ from pathlib import Path
 
 import httpx
 
+from session import vad_default_for_location
+
 # logs/stage0_log.jsonl lives at the repo root (see logger.LOG_FILE).
 _LOG_FILE = Path(__file__).resolve().parent.parent.parent / "logs" / "stage0_log.jsonl"
 
@@ -26,6 +28,7 @@ _LOG_FILE = Path(__file__).resolve().parent.parent.parent / "logs" / "stage0_log
 _DEFAULT_LM_URL = "http://127.0.0.1:1234/v1/models"
 _DEFAULT_KOKORO_URL = "http://127.0.0.1:8880/health"
 _HEALTH_CACHE_S = 5.0
+_MODELS_CACHE_S = 10.0
 
 
 class EchoControl:
@@ -43,6 +46,8 @@ class EchoControl:
         quit_event,
         model_name: str = "",
         speaker_active: bool = False,
+        vad_available: bool = False,
+        list_models=None,
         lm_studio_url: str = _DEFAULT_LM_URL,
         kokoro_url: str = _DEFAULT_KOKORO_URL,
     ):
@@ -55,10 +60,18 @@ class EchoControl:
         self._quit = quit_event
         self._model_name = model_name
         self.speaker_active = speaker_active      # True only if the ECAPA embedder loaded
+        self.vad_available = vad_available        # True only if webrtcvad imported
+        # A read-only lister, NOT the LLMClient: the dashboard must never mutate the pipeline.
+        # A chosen model is parked in pending_model and the MAIN LOOP performs the swap between
+        # turns (see main.do_model_swap), so a swap can never land mid-generation.
+        self._list_models = list_models
+        self.pending_model: str | None = None
+        self._models_cache: list[str] = []
+        self._models_ts = 0.0
         self._lm_url = lm_studio_url
         self._kokoro_url = kokoro_url
 
-        # Mute lives here now so keyboard AND web share one source of truth.
+        # Mute lives here so every control surface shares one source of truth.
         self._muted = False
         self._health_cache: dict | None = None
         self._health_ts = 0.0
@@ -94,8 +107,57 @@ class EchoControl:
     def set_location(self, loc: str) -> str | None:
         if loc in ("home", "jeep"):
             self.session.location = loc
+            # Hands-free follows the room: re-apply the location default on every change, so
+            # "we're in the Jeep" also stops VAD listening to road noise. Michael can still
+            # toggle it back explicitly afterwards.
+            self.session.vad_enabled = vad_default_for_location(loc)
             return loc
         return None
+
+    def set_vad(self, enabled: bool) -> bool:
+        """Explicit hands-free override. No-op unless the engine actually loaded."""
+        if not self.vad_available:
+            return False
+        self.session.vad_enabled = bool(enabled)
+        return self.session.vad_enabled
+
+    def toggle_vad(self) -> bool:
+        if not self.vad_available:
+            return False
+        return self.set_vad(not self.session.vad_enabled)
+
+    # ── model swap (parked for the main loop; never applied here) ──
+    def models(self) -> list[str]:
+        """Live model ids from LM Studio, cached ~10s (the dropdown may be opened repeatedly)."""
+        if self._list_models is None:
+            return []
+        now = time.monotonic()
+        if self._models_cache and (now - self._models_ts) < _MODELS_CACHE_S:
+            return self._models_cache
+        try:
+            self._models_cache = list(self._list_models() or [])
+            self._models_ts = now
+        except Exception:
+            return self._models_cache
+        return self._models_cache
+
+    def request_model(self, name: str) -> bool:
+        """Park a model swap for the main loop. Rejects anything LM Studio doesn't list."""
+        name = (name or "").strip()
+        if not name or name not in self.models():
+            return False
+        self.pending_model = name
+        return True
+
+    def take_pending_model(self) -> str | None:
+        """Main loop only: claim the pending swap (read + clear)."""
+        name = self.pending_model
+        self.pending_model = None
+        return name
+
+    def set_model_name(self, name: str) -> None:
+        """Main loop only: report the model actually in use, after a completed swap."""
+        self._model_name = name
 
     def set_web_search(self, off: bool) -> bool:
         self.session.web_search_off = bool(off)
@@ -148,6 +210,9 @@ class EchoControl:
             "max_snark": s.max_snark,
             "location": s.location,
             "web_search_off": s.web_search_off,
+            "vad_available": self.vad_available,
+            "vad_enabled": bool(self.vad_available and s.vad_enabled),
+            "pending_model": self.pending_model,
             "enrolling": s.enrolling,
             "turn_count": s.turn_count,
             "exchange_count": s.exchange_count,

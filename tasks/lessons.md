@@ -75,3 +75,75 @@ compiler), which aborted the whole `pip install -r requirements.txt` (pip rolls 
 Made it optional in requirements.txt — PTT (SPACE) is the default input and `vad.py` degrades to
 PTT-only gracefully, so it's zero functional loss. For hands-free VAD later: `pip install
 webrtcvad-wheels` (drop-in, same `import webrtcvad`).
+
+## 2026-07-15: "Enrollment doesn't work" — typing a NAME into the dashboard ran Echo's hotkeys
+
+**Problem**: Michael typed his name into the Stage 7 dashboard's enroll box, hit Enroll, then held
+Talk (both the web button and SPACE) and spoke. Nothing happened — no "hearing me" indication, no
+reaction on release. The dashboard kept polling fine and Kokoro's console showed activity.
+
+**Root cause**: `main.py` installs `keyboard.hook(on_key)` — a SYSTEM-WIDE low-level Windows hook.
+It fires for every keystroke on the machine regardless of focus. That was harmless while Echo was
+CLI-only, but Stage 7 added a **text input** (the enroll name box), and the two designs are
+fundamentally incompatible: typing "Michae**l**" ran Echo's hotkeys. The `m` toggled mute (→ MUTED),
+and the `l` set `swap_requested`. `swap_requested` is only serviced from the LISTENING branch, so it
+sat pending until Michael clicked Mute to undo the mute — at which point LISTENING re-entered, saw
+the stale flag, and called `do_model_swap()`, which:
+  1. `picker_active.set()` → `on_key` early-returns, so **SPACE was dead**,
+  2. `audio_stream.stop()` → **the mic was off**,
+  3. blocked on `input()` (llm.py:216) → **the main loop stopped polling**, so the dashboard's
+     Talk button was dead too (it only sets `space_pressed`; nothing was reading it).
+Diagnosed with `py-spy dump --pid <pid>`: MainThread parked in `_pick_interactive` → `input()`.
+The Kokoro "activity" was a red herring — the dashboard's health tile polls `:8880/health` every 5s.
+
+**Fix — attempt 1 (focus gate, SUPERSEDED same day)**: `console_focus.py` gated `on_key` on Echo's
+console having focus. It fixed the enroll box, but its documented limitation bit within minutes:
+Windows Terminal tabs are indistinguishable from each other, and Claude Code lives in a WT tab — so
+typing there still drove Echo. I had called that blast radius "far smaller"; for someone who works
+in WT tabs all day it was a *daily* problem, not an edge case. **Lesson: a limitation you can only
+describe in prose, rather than test, is a limitation you have not really accepted.**
+
+**Fix — attempt 2 (Stage 8, shipped)**: **remove the global hook entirely.** Every control moved to
+the dashboard (Talk/Mute/Max Snark/Hands-free/Home/Jeep/Web/Model/Stop/Enroll/Threshold), `keyboard`
+dropped out of requirements.txt with a do-not-reintroduce note, and `console_focus.py` +
+`test_console_focus.py` were **deleted** rather than left as a dead module. Ctrl+C still stops it.
+The mid-chat model swap became a UI dropdown that PARKS the choice for the main loop, which deletes
+the blocking `input()` from the runtime path for good.
+
+**Rule**: A system-wide input hook and an app text box cannot coexist — and scoping the hook is a
+patch, not a fix. When a project grows a second input surface (GUI/web/touch), the global hook is
+the thing to *delete*, not narrow. One surface, one owner of input.
+
+**Prevention**: `keyboard` is out of requirements.txt with the reason inline. The startup line now
+warns LOUDLY if the dashboard fails to start, because it is the only control surface.
+
+**Bonus bug found by the rewrite** — "hit talk, speak, nothing; hit talk again → Echo answers the
+FIRST sentence." `audio_vad_callback` appends whenever `sm.can_record`, which is true in **LISTENING
+as well as RECORDING**, and the buffer was only cleared on LISTENING *entry*. So a press captured
+everything since the last turn. Fixed with `trim_to_preroll`: while idle, keep only a rolling 0.5s
+pre-roll (kept, not cleared, entering RECORDING — VAD fires ~90ms late and a press always lands
+slightly late). **Rule: "when does capture START?" must have exactly one answer.** A state machine
+where the recording buffer fills in a state called LISTENING is a latent bug waiting for a UI that
+presses the button differently than you did.
+
+**Windows gotchas found while fixing this (all measured, not assumed):**
+- **`GetConsoleWindow()` == `GetForegroundWindow()` only works in classic conhost.** With Windows
+  Terminal as the default terminal (this machine), GetConsoleWindow returns a window owned by our
+  own `cmd.exe` while the foreground window is `windowsterminal.exe` — the HWNDs never match.
+- **Windows Terminal is NOT an ancestor process.** It attaches over ConPTY rather than spawning
+  the shell, so walking the process tree does not find it. An ancestry-only fallback = dead keyboard.
+- **`WT_SESSION` is NOT a reliable "am I in WT?" signal.** It isn't set when a .bat is double-clicked
+  from Explorer: Windows hands the already-running console off to WT, and env vars can't be injected
+  into a live process. Verified both launch paths; the fix keys off the foreground *exe name* instead.
+- **`IsWindowVisible(GetConsoleWindow())` returned True under WT**, so "hidden window" is not a
+  usable ConPTY signal either.
+- The ancestry walk must **stop at `explorer.exe`** — otherwise double-clicking the .bat makes the
+  desktop (and every folder window) count as "console focused".
+
+**Bug autopsy**: this bug was *born* the moment Stage 7 shipped a text input; nothing about Stage 6
+enrollment was broken. The class to watch: **a new UI surface silently invalidating a global
+assumption made by an older layer.** Worth asking, on every new surface: what did the old layer
+assume about exclusivity that is no longer true?
+
+**Tooling**: for a hung/unresponsive loop, `py-spy dump --pid <pid>` gives every thread's stack of a
+LIVE process without restarting or instrumenting it. It found this in one shot after theory failed.

@@ -75,6 +75,8 @@
   .chip{background:var(--panel2); border:1px solid var(--edge); border-radius:999px; padding:5px 12px; font-size:15px;}
   .enroll-row{display:flex; gap:10px;}
   input[type=text]{flex:1; font-size:17px; padding:12px; border-radius:10px; background:#0a1017; color:var(--ink); border:1px solid var(--edge);}
+  select{flex:1; min-width:0; font-family:inherit; font-size:15px; padding:12px; border-radius:10px;
+    background:#0a1017; color:var(--ink); border:1px solid var(--edge); min-height:48px;}
   .banner{background:#3a2f10; border:1px solid var(--warn); color:#ffdf9e; border-radius:10px; padding:10px 12px; margin-bottom:10px; display:flex; align-items:center; gap:10px;}
   .banner button{min-height:40px; padding:6px 12px; font-size:14px;}
   .scorebar{display:flex; align-items:center; gap:10px; margin-top:8px;}
@@ -123,10 +125,15 @@
           <button id="talk">🎤 Hold to Talk</button>
           <button id="mute">Mute</button>
           <button id="max">Max Snark</button>
+          <button id="vad">Hands-free: —</button>
           <button id="loc-home">🏠 Home</button>
           <button id="loc-jeep">🚙 Jeep</button>
           <button id="web">Web: —</button>
           <button id="quit" class="danger">■ Stop Echo</button>
+        </div>
+        <div class="snark-row" style="margin-top:12px;">
+          <span class="lbl" style="color:var(--dim);">MODEL</span>
+          <select id="model-sel"></select>
         </div>
         <div class="snark-row" style="margin-top:12px;">
           <span class="lbl" style="color:var(--dim);">SNARK</span>
@@ -194,7 +201,17 @@ function renderState(s){
   $("loc-jeep").className = s.location==="jeep" ? "on":"";
   $("web").textContent = "Web: " + (s.web_search_off ? "OFF" : "ON");
   $("web").className = s.web_search_off ? "" : "on";
-  $("mutehint").textContent = s.muted ? "Mic muted — tap Mute to resume." : "";
+
+  // hands-free (VAD). Disabled outright when webrtcvad isn't installed — nothing to turn on.
+  const vb = $("vad");
+  vb.disabled = !s.vad_available;
+  vb.textContent = !s.vad_available ? "Hands-free: n/a" : ("Hands-free: " + (s.vad_enabled ? "ON" : "off"));
+  vb.className = s.vad_enabled ? "on" : "";
+
+  let hint = s.muted ? "Mic muted — tap Mute to resume." : "";
+  if(!hint && s.pending_model) hint = "Switching model after this turn…";
+  if(!hint && s.vad_enabled) hint = "Hands-free: just talk, or hold Talk to be deliberate.";
+  $("mutehint").textContent = hint;
 
   // snark slider (don't fight the user while dragging)
   if(document.activeElement !== $("snark-range")){ $("snark-range").value = s.snark; $("snark-val").textContent = s.snark; }
@@ -277,6 +294,7 @@ talk.addEventListener("pointercancel", release);
 
 $("mute").onclick = ()=> api("/api/mute","POST").then(loopState);
 $("max").onclick  = ()=> api("/api/snark","POST",{max:true}).then(loopState);
+$("vad").onclick  = ()=> api("/api/vad","POST",{}).then(loopState);
 $("loc-home").onclick = ()=> api("/api/location","POST",{location:"home"}).then(loopState);
 $("loc-jeep").onclick = ()=> api("/api/location","POST",{location:"jeep"}).then(loopState);
 $("web").onclick = ()=>{
@@ -297,6 +315,26 @@ $("enroll-btn").onclick = ()=>{
   api("/api/enroll","POST",{name:n}).then(()=>{ $("enroll-name").value=""; loopState(); });
 };
 $("enroll-name").addEventListener("keydown", e=>{ if(e.key==="Enter") $("enroll-btn").click(); });
+
+// ── model dropdown (replaces the old L-key picker, whose blocking input() wedged the loop) ──
+// Populated once and refreshed only when the list is stale, so we don't fight an open <select>.
+let modelsLoaded = false;
+async function loadModels(){
+  const r = await api("/api/models");
+  if(!r || !r.models) return;
+  const sel = $("model-sel");
+  if(document.activeElement === sel) return;   // don't yank the list open under the user
+  sel.innerHTML = r.models.map(m=>`<option value="${esc(m)}"${m===r.current?" selected":""}>${esc(m)}</option>`).join("");
+  if(!r.models.length) sel.innerHTML = `<option>(LM Studio unreachable)</option>`;
+  modelsLoaded = true;
+}
+$("model-sel").addEventListener("focus", ()=>{ if(!modelsLoaded) loadModels(); });
+$("model-sel").onchange = e=>{
+  // The swap is applied by the main loop between turns — never mid-generation.
+  api("/api/model","POST",{name:e.target.value}).then(loopState);
+};
+loadModels();
+setInterval(()=>{ if(!modelsLoaded) loadModels(); }, 15000);
 </script>
 </body>
 </html>

@@ -159,6 +159,11 @@ class Session:
         # location: 'home'/'jeep'/'unknown', resolved once at session start (like snark)
         # from the local network fingerprint; the voice override can flip it mid-session.
         self.location = "unknown"
+        # vad_enabled: hands-free listening for THIS session. Defaults from location
+        # (see vad_default_for_location) and is re-applied whenever location changes; the
+        # dashboard toggle overrides it at any time. The engine's availability is separate —
+        # vad.available is False without webrtcvad, and no flag can turn that on.
+        self.vad_enabled = False
         # current_speaker: who is talking THIS turn (speaker_id voice fingerprint). Defaults
         # to Michael (the pre-Stage-6 assumption, preserved when speaker awareness is off);
         # recomputed each real turn when active. "unknown" when a voice matches no profile.
@@ -354,3 +359,18 @@ def save_config(config: dict) -> None:
     except OSError as e:
         # Non-fatal: a failed save just means we won't remember the choice next time.
         print(f"  [Could not save config.json: {e}]")
+
+
+def vad_default_for_location(location: str) -> bool:
+    """Should hands-free listening be ON for this location? (Stage 8)
+
+    home    -> True   : desk/downtime, quiet, hands often busy — this is the point of VAD.
+    jeep    -> False  : road noise, radio and passengers would trigger it constantly; the
+                        Talk button stays deliberate while driving.
+    unknown -> True   : follows the Stage 5 Part 5 rule that `unknown` fails to NEUTRAL/home
+                        behavior, never jeep. Being hands-free when uncertain is the neutral
+                        default; it is also recoverable in one tap, unlike a wrong jeep guess.
+
+    Michael can override any of this from the dashboard at any time.
+    """
+    return location != "jeep"

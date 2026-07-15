@@ -1,5 +1,71 @@
 # Echo — tasks/todo.md
 
+## ▶ ACTIVE (2026-07-15) — Stage 8: dashboard-only control (kill the global keyboard) + VAD
+
+The focus gate (below) fixed the enroll box but left the documented WT limitation: Claude Code lives
+in a Windows Terminal tab, so typing there still drove Echo. Michael's call: **remove keyboard
+commands entirely — every control becomes a UI button** (and later moves to a small Steam-Deck-style
+button pad). That deletes the whole bug class instead of narrowing it.
+
+### Decisions locked (Michael, 2026-07-15)
+- **Talk stays PRESS-AND-HOLD** (he chose this over a toggle). So the "responds one tap late" bug
+  must be fixed in the AUDIO BUFFER, not by changing the gesture.
+- **VAD is location-aware**: home/unknown → hands-free; jeep → manual (road noise). UI toggle overrides.
+  Follows the Stage 5 rule: `unknown` → NEUTRAL/home behavior, never jeep.
+- **Model swap → UI dropdown**, which also removes the blocking `input()` from the runtime path for
+  good (that call is what wedged Echo this morning).
+- **Global keyboard hook removed entirely**; `console_focus.py` + its test deleted (obsolete, not
+  left as a dead module). `keyboard` drops out of requirements.txt.
+
+### Checklist — DONE (offline + live-HTTP verified here)
+- [x] **M1** Removed `import keyboard` / `on_key` / `keyboard.hook` / `unhook_all`, the Q double-press,
+      `swap_requested`, `picker_active`, the key hints in `draw_status` + the module docstring.
+      Deleted `console_focus.py` + `test_console_focus.py`. `keyboard` out of requirements.txt with a
+      do-not-reintroduce note. Dashboard-off now prints a LOUD "no control surface" warning.
+- [x] **M2** `trim_to_preroll()` (module-level, unit-tested): idle LISTENING keeps a rolling 0.5s
+      pre-roll instead of the whole idle period. Fixes "responds one tap late". Pre-roll KEPT into
+      RECORDING (VAD fires ~90ms late; a press lands late too).
+- [x] **M3** VAD: `webrtcvad-wheels==2.0.14` (torch still 2.13.0+cpu ✅; tone→speech_start verified).
+      `session.vad_enabled` + `vad_default_for_location` (home/unknown on, jeep off) + `vad_active()`
+      read live per callback + dashboard toggle (disabled + `ok:false` when the engine is absent).
+- [x] **M4** Model swap via UI: `/api/models` + `/api/model` → `control.request_model()` parks
+      `pending_model`; the MAIN LOOP claims it at the next LISTENING tick. EchoControl's "never
+      touches the pipeline" invariant kept (read-only `list_models` callable, not `llm`). Unknown
+      models rejected; LM-Studio-down is fail-soft.
+- [x] **M5** `test_audio_capture.py` (18 asserts) + `test_webui.py` extended to 16 checks; live HTTP
+      smoke on a real socket (VAD toggle, location→VAD default, PTT Events, park+claim swap) all PASS.
+      Docs: CLAUDE.md ⚠ Stage 8 section (replaced the now-deleted focus-gate section) + lessons.md.
+
+### Open for Michael — the live pass this all blocked
+1. Launch Echo, open the dashboard. **No keyboard commands exist now** — typing in Claude Code (or
+   anywhere) can no longer touch Echo.
+2. Enroll Michael + a guest; tune `match_threshold`; confirm the guardrail (guest turn writes no fact).
+3. Sanity-check the capture fix: hold Talk, speak, release → Echo should answer THAT sentence, first try.
+4. Try hands-free (should default ON at home) and the model dropdown.
+5. Later: Steam-Deck-style button pad maps to the same POST endpoints (/api/talk/press|release, etc.).
+
+## ✅ FIXED (2026-07-15) — "enrollment doesn't work": the enroll box ran Echo's hotkeys
+
+Michael's first real GUI live-pass attempt failed: typed a name, hit Enroll, held Talk (web button
+AND SPACE), spoke — nothing. **Not an enrollment bug at all.** `keyboard.hook` is system-wide, so
+typing "Michae**l**" into the dashboard's text box toggled mute (`m`) and fired the blocking model
+picker (`l`), which stopped the mic, killed SPACE, and wedged the main loop in `input()`. The
+dashboard's Talk button only sets an Event — nothing was left polling it. Found with
+`py-spy dump --pid` after code reading failed. Autopsy: `tasks/lessons.md` 2026-07-15.
+
+- [x] `console_focus.py` — `console_focused()` / `detection_available()`; pure injectable `_decide()`.
+- [x] `main.py` — gate `on_key` on console focus (KEY_DOWN only; SPACE release always honored);
+      honest `Keys:` startup line.
+- [x] `test_console_focus.py` — 28 offline asserts incl. the exact regression (focused browser inert),
+      the explorer.exe ancestry stop, and fail-open when there's no console.
+- [x] Verified END-TO-END on the real machine, both launch paths (Windows Terminal via shell, and the
+      true double-click via Explorer): console focused → keys fire; Notepad focused → keys inert.
+- [x] Docs: CLAUDE.md ⚠ "Hotkeys are focus-gated" + lessons.md autopsy + requirements.txt py-spy note.
+
+**Still open for Michael — the combined live-pass this bug blocked:** launch Echo → dashboard →
+enroll Michael (+ a guest) → tune `match_threshold` → confirm the guardrail (a guest turn writes no
+fact, Michael's still does). Nothing was lost: the wedged session recorded zero turns.
+
 ## ▶ ACTIVE (2026-07-15) — Stage 7: GUI Dashboard / Control Panel (v1)
 
 Michael pivoted to the GUI so the touchscreen becomes Echo's control surface AND the speaker
