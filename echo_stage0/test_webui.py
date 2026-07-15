@@ -26,9 +26,11 @@ from speaker_id import SpeakerRegistry
 
 
 _FAKE_MODELS = ["test/model-x", "test/model-y", "vendor/big-12b@q4"]
+_FAKE_VOICES = ["af_heart", "bf_emma", "am_michael"]
 
 
-def _mk(speaker_active=True, registry=True, vad_available=True, list_models=None):
+def _mk(speaker_active=True, registry=True, vad_available=True, list_models=None,
+        list_voices=None):
     session = Session(model="m", stt_backend="b", tts_backend="t", user_name="Michael")
     sm = StateMachine()
     # IMPORTANT: give the registry a TEMP path so save() (via /api/threshold) never touches
@@ -46,6 +48,8 @@ def _mk(speaker_active=True, registry=True, vad_available=True, list_models=None
         model_name="test/model-x", speaker_active=speaker_active,
         vad_available=vad_available,
         list_models=list_models if list_models is not None else (lambda: list(_FAKE_MODELS)),
+        list_voices=list_voices if list_voices is not None else (lambda: list(_FAKE_VOICES)),
+        voice_name="af_heart",
     )
     return control, session, sm, reg, events
 
@@ -174,6 +178,29 @@ def run() -> None:
     assert cl3.get("/api/models").get_json()["models"] == []
     assert cl3.post("/api/model", json={"name": "test/model-y"}).get_json()["ok"] is False
     print("  [PASS] /api/models fail-soft when LM Studio is down")
+
+    # 8g. Voice: same park-for-the-main-loop contract as the model (never mid-sentence).
+    voices = client.get("/api/voices").get_json()
+    assert voices["voices"] == _FAKE_VOICES and voices["current"] == "af_heart"
+    r = client.post("/api/voice", json={"name": "bf_emma"}).get_json()
+    assert r["ok"] is True and control.pending_voice == "bf_emma"
+    st = client.get("/api/state").get_json()
+    # Still the OLD voice until the main loop applies it — the swap must not land on the web thread.
+    assert st["voice"] == "af_heart" and st["pending_voice"] == "bf_emma"
+    assert control.take_pending_voice() == "bf_emma" and control.pending_voice is None
+    control.set_voice_name("bf_emma")
+    assert client.get("/api/state").get_json()["voice"] == "bf_emma"
+    assert control.take_pending_voice() is None
+    r = client.post("/api/voice", json={"name": "not_a_voice"}).get_json()
+    assert r["ok"] is False and control.pending_voice is None
+    print("  [PASS] /api/voices lists; /api/voice parks a valid voice and rejects unknown ones")
+
+    # 8h. Kokoro unreachable → empty list, no exception into the route.
+    c4, _, _, _, _ = _mk(list_voices=lambda: (_ for _ in ()).throw(RuntimeError("Kokoro down")))
+    cl4 = create_app(c4).test_client()
+    assert cl4.get("/api/voices").get_json()["voices"] == []
+    assert cl4.post("/api/voice", json={"name": "bf_emma"}).get_json()["ok"] is False
+    print("  [PASS] /api/voices fail-soft when Kokoro is down")
 
     # 9. health() returns a dict; probes stubbed (no network).
     real_get = ctrlmod.httpx.get

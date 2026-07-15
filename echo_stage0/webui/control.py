@@ -48,6 +48,8 @@ class EchoControl:
         speaker_active: bool = False,
         vad_available: bool = False,
         list_models=None,
+        list_voices=None,
+        voice_name: str = "",
         lm_studio_url: str = _DEFAULT_LM_URL,
         kokoro_url: str = _DEFAULT_KOKORO_URL,
     ):
@@ -61,13 +63,19 @@ class EchoControl:
         self._model_name = model_name
         self.speaker_active = speaker_active      # True only if the ECAPA embedder loaded
         self.vad_available = vad_available        # True only if webrtcvad imported
-        # A read-only lister, NOT the LLMClient: the dashboard must never mutate the pipeline.
-        # A chosen model is parked in pending_model and the MAIN LOOP performs the swap between
-        # turns (see main.do_model_swap), so a swap can never land mid-generation.
+        # Read-only listers, NOT the LLMClient/TTSEngine: the dashboard must never mutate the
+        # pipeline. A chosen model/voice is parked in pending_* and the MAIN LOOP applies it
+        # between turns (main.do_model_swap / do_voice_swap), so a swap can never land
+        # mid-generation — which for the voice would mean changing voice mid-sentence.
         self._list_models = list_models
+        self._list_voices = list_voices
         self.pending_model: str | None = None
+        self.pending_voice: str | None = None
+        self._voice_name = voice_name
         self._models_cache: list[str] = []
         self._models_ts = 0.0
+        self._voices_cache: list[str] = []
+        self._voices_ts = 0.0
         self._lm_url = lm_studio_url
         self._kokoro_url = kokoro_url
 
@@ -159,6 +167,39 @@ class EchoControl:
         """Main loop only: report the model actually in use, after a completed swap."""
         self._model_name = name
 
+    # ── Kokoro voice (same park-for-the-main-loop pattern as the model) ──
+    def voices(self) -> list[str]:
+        """Voice ids Kokoro can serve, cached ~10s. Empty if TTS/Kokoro is unreachable."""
+        if self._list_voices is None:
+            return []
+        now = time.monotonic()
+        if self._voices_cache and (now - self._voices_ts) < _MODELS_CACHE_S:
+            return self._voices_cache
+        try:
+            self._voices_cache = list(self._list_voices() or [])
+            self._voices_ts = now
+        except Exception:
+            return self._voices_cache
+        return self._voices_cache
+
+    def request_voice(self, name: str) -> bool:
+        """Park a voice change for the main loop. Rejects anything Kokoro doesn't serve."""
+        name = (name or "").strip()
+        if not name or name not in self.voices():
+            return False
+        self.pending_voice = name
+        return True
+
+    def take_pending_voice(self) -> str | None:
+        """Main loop only: claim the pending voice change (read + clear)."""
+        name = self.pending_voice
+        self.pending_voice = None
+        return name
+
+    def set_voice_name(self, name: str) -> None:
+        """Main loop only: report the voice actually in use, after a completed change."""
+        self._voice_name = name
+
     def set_web_search(self, off: bool) -> bool:
         self.session.web_search_off = bool(off)
         return self.session.web_search_off
@@ -213,6 +254,8 @@ class EchoControl:
             "vad_available": self.vad_available,
             "vad_enabled": bool(self.vad_available and s.vad_enabled),
             "pending_model": self.pending_model,
+            "voice": self._voice_name,
+            "pending_voice": self.pending_voice,
             "enrolling": s.enrolling,
             "turn_count": s.turn_count,
             "exchange_count": s.exchange_count,

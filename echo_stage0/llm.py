@@ -88,8 +88,6 @@ _MAX_BUFFER_TOKENS = 150  # flush if no sentence boundary found after this many 
 class LLMClient:
     """LLM client for LM Studio via OpenAI-compatible API."""
 
-    _PICK_DISPLAY_CAP = 30  # don't dump the whole (huge) model list unfiltered
-
     def __init__(self, pinned: str | None = None, last_model: str | None = None):
         self._client = OpenAI(
             base_url=LM_STUDIO_URL,
@@ -131,106 +129,61 @@ class LLMClient:
         }
 
     def _detect_model(self, pinned: str | None = None, last_model: str | None = None):
-        """Select the model at startup.
+        """Select the model at startup. NEVER interactive (Stage 8.1).
+
+        Startup used to open a filter-picker that blocked on input(), so launching Echo meant
+        run the .bat → wait → hit Enter → only then did the dashboard come up. The dashboard now
+        has a model dropdown, so startup just resolves a model and gets out of the way.
 
         Resolution order:
-          1. A pin (the `pinned` arg, else the ECHO_MODEL env var) — name or substring.
-             A unique match is used silently; an ambiguous one opens the picker pre-filtered.
-          2. Exactly one model loaded → use it.
-          3. Otherwise → interactive filter-picker, defaulting to `last_model` on Enter.
+          1. A pin (the `pinned` arg, else the ECHO_MODEL env var) — exact id or unique substring.
+             Ambiguous or no match → warn and fall through (never prompt).
+          2. `last_model` from config.json, if LM Studio still has it. This is the normal path.
+          3. Exactly one model available → use it.
+          4. Nothing resolves → None. Echo starts anyway; Michael picks in the dashboard dropdown
+             (which re-queries LM Studio every ~10s, so loading a model there is enough).
+
+        A model is deliberately NOT auto-picked from a multi-model list: LM Studio lists every
+        model it can serve — including embedding models — so "just take the first" would be a
+        coin flip, not a default.
         """
         try:
             models = self._client.models.list()
             available = [m.id for m in models.data]
         except APIConnectionError:
+            # Nothing works without LM Studio, and the dropdown would be empty too — this one
+            # stays a hard, actionable stop. start-echo.bat pre-flights it as well.
             print(
                 "\n ERROR: LM Studio not detected at localhost:1234.\n"
                 "  Please start LM Studio and load a model.\n"
             )
             sys.exit(1)
 
-        if not available:
-            print(
-                "\n ERROR: LM Studio is running but no models are loaded.\n"
-                "  Please load a model in LM Studio.\n"
-            )
-            sys.exit(1)
-
-        last = last_model if (last_model and last_model in available) else None
         pin = pinned or os.environ.get("ECHO_MODEL")
-
-        chosen: str | None = None
         if pin:
             resolved, matches = _resolve_pin(pin, available)
             if resolved:
                 self._model = resolved
                 print(f"  LLM: {self._model} via LM Studio (pinned '{pin}')")
                 return
-            if matches:
-                print(f"\n  '{pin}' matches {len(matches)} models — narrow it down:")
-                chosen = self._pick_interactive(available, last, initial_filter=pin)
-            else:
-                print(f"\n  No model matches '{pin}'. Pick from the full list:")
-                chosen = self._pick_interactive(available, last)
-        elif len(available) == 1:
-            self._model = available[0]
-            print(f"  LLM: {self._model} via LM Studio")
+            print(f"  LLM: pin '{pin}' matched {len(matches)} models — ignoring it."
+                  if matches else f"  LLM: nothing matches pin '{pin}' — ignoring it.")
+
+        if last_model and last_model in available:
+            self._model = last_model
+            print(f"  LLM: {self._model} via LM Studio (last used)")
             return
-        else:
-            chosen = self._pick_interactive(available, last)
 
-        # The picker only returns None on explicit 'cancel'; at startup we must end with a model.
-        while chosen is None:
-            print("  (a model is required to start)")
-            chosen = self._pick_interactive(available, last)
-        self._model = chosen
-        print(f"  LLM: {self._model} via LM Studio")
+        if len(available) == 1:
+            self._model = available[0]
+            print(f"  LLM: {self._model} via LM Studio (only one available)")
+            return
 
-    def _pick_interactive(
-        self, available: list[str], last_model: str | None = None, initial_filter: str = "",
-    ) -> str | None:
-        """Filter-picker REPL. Type a substring to narrow, a number to pick, Enter to reuse
-        `last_model`, or 'cancel' to abort (returns None). The current/last model is marked '*'.
-        """
-        flt = initial_filter.strip()
-        while True:
-            matches = [m for m in available if flt.lower() in m.lower()] if flt else available
-            if not matches:
-                print(f"  (no model matches '{flt}' — filter cleared)")
-                flt = ""
-                continue
-
-            if not flt and len(matches) > self._PICK_DISPLAY_CAP:
-                print(f"  {len(matches)} models loaded — type a filter to narrow "
-                      f"(e.g. 'qat', '12b', 'e4b', 'heretic').")
-            else:
-                print(f"  Models matching '{flt}':" if flt else "  Available models:")
-                for i, name in enumerate(matches, 1):
-                    mark = "*" if name == last_model else " "
-                    print(f"   {mark}{i:3}. {name}")
-
-            hint = []
-            if last_model:
-                hint.append(f"Enter=last({last_model})")
-            hint += ["number=pick", "text=filter", "cancel=abort"]
-            choice = input(f"  [{' | '.join(hint)}] > ").strip()
-
-            if not choice:
-                if last_model:
-                    return last_model
-                if len(matches) == 1:
-                    return matches[0]
-                print("  Type a filter or a number.")
-                continue
-            if choice.lower() == "cancel":
-                return None
-            if choice.isdigit():
-                idx = int(choice)
-                if 1 <= idx <= len(matches):
-                    return matches[idx - 1]
-                print(f"  Out of range (1-{len(matches)}).")
-                continue
-            flt = choice  # anything else is a new filter
+        self._model = None
+        if last_model:
+            print(f"  LLM: last-used model is not available ({last_model})")
+        print("  LLM: NO MODEL SELECTED — load one in LM Studio, then pick it in the dashboard "
+              "dropdown. Echo can't reply until then.")
 
     def set_model(self, name: str) -> None:
         """Swap the active model in place (mid-chat hot-swap). The gate is swapped separately."""
@@ -244,14 +197,7 @@ class LLMClient:
             logger.error(f"could not list models: {e}")
             return []
 
-    def pick_model_interactive(self) -> str | None:
-        """Re-query LM Studio and run the filter-picker (current model offered as 'last').
-        Returns the chosen id, or None if cancelled / nothing available."""
-        available = self.list_models()
-        if not available:
-            print("  [No models available from LM Studio]")
-            return None
-        return self._pick_interactive(available, last_model=self._model)
+
 
     def generate(
         self, user_text: str, history: list[dict] | None = None,

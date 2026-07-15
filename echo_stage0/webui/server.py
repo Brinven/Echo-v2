@@ -125,6 +125,18 @@ def create_app(control):
         ok = control.request_model(data.get("name", ""))
         return jsonify(ok=ok, pending_model=control.pending_model)
 
+    # ── Kokoro voice (Stage 8.1) ──
+    @app.get("/api/voices")
+    def api_voices():
+        return jsonify(voices=control.voices(), current=control.snapshot()["voice"])
+
+    @app.post("/api/voice")
+    def api_voice():
+        """Park a voice change; applied between turns so it never changes mid-sentence."""
+        data = request.get_json(silent=True) or {}
+        ok = control.request_voice(data.get("name", ""))
+        return jsonify(ok=ok, pending_voice=control.pending_voice)
+
     @app.post("/api/enroll")
     def api_enroll():
         data = request.get_json(silent=True) or {}

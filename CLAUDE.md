@@ -766,5 +766,38 @@ This preserves EchoControl's **"never touches the pipeline"** invariant — it g
 and `ib.set_model` (gate) and preserves history.
 
 ### New/changed JSONL + state
-`/api/state` gained `vad_available`, `vad_enabled`, `pending_model`. `vad_mode` still logs engine
-availability (`webrtcvad`/`ptt-only`), not the session toggle.
+`/api/state` gained `vad_available`, `vad_enabled`, `pending_model`, `voice`, `pending_voice`.
+`vad_mode` still logs engine availability (`webrtcvad`/`ptt-only`), not the session toggle.
+
+---
+
+## ⚠ Stage 8.1 (2026-07-15) — launch without a prompt, no first-turn stall, voice picker
+
+- **Startup is never interactive.** `llm._detect_model` resolves: pin (`--model`/`ECHO_MODEL`, exact
+  or unique substring) → **`config.json last_model`** (the normal path) → the only model if exactly
+  one → else **None**. `_pick_interactive` / `pick_model_interactive` are **deleted** — there is now
+  **no `input()` anywhere in the runtime path**. Don't add one back; the dashboard dropdown is the UI.
+- **Echo starts with NO model rather than blocking.** LM Studio unreachable is still a hard exit
+  (the dropdown would be empty too, and start-echo.bat pre-flights it), but "nothing loaded" or
+  "last_model is gone" just warns; the dashboard comes up and the dropdown re-queries every ~10s, so
+  loading a model in LM Studio and picking it is enough. `run_streaming_pipeline` bails early with an
+  explicit notice when `llm.model_name` is falsy — **after** the command short-circuits (those and
+  enrollment need no LLM) and **before** the exchange counter advances or a search is spent.
+  A model is deliberately NOT auto-picked from a multi-model list: LM Studio lists embedding models
+  too, so "take the first" is a coin flip.
+- **The first-turn stall was the Ib-Lite embedder.** all-MiniLM-L6-v2 was a lazy singleton loading on
+  the first `encode()` — i.e. during turn 1's memory retrieval. Measured 2026-07-15: **first encode
+  10.2s, every one after 0.004s** (weights were already cached — it's the load, not a download).
+  `embedder.preload()` now runs at startup next to the other engine loads. STT/TTS were already
+  eager (STT init 0.9s, first transcribe 0.1s; TTS warms + keep-alives), so this was the whole stall.
+- **Kokoro voice picker.** `TTSEngine(voice=...)` — the voice is per-instance and swappable;
+  `VOICE = "af_heart"` is only the fallback. Persisted as `voice` in **config.json** (like
+  `last_model`). `tts.list_voices()` hits `:8880/v1/audio/voices` (67 available live). Same
+  park-for-the-main-loop contract as the model: `/api/voice` sets `control.pending_voice` and
+  `main.do_voice_swap` applies it between turns — **never mid-reply**, because synthesis is
+  chunk-by-chunk and a live swap would change voice mid-sentence. So a new voice is heard on her
+  NEXT reply, which is also the audition loop.
+- **Harness note:** `test_personality.py` / `test_hold_20turn.py` used to get their model from the
+  picker; they now pass `last_model=load_config().get("last_model")` (ECHO_MODEL/--model still win).
+  Side benefit: `test_personality.py` now runs **fully unattended, offline + live** — it previously
+  died on `EOFError` at the picker without a TTY.

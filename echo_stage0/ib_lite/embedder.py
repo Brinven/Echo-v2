@@ -10,6 +10,8 @@ The model is a module-level singleton, loaded once on first encode() (~1-2s),
 then reused for the life of the process.
 """
 
+import time
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
@@ -24,6 +26,19 @@ def _get_model() -> SentenceTransformer:
     if _model is None:
         _model = SentenceTransformer(MODEL_NAME, device="cpu")
     return _model
+
+
+def preload() -> float:
+    """Load the model NOW and return seconds taken. Call at startup, never from the hot path.
+
+    Loading lazily on the first encode() cost ~10s on the FIRST turn of every session — Michael
+    saw it as Echo "waiting, then downloading" the moment he first spoke (measured 2026-07-15:
+    first encode 10.2s, every one after 0.004s). The weights are already cached; it's the load
+    that's slow, so paying it during startup (next to the other engine loads) makes it invisible.
+    """
+    t0 = time.monotonic()
+    _get_model().encode("warmup", normalize_embeddings=True)
+    return time.monotonic() - t0
 
 
 def encode(text: str) -> bytes:

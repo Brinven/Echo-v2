@@ -26,7 +26,7 @@ except Exception:
     pass
 
 from persona import build_system_prompt, ANTI_DRIFT_ANCHOR
-from session import SESSIONS_DIR
+from session import SESSIONS_DIR, load_config
 from test_personality import BANNED, _banned_hits
 
 # Pinned snark so the run is reproducible (level 6 = dry observations surface).
@@ -77,7 +77,10 @@ def run_live() -> bool:
     from llm import LLMClient
 
     try:
-        llm = LLMClient()
+        # Stage 8.1: startup is no longer interactive, so a bare LLMClient() would resolve to NO
+        # model when LM Studio lists several. Default to config.json's last_model (ECHO_MODEL /
+        # --model still win inside _detect_model) so this harness runs unattended.
+        llm = LLMClient(last_model=load_config().get("last_model"))
     except SystemExit:
         print("  [SKIP] LM Studio not available — load the model to run the 20-turn hold.")
         return True

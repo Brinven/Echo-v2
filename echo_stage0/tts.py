@@ -20,24 +20,49 @@ from openai import OpenAI, APIConnectionError
 
 
 KOKORO_URL = "http://127.0.0.1:8880/v1"
-VOICE = "af_heart"
+VOICE = "af_heart"          # default only — the live voice is per-instance (self._voice)
 KEEPALIVE_INTERVAL_S = 8  # ping every 8 seconds
 
 
 class TTSEngine:
-    """Text-to-speech engine using Kokoro-FastAPI with keep-warm."""
+    """Text-to-speech engine using Kokoro-FastAPI with keep-warm.
 
-    def __init__(self):
+    The voice is per-instance and swappable at runtime (Stage 8.1): Michael picks it from the
+    dashboard so he can audition Kokoro's ~50 voices without editing code. It is passed in from
+    config.json (`voice`) so the choice survives a restart; VOICE above is just the fallback.
+    """
+
+    def __init__(self, voice: str | None = None):
         self._client = OpenAI(
             base_url=KOKORO_URL,
             api_key="not-needed",
         )
+        self._voice = voice or VOICE
         self._last_call = 0.0
         self._lock = threading.Lock()
         self._keepalive_thread = None
         self._running = False
         self._verify_and_warm()
         self._start_keepalive()
+
+    @property
+    def voice(self) -> str:
+        return self._voice
+
+    def set_voice(self, name: str) -> None:
+        """Swap the voice in place. Called ONLY from the main loop, between turns — a swap
+        mid-reply would change voice mid-sentence (synthesis is chunk-by-chunk)."""
+        self._voice = name
+
+    def list_voices(self) -> list[str]:
+        """Voice ids Kokoro can serve (empty list on any error — never raises)."""
+        try:
+            resp = requests.get("http://127.0.0.1:8880/v1/audio/voices", timeout=3)
+            resp.raise_for_status()
+            data = resp.json()
+            return sorted(data.get("voices", []))
+        except (requests.RequestException, ValueError):
+            return []
 
     def _verify_and_warm(self):
         """Check server is reachable and warm up the model."""
@@ -51,7 +76,7 @@ class TTSEngine:
             )
             sys.exit(1)
 
-        print(f"  TTS: kokoro-fastapi (voice: {VOICE}) -- warming up...", end="", flush=True)
+        print(f"  TTS: kokoro-fastapi (voice: {self._voice}) -- warming up...", end="", flush=True)
         self._do_warmup()
         print(" done")
 
@@ -59,7 +84,7 @@ class TTSEngine:
         """Fire a tiny synthesis to keep the model warm."""
         try:
             self._client.audio.speech.create(
-                model="kokoro", voice=VOICE, input=".", response_format="wav",
+                model="kokoro", voice=self._voice, input=".", response_format="wav",
             )
             self._last_call = time.monotonic()
         except Exception:
@@ -94,7 +119,7 @@ class TTSEngine:
             try:
                 response = self._client.audio.speech.create(
                     model="kokoro",
-                    voice=VOICE,
+                    voice=self._voice,
                     input=text,
                     response_format="wav",
                     speed=1.15,

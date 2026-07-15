@@ -128,9 +128,13 @@ def run_live_checks() -> bool:
     """
     print("\n── LIVE checks (LM Studio) ──")
     from llm import LLMClient  # imported here so offline tier needs no LM Studio
+    from session import load_config
 
+    # Stage 8.1: startup is no longer interactive, so a bare LLMClient() would resolve to NO
+    # model when LM Studio lists several. Default to config.json's last_model (ECHO_MODEL /
+    # --model still win inside _detect_model) so this harness runs unattended.
     try:
-        llm = LLMClient()
+        llm = LLMClient(last_model=load_config().get("last_model"))
     except SystemExit:
         print("  [SKIP] LM Studio not available — run with the model loaded to exercise live checks.")
         return True

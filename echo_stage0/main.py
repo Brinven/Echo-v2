@@ -45,6 +45,7 @@ from session import (
 )
 from summarizer import generate_summary
 from ib_lite import IbLite
+from ib_lite.embedder import preload as embedder_preload
 from persona import build_system_prompt, mood_opener
 from persona_check import SelfCheckRunner, SELF_CHECK_EVERY, RECENT_K
 from daily_state import get_daily_snark_level
@@ -357,6 +358,16 @@ def run_streaming_pipeline(
     # audio_q is started HERE (once) so the filler and the streamed answer share one
     # playback cycle: the filler enqueues first (plays while the search runs), then the
     # answer chunks follow it seamlessly.
+    # ── No model? Say so and stop here (Stage 8.1) ──
+    # Startup no longer blocks on a picker, so Echo can be up with no model resolved (LM Studio
+    # had nothing loaded, or config.json's last_model is gone). Everything above still works —
+    # the command short-circuits and enrollment need no LLM — but a real turn does. Bail BEFORE
+    # advancing the exchange counter or spending a search, and don't fake a persona reply out of
+    # an error: an explicit notice beats a silent fallback.
+    if not llm.model_name:
+        print("  [No model selected — pick one in the dashboard dropdown (LM Studio must have it loaded)]")
+        return None
+
     search_block = ""
     search_meta = {
         "web_search_triggered": False, "search_prefilter_hit": False,
@@ -609,11 +620,24 @@ def main():
     if llm.model_name and config.get("last_model") != llm.model_name:
         config["last_model"] = llm.model_name
         save_config(config)
-    tts = TTSEngine()
+    # Voice persists in config.json (like last_model), so a dashboard pick survives a restart.
+    tts = TTSEngine(voice=config.get("voice"))
     vad = VADDetector()
 
     # Initialize memory (Ib-Lite: local SQLite, Core + Policy injected at session start)
     ib = IbLite(llm.model_name)
+
+    # Preload the Ib-Lite embedder (Stage 8.1). all-MiniLM-L6-v2 is a lazy singleton that used to
+    # load on the FIRST encode() — i.e. during the first turn's memory retrieval — stalling Echo
+    # ~10s the moment Michael first spoke. Weights are cached; it's the load that's slow. Pay it
+    # here, alongside the other engine loads, where a couple of seconds is invisible.
+    if ib.available:
+        print("  Memory: loading embedder...", end="", flush=True)
+        try:
+            print(f" done ({embedder_preload():.1f}s)")
+        except Exception as e:
+            # Non-fatal: retrieval would just pay the cost on the first turn, as it used to.
+            print(f" skipped ({e})")
 
     # Initialize web search (Stage 5 Part 3). build_provider returns None if disabled in
     # echo_search.json. healthy() is a warn-don't-block probe — search is optional.
@@ -726,6 +750,7 @@ def main():
         mute_toggle_event=mute_toggle_event, quit_event=quit_event,
         model_name=llm.model_name, speaker_active=speaker_embedder is not None,
         vad_available=vad.available, list_models=llm.list_models,
+        list_voices=tts.list_voices, voice_name=tts.voice,
     )
     _webui = start_webui(control)
     if _webui:
@@ -817,6 +842,22 @@ def main():
         control.set_model_name(new_model)
         print(f"  [Now using {new_model} — first reply may pause while LM Studio loads it]")
 
+    def do_voice_swap(new_voice: str):
+        """Change Kokoro's voice. Called ONLY from the main loop, between turns.
+
+        Parked by the dashboard (control.pending_voice) rather than applied on the web thread:
+        synthesis is chunk-by-chunk, so a mid-reply change would switch voice mid-sentence.
+        Persisted to config.json so an audition Michael likes survives the next launch.
+        """
+        if not new_voice or new_voice == tts.voice:
+            return
+        clear_status_line()
+        tts.set_voice(new_voice)
+        config["voice"] = new_voice
+        save_config(config)
+        control.set_voice_name(new_voice)
+        print(f"  [Voice: {new_voice}]")
+
     signoff_triggered = False
 
     try:
@@ -844,6 +885,9 @@ def main():
                     if control.pending_model:
                         do_model_swap(control.take_pending_model())
                         break  # re-enter LISTENING cleanly (resets buffers, redraws status)
+                    if control.pending_voice:
+                        do_voice_swap(control.take_pending_voice())
+                        break
                     if mute_toggle_event.is_set():
                         mute_toggle_event.clear()
                         if control.muted:

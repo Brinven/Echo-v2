@@ -132,8 +132,12 @@
           <button id="quit" class="danger">■ Stop Echo</button>
         </div>
         <div class="snark-row" style="margin-top:12px;">
-          <span class="lbl" style="color:var(--dim);">MODEL</span>
+          <span class="lbl" style="color:var(--dim); min-width:52px;">MODEL</span>
           <select id="model-sel"></select>
+        </div>
+        <div class="snark-row" style="margin-top:10px;">
+          <span class="lbl" style="color:var(--dim); min-width:52px;">VOICE</span>
+          <select id="voice-sel"></select>
         </div>
         <div class="snark-row" style="margin-top:12px;">
           <span class="lbl" style="color:var(--dim);">SNARK</span>
@@ -209,7 +213,9 @@ function renderState(s){
   vb.className = s.vad_enabled ? "on" : "";
 
   let hint = s.muted ? "Mic muted — tap Mute to resume." : "";
+  if(!hint && !s.model) hint = "No model selected — load one in LM Studio, then pick it above.";
   if(!hint && s.pending_model) hint = "Switching model after this turn…";
+  if(!hint && s.pending_voice) hint = "New voice starts on her next reply…";
   if(!hint && s.vad_enabled) hint = "Hands-free: just talk, or hold Talk to be deliberate.";
   $("mutehint").textContent = hint;
 
@@ -334,7 +340,28 @@ $("model-sel").onchange = e=>{
   api("/api/model","POST",{name:e.target.value}).then(loopState);
 };
 loadModels();
+// Keep retrying while empty: Michael may load a model in LM Studio AFTER Echo started.
 setInterval(()=>{ if(!modelsLoaded) loadModels(); }, 15000);
+
+// ── Kokoro voice dropdown (audition voices without editing code) ──
+let voicesLoaded = false;
+async function loadVoices(){
+  const r = await api("/api/voices");
+  if(!r || !r.voices) return;
+  const sel = $("voice-sel");
+  if(document.activeElement === sel) return;
+  sel.innerHTML = r.voices.map(v=>`<option value="${esc(v)}"${v===r.current?" selected":""}>${esc(v)}</option>`).join("");
+  if(!r.voices.length) sel.innerHTML = `<option>(Kokoro unreachable)</option>`;
+  else voicesLoaded = true;
+}
+$("voice-sel").addEventListener("focus", ()=>{ if(!voicesLoaded) loadVoices(); });
+$("voice-sel").onchange = e=>{
+  // Applied between turns: synthesis is chunk-by-chunk, so a live swap would change
+  // voice mid-sentence. You'll hear the new voice on her next reply.
+  api("/api/voice","POST",{name:e.target.value}).then(loopState);
+};
+loadVoices();
+setInterval(()=>{ if(!voicesLoaded) loadVoices(); }, 15000);
 </script>
 </body>
 </html>

@@ -1,5 +1,31 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-15) — Stage 8.1: launch tweaks after Michael's first good live session
+
+VAD + the dashboard tested well ("works great" — he has a mic with a touch sensor for hardware mute,
+so Echo just listens and answers). Four follow-ups from that session:
+
+- [x] **No startup model prompt.** Run the .bat → wait → hit Enter → *then* the dashboard loaded.
+      Now: pin → `config.json last_model` → the only model → else None. `_pick_interactive` /
+      `pick_model_interactive` **deleted**; **no `input()` left in the runtime path at all**.
+- [x] **Start with NO model rather than blocking.** last_model gone / nothing loaded → warn, bring up
+      the UI, dropdown re-queries LM Studio every ~10s. Pipeline bails with an explicit notice
+      (after the command short-circuits, before the exchange counter/search). LM Studio *unreachable*
+      is still a hard exit. Never auto-picks from a multi-model list (LM Studio lists embedders too).
+- [x] **Killed the first-turn stall.** It wasn't a download: Ib-Lite's MiniLM was a lazy singleton —
+      **first `encode()` 10.2s, subsequent 0.004s**, paid during turn 1's retrieval. `embedder.preload()`
+      now runs at startup. STT/TTS were already eager (measured), so that was the whole thing.
+- [x] **Kokoro voice picker** (67 voices live). Per-instance voice, persisted as `voice` in config.json,
+      same park-for-the-main-loop contract as the model → applied between turns, heard on her next
+      reply (never mid-sentence). `/api/voices` + `/api/voice`, dropdown in the UI.
+- [x] Harnesses fixed for the picker removal (`last_model` default). Bonus: `test_personality.py`
+      now runs **fully unattended, offline + live** (it used to die on `EOFError` without a TTY).
+- [x] Verified: full offline suite + live HTTP smoke (voice park/apply/reject, no-model state) + a
+      real `test_personality.py` live run (exit 0).
+
+**Possible later:** a "preview voice" button (speak a sample without a turn) — for now, picking a
+voice and talking IS the audition loop.
+
 ## ▶ ACTIVE (2026-07-15) — Stage 8: dashboard-only control (kill the global keyboard) + VAD
 
 The focus gate (below) fixed the enroll box but left the documented WT limitation: Claude Code lives
