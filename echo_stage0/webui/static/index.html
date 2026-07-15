@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Echo — Control Panel</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#141b24; --panel2:#1b2430; --edge:#2a3644;
+    --ink:#eef4fb; --dim:#9fb0c3; --accent:#4aa3ff; --good:#3fb950; --bad:#f85149;
+    --warn:#f0a020; --echo:#7ee0c0; --you:#ffd479;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{
+    background:var(--bg); color:var(--ink); font-size:18px;
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+    padding:12px; display:flex; flex-direction:column; gap:12px; overflow:hidden;
+  }
+  .row{display:flex; gap:12px;}
+  .grow{flex:1;}
+  .card{background:var(--panel); border:1px solid var(--edge); border-radius:14px; padding:14px;}
+  h2{margin:0 0 10px; font-size:15px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim);}
+
+  /* header */
+  header{display:flex; align-items:center; gap:16px; padding:6px 4px;}
+  .brand{font-size:30px; font-weight:800; letter-spacing:.04em;}
+  .pill{padding:8px 16px; border-radius:999px; font-weight:700; font-size:16px; background:var(--panel2); border:1px solid var(--edge);}
+  .pill.LISTENING{color:#8ec6ff; border-color:#2f5f8f;}
+  .pill.RECORDING{color:#ffcf7a; border-color:#8a6a25;}
+  .pill.PROCESSING{color:#c9a6ff; border-color:#5b4a8a;}
+  .pill.SPEAKING{color:#8ff0cf; border-color:#2f7f66;}
+  .pill.MUTED{color:#9fb0c3;}
+  .hdr-meta{margin-left:auto; display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+  .tag{background:var(--panel2); border:1px solid var(--edge); border-radius:8px; padding:6px 12px; font-size:15px; color:var(--dim);}
+  .tag b{color:var(--ink);}
+
+  /* health */
+  .health{display:grid; grid-template-columns:repeat(4,1fr); gap:12px;}
+  .stat{display:flex; align-items:center; gap:12px; padding:14px; background:var(--panel2); border:1px solid var(--edge); border-radius:12px;}
+  .dot{width:14px; height:14px; border-radius:50%; background:var(--dim); flex:none; box-shadow:0 0 0 0 rgba(0,0,0,0);}
+  .dot.up{background:var(--good); box-shadow:0 0 10px var(--good);}
+  .dot.down{background:var(--bad); box-shadow:0 0 10px var(--bad);}
+  .stat .lbl{font-size:13px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em;}
+  .stat .val{font-size:19px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+
+  /* main */
+  main{display:grid; grid-template-columns:1.1fr 1fr; gap:12px; flex:1; min-height:0;}
+  .col{display:flex; flex-direction:column; gap:12px; min-height:0;}
+
+  #transcript{flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; min-height:0;}
+  .turn{padding:10px 12px; border-radius:10px; background:var(--panel2); line-height:1.35;}
+  .turn .who{font-weight:700; font-size:13px; text-transform:uppercase; letter-spacing:.05em; display:block; margin-bottom:2px;}
+  .turn.echo .who{color:var(--echo);}
+  .turn.you .who{color:var(--you);}
+  .empty{color:var(--dim); font-style:italic; padding:8px;}
+
+  /* controls */
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  button{font-family:inherit; font-size:17px; font-weight:700; color:var(--ink);
+    background:var(--panel2); border:1px solid var(--edge); border-radius:12px;
+    min-height:56px; padding:10px 14px; cursor:pointer; touch-action:manipulation; transition:background .1s,border-color .1s;}
+  button:active{background:#26313f;}
+  button.on{background:#123; border-color:var(--accent); color:#cfe6ff;}
+  button.danger{border-color:#5a2b2b; color:#ffb4ac;}
+  button.danger:active{background:#3a1f1f;}
+  #talk{grid-column:1 / -1; min-height:96px; font-size:24px; background:#16324a; border-color:#2f6fa0;}
+  #talk.holding{background:var(--accent); color:#04121f; border-color:var(--accent);}
+  .snark-row{display:flex; align-items:center; gap:12px;}
+  input[type=range]{flex:1; height:40px; accent-color:var(--accent);}
+  .val-badge{min-width:52px; text-align:center; font-weight:800; font-size:20px;}
+
+  /* speaker */
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; min-height:20px;}
+  .chip{background:var(--panel2); border:1px solid var(--edge); border-radius:999px; padding:5px 12px; font-size:15px;}
+  .enroll-row{display:flex; gap:10px;}
+  input[type=text]{flex:1; font-size:17px; padding:12px; border-radius:10px; background:#0a1017; color:var(--ink); border:1px solid var(--edge);}
+  .banner{background:#3a2f10; border:1px solid var(--warn); color:#ffdf9e; border-radius:10px; padding:10px 12px; margin-bottom:10px; display:flex; align-items:center; gap:10px;}
+  .banner button{min-height:40px; padding:6px 12px; font-size:14px;}
+  .scorebar{display:flex; align-items:center; gap:10px; margin-top:8px;}
+  .meter{flex:1; height:16px; background:#0a1017; border:1px solid var(--edge); border-radius:8px; overflow:hidden; position:relative;}
+  .meter .fill{height:100%; background:linear-gradient(90deg,#2f6fa0,#4aa3ff);}
+  .meter .mark{position:absolute; top:-3px; width:2px; height:22px; background:var(--warn);}
+  .scores{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
+  .sc{font-size:13px; padding:3px 8px; border-radius:6px; background:var(--panel2); border:1px solid var(--edge); color:var(--dim);}
+  .sc.hit{color:var(--good); border-color:#2f6f45;}
+  .placeholders{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .ph{padding:22px; text-align:center; color:var(--dim); background:repeating-linear-gradient(45deg,#121a24,#121a24 10px,#141d28 10px,#141d28 20px); border:1px dashed var(--edge); border-radius:12px; font-size:15px;}
+  .muted-note{color:var(--dim); font-size:14px; margin-top:6px;}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">ECHO</div>
+    <div id="state" class="pill">—</div>
+    <div class="hdr-meta">
+      <div class="tag">Speaker <b id="speaker">—</b></div>
+      <div class="tag">Snark <b id="snark">—</b></div>
+      <div class="tag">Where <b id="location">—</b></div>
+      <div class="tag">Turn <b id="turns">0</b></div>
+    </div>
+  </header>
+
+  <div class="health">
+    <div class="stat"><span id="d-lm" class="dot"></span><div><div class="lbl">LM Studio</div><div class="val" id="v-lm">—</div></div></div>
+    <div class="stat"><span id="d-ko" class="dot"></span><div><div class="lbl">Kokoro TTS</div><div class="val" id="v-ko">—</div></div></div>
+    <div class="stat"><span class="dot up"></span><div><div class="lbl">Model</div><div class="val" id="v-model">—</div></div></div>
+    <div class="stat"><span class="dot up"></span><div><div class="lbl">Enrolled voices</div><div class="val" id="v-enrolled">—</div></div></div>
+  </div>
+
+  <main>
+    <div class="col">
+      <div class="card grow" style="display:flex; flex-direction:column; min-height:0;">
+        <h2>Conversation</h2>
+        <div id="transcript"><div class="empty">Press &amp; hold Talk to speak…</div></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <h2>Controls</h2>
+        <div class="grid2">
+          <button id="talk">🎤 Hold to Talk</button>
+          <button id="mute">Mute</button>
+          <button id="max">Max Snark</button>
+          <button id="loc-home">🏠 Home</button>
+          <button id="loc-jeep">🚙 Jeep</button>
+          <button id="web">Web: —</button>
+          <button id="quit" class="danger">■ Stop Echo</button>
+        </div>
+        <div class="snark-row" style="margin-top:12px;">
+          <span class="lbl" style="color:var(--dim);">SNARK</span>
+          <input id="snark-range" type="range" min="0" max="10" step="1" value="5">
+          <span id="snark-val" class="val-badge">5</span>
+        </div>
+        <div id="mutehint" class="muted-note"></div>
+      </div>
+
+      <div class="card">
+        <h2>Speaker ID</h2>
+        <div id="enroll-banner"></div>
+        <div class="chips" id="chips"><span class="empty">no voices enrolled</span></div>
+        <div class="enroll-row">
+          <input id="enroll-name" type="text" placeholder="Name (enroll Michael first)" autocomplete="off">
+          <button id="enroll-btn" style="flex:none;">Enroll</button>
+        </div>
+        <div class="scorebar">
+          <span class="lbl" style="color:var(--dim);">MATCH ≥</span>
+          <input id="thr-range" type="range" min="0" max="1" step="0.01" value="0.30">
+          <span id="thr-val" class="val-badge">0.30</span>
+        </div>
+        <div class="scorebar">
+          <span class="lbl" style="color:var(--dim); min-width:52px;">LAST</span>
+          <div class="meter"><div id="score-fill" class="fill" style="width:0%"></div><div id="thr-mark" class="mark" style="left:30%"></div></div>
+          <span id="score-val" class="val-badge">—</span>
+        </div>
+        <div id="scores" class="scores"></div>
+      </div>
+
+      <div class="placeholders">
+        <div class="ph">📷 Cameras<br><small>coming soon</small></div>
+        <div class="ph">📈 Sensors<br><small>coming soon</small></div>
+      </div>
+    </div>
+  </main>
+
+<script>
+const $ = id => document.getElementById(id);
+async function api(path, method="GET", body=null){
+  try{
+    const opt = {method, headers:{"Content-Type":"application/json"}};
+    if(body) opt.body = JSON.stringify(body);
+    const r = await fetch(path, opt);
+    return await r.json();
+  }catch(e){ return null; }
+}
+
+let thr = 0.30;
+
+function renderState(s){
+  if(!s) return;
+  $("state").textContent = s.muted ? "MUTED" : s.state;
+  $("state").className = "pill " + (s.muted ? "MUTED" : s.state);
+  $("speaker").textContent = s.current_speaker || "—";
+  $("snark").textContent = s.snark + (s.max_snark ? " (MAX)" : "");
+  $("location").textContent = s.location || "—";
+  $("turns").textContent = s.turn_count;
+  $("v-model").textContent = (s.model || "—").split("/").pop();
+  $("v-enrolled").textContent = s.speaker_active ? (s.enrolled.length + " · on") : "off";
+  $("mute").className = s.muted ? "on" : "";
+  $("mute").textContent = s.muted ? "Muted" : "Mute";
+  $("max").className = s.max_snark ? "on" : "";
+  $("loc-home").className = s.location==="home" ? "on":"";
+  $("loc-jeep").className = s.location==="jeep" ? "on":"";
+  $("web").textContent = "Web: " + (s.web_search_off ? "OFF" : "ON");
+  $("web").className = s.web_search_off ? "" : "on";
+  $("mutehint").textContent = s.muted ? "Mic muted — tap Mute to resume." : "";
+
+  // snark slider (don't fight the user while dragging)
+  if(document.activeElement !== $("snark-range")){ $("snark-range").value = s.snark; $("snark-val").textContent = s.snark; }
+
+  // threshold (server is source of truth)
+  if(s.match_threshold != null && document.activeElement !== $("thr-range")){
+    thr = s.match_threshold; $("thr-range").value = thr; $("thr-val").textContent = thr.toFixed(2);
+    $("thr-mark").style.left = (thr*100)+"%";
+  }
+
+  // enrolled chips
+  const chips = $("chips");
+  if(s.enrolled && s.enrolled.length){
+    chips.innerHTML = s.enrolled.map(n=>`<span class="chip">${esc(n)}</span>`).join("");
+  } else { chips.innerHTML = `<span class="empty">no voices enrolled</span>`; }
+  $("enroll-btn").disabled = !s.speaker_active;
+
+  // enrolling banner
+  const b = $("enroll-banner");
+  if(s.enrolling){
+    b.innerHTML = `<span>Enrolling <b>${esc(s.enrolling)}</b> — press &amp; hold Talk and say a sentence.</span><button id="cancel-enroll">Cancel</button>`;
+    $("cancel-enroll").onclick = ()=> api("/api/enroll","POST",{cancel:true});
+  } else b.innerHTML = "";
+
+  // live score
+  const sc = s.last_speaker_score;
+  if(sc != null){
+    $("score-val").textContent = sc.toFixed(2);
+    $("score-fill").style.width = Math.max(0,Math.min(100, sc*100))+"%";
+  }
+
+  // transcript
+  const t = $("transcript");
+  if(s.transcript && s.transcript.length){
+    const atBottom = t.scrollHeight - t.scrollTop - t.clientHeight < 60;
+    t.innerHTML = s.transcript.map(x=>{
+      const cls = x.speaker==="echo" ? "echo" : "you";
+      const who = x.speaker==="echo" ? "Echo" : (s.current_speaker||"You");
+      return `<div class="turn ${cls}"><span class="who">${esc(who)}</span>${esc(x.content)}</div>`;
+    }).join("");
+    if(atBottom) t.scrollTop = t.scrollHeight;
+  }
+}
+function esc(s){ return String(s??"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function renderHealth(h){
+  if(!h) return;
+  $("d-lm").className = "dot " + (h.lm_studio ? "up":"down");
+  $("v-lm").textContent = h.lm_studio ? "reachable" : "down";
+  $("d-ko").className = "dot " + (h.kokoro ? "up":"down");
+  $("v-ko").textContent = h.kokoro ? "reachable" : "down";
+}
+
+function renderScores(list){
+  if(!list) return;
+  $("scores").innerHTML = list.slice(-14).map(r=>{
+    const hit = r.known ? "hit":"";
+    const sv = (r.score==null)? "—" : Number(r.score).toFixed(2);
+    return `<span class="sc ${hit}">${esc(r.speaker||"?")} ${sv}</span>`;
+  }).join("");
+}
+
+// ── polling ──
+async function loopState(){ renderState(await api("/api/state")); }
+async function loopHealth(){ renderHealth(await api("/api/health")); }
+async function loopScores(){ renderScores(await api("/api/scores")); }
+loopState(); loopHealth(); loopScores();
+setInterval(loopState, 1000);
+setInterval(loopHealth, 5000);
+setInterval(loopScores, 2500);
+
+// ── controls ──
+const talk = $("talk");
+function press(e){ e.preventDefault(); talk.classList.add("holding"); api("/api/talk/press","POST"); }
+function release(e){ e.preventDefault(); talk.classList.remove("holding"); api("/api/talk/release","POST"); }
+talk.addEventListener("pointerdown", press);
+talk.addEventListener("pointerup", release);
+talk.addEventListener("pointerleave", e=>{ if(talk.classList.contains("holding")) release(e); });
+talk.addEventListener("pointercancel", release);
+
+$("mute").onclick = ()=> api("/api/mute","POST").then(loopState);
+$("max").onclick  = ()=> api("/api/snark","POST",{max:true}).then(loopState);
+$("loc-home").onclick = ()=> api("/api/location","POST",{location:"home"}).then(loopState);
+$("loc-jeep").onclick = ()=> api("/api/location","POST",{location:"jeep"}).then(loopState);
+$("web").onclick = ()=>{
+  const off = $("web").textContent.includes("ON");   // ON now -> turn OFF
+  api("/api/websearch","POST",{off}).then(loopState);
+};
+$("quit").onclick = ()=>{ if(confirm("Stop Echo? This ends the session.")) api("/api/quit","POST"); };
+
+$("snark-range").oninput = e=> $("snark-val").textContent = e.target.value;
+$("snark-range").onchange = e=> api("/api/snark","POST",{level:Number(e.target.value)}).then(loopState);
+
+$("thr-range").oninput = e=>{ $("thr-val").textContent = Number(e.target.value).toFixed(2); $("thr-mark").style.left=(e.target.value*100)+"%"; };
+$("thr-range").onchange = e=> api("/api/threshold","POST",{value:Number(e.target.value)}).then(loopState);
+
+$("enroll-btn").onclick = ()=>{
+  const n = $("enroll-name").value.trim();
+  if(!n) return;
+  api("/api/enroll","POST",{name:n}).then(()=>{ $("enroll-name").value=""; loopState(); });
+};
+$("enroll-name").addEventListener("keydown", e=>{ if(e.key==="Enter") $("enroll-btn").click(); });
+</script>
+</body>
+</html>

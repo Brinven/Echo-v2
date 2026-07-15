@@ -1,0 +1,7 @@
+{
+  "_comment": "GUI dashboard / control panel (Stage 7). enabled=false leaves Echo CLI-only. host 127.0.0.1 = this PC only (safe default). To open the dashboard on the 10\" touchscreen or another device, set host to this machine's LAN or Tailscale IP (e.g. 100.x.x.x) — SECURITY NOTE: binding off-loopback lets anyone on that network control Echo (talk, mute, quit), so only do it on a trusted/Tailscale network. port avoids 1234 (LM Studio), 8880 (Kokoro), 8888 (uvicorn app).",
+  "enabled": true,
+  "host": "127.0.0.1",
+  "port": 7862,
+  "poll_ms": 1000
+}

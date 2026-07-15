@@ -1,4 +1,4 @@
-# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 6 Part 1 Speaker Awareness built, 2026-07-15)
+# CLAUDE.md — Echo Project Architectural Context (Updated: Stage 7 GUI Dashboard built, 2026-07-15)
 
 This file exists to give Claude Code the decisions already made about the Echo
 project so that code written does not conflict with established architecture.
@@ -11,10 +11,12 @@ Do not override these decisions without explicit user instruction.
 > and tested (offline + live). The persona-model pick remains Gemma 4 12B QAT Hauhaucs;
 > the harness exists to re-audition smaller models against it. The build-stage table below
 > (Stage 0) is **historical build-order context**, not current status — the ⚠ sections
-> further down are the live architecture. **Stage 6 Part 1 (Speaker Awareness) is now BUILT
-> and offline-verified** — voice fingerprinting (SpeechBrain ECAPA) so Echo knows who's talking;
-> see the ⚠ section at the end. Two things remain Michael's: the live enrollment pass (which
-> includes the one-time SpeechBrain/torchaudio install) and sign-off on the speaker persona strings.
+> further down are the live architecture. **Stage 6 Part 1 (Speaker Awareness)** and **Stage 7
+> (GUI Dashboard / Control Panel)** are both now BUILT and offline-verified — see the two ⚠
+> sections at the end. Speaker deps are installed; the GUI (embedded Flask, touch control surface)
+> is the front end for the touchscreen AND the vehicle for the speaker live-pass. What remains is
+> Michael's **combined live pass** (launch Echo → open the dashboard → enroll voices + tune the
+> threshold by touch) and sign-off on the speaker persona strings.
 >
 > **Both Part-4 approval gates CLOSED (2026-07-15):** (1) `CALIBRATION_EXAMPLES` wording —
 > Michael signed off to KEEP the 3 examples as-is (the parroting was the marginal e4b, not the
@@ -657,6 +659,53 @@ NOT to play that for laughs) is a **deliberately deferred later Part** — none 
   `speaker_context` + prompt order + never-trim, session flags + the guardrail decision. All green;
   `py_compile` clean; `main.py`/`enroll.py` import clean; `build_embedder` verified to degrade to
   None without SpeechBrain.
-- **Michael-run (not yet done):** install SpeechBrain into `.venv` (torchaudio=CPU wheel),
-  `python enroll.py Michael` + a guest, live session to tune `match_threshold` and confirm the
-  guardrail (guest turn writes no fact; Michael's still does), and approve the two speaker strings.
+- **Deps installed 2026-07-15** (`speechbrain==1.1.0` + `torchaudio 2.11.0` into `.venv`; torch
+  2.13.0+cpu untouched). **Windows model-load fix shipped** (`da43553`): SpeechBrain default-symlinks
+  the model into `savedir` and Windows blocks symlinks (WinError 1314) → `ECAPAEmbedder` passes
+  `LocalStrategy.COPY`. ECAPA load + embed validated headless. The ~89 MB model is downloaded.
+- **Michael-run (not yet done — now folded into the Stage 7 GUI live-pass):** enroll Michael + a
+  guest and tune `match_threshold` **via the dashboard** (enroll button + live-score threshold
+  slider), confirm the guardrail (guest turn writes no fact; Michael's still does), and approve the
+  two speaker persona strings.
+
+---
+
+## ⚠ GUI Dashboard / Control Panel (Stage 7, 2026-07-15 — embedded Flask, touch surface)
+
+Echo now has a **web dashboard / control panel** (`echo_stage0/webui/`) so Michael can run and
+see her without the CLI — the front end for the 10" outdoor touchscreen (and eventual camera/
+sensor panels). It doubles as the vehicle for the Stage 6 speaker live-pass (enroll + threshold
+by touch). Plan: `~/.claude/plans/lexical-baking-hippo.md`.
+
+- **The dashboard is "another keyboard."** A small **Flask server runs in a daemon thread inside
+  the Echo process** (`webui/server.py start_webui`), behind **`webui/control.py EchoControl`** —
+  the bridge holding the live `session`/`sm`/`registry` + the SAME `threading.Event`s
+  (`space_pressed`/`space_released`/`mute_toggle_event`/`quit_event`) the keyboard `on_key` sets.
+  Web routes read `snapshot()`/`health()`/`recent_scores()` and write via the same flags/events the
+  keyboard does — **it never touches the STT/LLM/TTS pipeline.** Every mutation is a GIL-atomic
+  attribute/Event set (the `persona_correction` pattern); no new locks.
+- **`muted` moved onto `EchoControl`** so the keyboard AND the web share one source of truth
+  (`on_key`'s `m`/`s` handlers + the `MUTED`-state/`draw_status` reads now go through `control`).
+  New `session.last_speaker_score` (set in the speaker-ID block) feeds the GUI's live threshold readout.
+- **Fail-soft, additive** (like search/location): `echo_webui.json` (committed, non-personal;
+  `enabled`/`host`/`port 7862`/`poll_ms`). `start_webui` returns None + warns — never raises — if
+  disabled / flask missing / **port taken** (the port probe deliberately omits `SO_REUSEADDR`, which
+  on Windows would falsely report an in-use port as free). Werkzeug per-request logging is silenced
+  (the UI polls ~2×/sec). Disabled/failed → the voice loop runs exactly as before.
+- **UI = one self-contained `webui/static/index.html`** (inline CSS + vanilla JS polling; **no npm /
+  no build step**). Dark, high-contrast, ≥48px touch targets. Tiles: status + health (LM Studio /
+  Kokoro probes via `httpx`) + live transcript + controls (press-hold **Talk** PTT, Mute, Snark
+  slider + Max, Home/Jeep, Web on/off, Stop) + **speaker panel** (enrolled chips, Enroll name→button,
+  threshold slider with live score + recent scores) + Cameras/Sensors placeholders.
+- **NEW DEP `flask==3.1.3`** (pure-Python, no build step; installed into `.venv`, torch untouched).
+- **Security:** default `host 127.0.0.1` (this PC only). For the touchscreen/another device set `host`
+  to the LAN/Tailscale IP — **binding off-loopback lets anyone on that network control Echo** (talk,
+  mute, quit); only do it on a trusted/Tailscale network (same caution as the SearXNG :26 note).
+- **Tests:** `test_webui.py` — offline, no mic/model: Flask `test_client` asserts `/api/state` shape
+  and that each POST flips the right session flag / sets the right Event / updates the live threshold;
+  health probes stubbed; enroll refused when speaker awareness off; threshold no-op without a registry.
+  Real-bind smoke confirmed (serves the HTML, port-taken + disabled → None). All offline suites green.
+- **v1 out of scope (later):** camera/sensor panels (placeholders now), GUI model-swap (needs terminal
+  stdin), sign-off/"save & end" button, memory editing, control-API auth, WebSocket push, fully
+  headless operation. **Combined live-pass (Michael):** launch Echo → open the dashboard on the PC,
+  then the touchscreen (set `host`); enroll + tune + exercise controls.

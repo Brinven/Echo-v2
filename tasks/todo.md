@@ -1,6 +1,48 @@
 # Echo — tasks/todo.md
 
-## ▶ ACTIVE (2026-07-15) — Stage 6 Part 1: Speaker Awareness (voice-ID + attribution)
+## ▶ ACTIVE (2026-07-15) — Stage 7: GUI Dashboard / Control Panel (v1)
+
+Michael pivoted to the GUI so the touchscreen becomes Echo's control surface AND the speaker
+live-pass is done by touch (enroll button + threshold slider) instead of CLI. Plan:
+`~/.claude/plans/lexical-baking-hippo.md`. Full architecture: CLAUDE.md ⚠ "GUI Dashboard" section.
+
+### Decisions locked (this session)
+- **Embedded Flask server thread** inside the Echo process, behind an `EchoControl` bridge that
+  drives Echo through the SAME events/flags the keyboard sets — never the STT/LLM/TTS pipeline.
+- **Flask + vanilla HTML/JS** (no npm / no build step). Full **touch control surface** incl. a
+  press-hold Talk (PTT) button. Additive + fail-soft (disabled/flask-missing/port-taken → loop unaffected).
+
+### Build checklist — DONE (offline-verified here)
+- [x] **M1** `webui/control.py` — `EchoControl` (snapshot/health/recent_scores reads; talk/mute/
+      snark/location/websearch/enroll/threshold/quit writes).
+- [x] **M2** `webui/server.py` — Flask app + routes + `start_webui` (daemon thread, fail-soft,
+      `_port_free` without SO_REUSEADDR, werkzeug logging silenced) + `load_webui_config`.
+- [x] **M3** `webui/static/index.html` — dark/high-contrast/big-touch UI, polling, all controls +
+      speaker panel + camera/sensor placeholders.
+- [x] **M4** `main.py`/`session.py` wiring — build `EchoControl` + `start_webui`; route
+      `on_key`/`muted` through the bridge; `session.last_speaker_score`; startup `Dashboard:` line.
+- [x] **M5** `echo_webui.json` (committed) + `requirements.txt` `flask==3.1.3` (installed into `.venv`, torch untouched).
+- [x] **M6** `test_webui.py` — offline Flask `test_client`: `/api/state` shape, each POST flips the
+      right flag/Event/threshold, health stubbed, enroll-off refusal, no-registry no-op. + real-bind smoke.
+
+### Verification — DONE
+- ✅ `test_webui.py` + all prior suites green; `py_compile` clean; `main.py`/`webui` import clean.
+- ✅ Real Flask bind smoke: serves the 15 KB dashboard (Talk button + threshold slider), `/api/state`
+  200; **port-taken → None, disabled → None** (fail-soft); werkzeug request-spam suppressed.
+- ✅ Two bugs caught + fixed during the build: test wrote to the real `echo_speakers.json` (now temp
+  path; seed restored); Windows `SO_REUSEADDR` defeated the port-taken check (removed).
+
+### Open — Michael's (the two-in-one live pass)
+- [ ] Launch Echo → open `http://127.0.0.1:7862` on the PC: confirm health tiles + live transcript;
+      use **Talk** to converse; **enroll Michael + a guest via the button**; **tune `match_threshold`
+      with the slider watching live scores**; confirm a guest turn writes no fact; exercise the toggles.
+      Then repeat from the 10" touchscreen (set `host` to the LAN/Tailscale IP).
+- [ ] Approve the two speaker persona strings (`SPEAKER_KNOWN`/`SPEAKER_UNKNOWN`) — carried over from Stage 6.
+- Commit: built + offline-verified; ready to push to `main`.
+
+---
+
+## ✅ DONE (2026-07-15) — Stage 6 Part 1: Speaker Awareness (voice-ID + attribution)
 
 Michael greenlit Stage 6. Part 1 = the **mechanics only** (voice fingerprinting + who's-talking
 attribution); the loyalty/secrecy-**register** policy is a deliberately deferred later Part.

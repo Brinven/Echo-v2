@@ -30,3 +30,9 @@ sentence-transformers==5.4.1
 # then runs offline. On Windows the model is COPIED (not symlinked) into savedir — see
 # speaker_id.ECAPAEmbedder — so no admin/Developer Mode is needed.
 speechbrain==1.1.0
+
+# GUI dashboard / control panel (Stage 7) — a small Flask server runs in a daemon thread
+# inside the Echo process (webui/). Pure-Python, no build step, no C-extension. Fail-soft:
+# if flask is missing or the port is taken, the voice loop runs unaffected.
+#     echo_stage0\.venv\Scripts\python.exe -m pip install flask==3.1.3
+flask==3.1.3

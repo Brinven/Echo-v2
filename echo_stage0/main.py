@@ -50,6 +50,7 @@ from search import build_provider, load_search_config, format_search_block
 from search_decision import decide_search
 from location import resolve_location
 from speaker_id import SpeakerRegistry, build_embedder
+from webui import EchoControl, start_webui
 
 
 # ── Console UI ───────────────────────────────────────────────────────────
@@ -318,6 +319,7 @@ def run_streaming_pipeline(
         print(f"  [speaker: {session.current_speaker} ({speaker_score:.2f})]")
     else:
         session.current_speaker = session.user_name or "Michael"
+    session.last_speaker_score = speaker_score
 
     print_conversation("You", transcript)
     session.add_user_turn(transcript, stt_latency)
@@ -681,7 +683,20 @@ def main():
     space_released = threading.Event()
     swap_requested = threading.Event()   # L key — request a mid-chat model swap
     picker_active = threading.Event()    # set while the swap picker owns the terminal
-    muted = False
+
+    # ── Web dashboard / control panel (Stage 7) ──
+    # EchoControl bridges the loop and the dashboard: the web drives Echo through the SAME
+    # events/flags the keyboard sets (never the pipeline). `muted` now lives on control so the
+    # keyboard and the dashboard share one source of truth. Fail-soft: start_webui returns None
+    # (dashboard off) if disabled / flask missing / port taken — the voice loop is unaffected.
+    control = EchoControl(
+        session, sm, speaker_registry,
+        space_pressed=space_pressed, space_released=space_released,
+        mute_toggle_event=mute_toggle_event, quit_event=quit_event,
+        model_name=llm.model_name, speaker_active=speaker_embedder is not None,
+    )
+    _webui = start_webui(control)
+    print(f"  Dashboard: {_webui[1]}" if _webui else "  Dashboard: off (echo_webui.json / flask / port)")
 
     # Q double-press tracking
     q_first_press_time = 0.0
@@ -715,7 +730,7 @@ def main():
 
     # ── Keyboard handlers ──
     def on_key(event):
-        nonlocal muted, q_first_press_time, q_warned
+        nonlocal q_first_press_time, q_warned
         # While the model picker owns the terminal, ignore all keys so the user's typed
         # filter/number goes to input() and doesn't trip PTT/mute/etc.
         if picker_active.is_set():
@@ -741,11 +756,10 @@ def main():
                     clear_status_line()
                     print("  [Press Q again within 3s to exit without saving session]")
         elif event.name == "m":
-            muted = not muted
-            mute_toggle_event.set()
+            control.toggle_mute()
         elif event.name == "s":
             # Toggle Maximum Snark Mode (locks snark to 10 for the session).
-            session.max_snark = not session.max_snark
+            control.toggle_max_snark()
             clear_status_line()
             state = "ON (snark locked to 10)" if session.max_snark else "off (back to daily)"
             print(f"  [Maximum Snark Mode: {state}]")
@@ -801,7 +815,7 @@ def main():
             if sm.state == State.LISTENING:
                 draw_status(
                     status="LISTENING", vad="active" if vad.available else "off",
-                    mute="ON" if muted else "off",
+                    mute="ON" if control.muted else "off",
                     stt=last_stt, fa=last_fa, turn=session.turn_count,
                 )
 
@@ -824,12 +838,12 @@ def main():
                         break  # re-enter LISTENING cleanly (resets buffers, redraws status)
                     if mute_toggle_event.is_set():
                         mute_toggle_event.clear()
-                        if muted:
+                        if control.muted:
                             sm.transition(State.MUTED)
                             break
                         draw_status(
                             status="LISTENING", vad="active" if vad.available else "off",
-                            mute="ON" if muted else "off",
+                            mute="ON" if control.muted else "off",
                             stt=last_stt, fa=last_fa, turn=session.turn_count,
                         )
                     if speech_start_event.is_set():
@@ -932,7 +946,7 @@ def main():
                         break
                     if mute_toggle_event.is_set():
                         mute_toggle_event.clear()
-                        if not muted:
+                        if not control.muted:
                             sm.transition(State.LISTENING)
                             break
                     time.sleep(0.05)

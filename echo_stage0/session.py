@@ -166,6 +166,9 @@ class Session:
         # enrolling: a pending in-conversation enrollment. "Echo, this is Jon" sets the name;
         # the NEXT utterance's audio is captured as Jon's voiceprint. None when not enrolling.
         self.enrolling: str | None = None
+        # last_speaker_score: cosine score of the most recent speaker identification, surfaced
+        # in the GUI for threshold tuning. Set each real turn alongside current_speaker.
+        self.last_speaker_score = 0.0
         # persona_correction: an on-demand self-check nudge (persona_check.py) injected into
         # the NEXT turn's system prompt, then consumed (one-turn decay). Set on the probe's
         # background thread, read+cleared on the main thread. A plain string swap is atomic
