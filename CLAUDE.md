@@ -16,7 +16,7 @@ Do not override these decisions without explicit user instruction.
 > sections at the end. Speaker deps are installed; the GUI (embedded Flask, touch control surface)
 > is the front end for the touchscreen AND the vehicle for the speaker live-pass. What remains is
 > Michael's **combined live pass** (launch Echo → open the dashboard → enroll voices + tune the
-> threshold by touch) and sign-off on the speaker persona strings.
+> threshold by touch). The speaker persona strings are **APPROVED** (Michael, 2026-07-15).
 >
 > **Both Part-4 approval gates CLOSED (2026-07-15):** (1) `CALIBRATION_EXAMPLES` wording —
 > Michael signed off to KEEP the 3 examples as-is (the parroting was the marginal e4b, not the
@@ -639,8 +639,8 @@ NOT to play that for laughs) is a **deliberately deferred later Part** — none 
 - **`persona.py`** — `SPEAKER_KNOWN`/`SPEAKER_UNKNOWN` + `speaker_context(speaker)` (Michael/""
   → no block, "unknown" → guarded, a name → warm by-name). Lights up Part 2 §2e's known/unknown
   rules pre-vision. `build_system_prompt` gained a `speaker` arg, injected **every turn after
-  location, before core; never trimmed** (added to the `fixed` tuple). **Persona content — Michael's
-  to approve (open gate).**
+  location, before core; never trimmed** (added to the `fixed` tuple). **Persona content — APPROVED
+  as-is by Michael 2026-07-15.**
 - **Attribution guardrail (the conservative Part-1 choice):** `session.current_speaker` (default
   Michael) is resolved each real turn; the turn label uses it, and **`ib.write_memory` is skipped
   unless `session.current_speaker_is_michael`** — a guest's/unknown's words are NEVER attributed
@@ -665,8 +665,8 @@ NOT to play that for laughs) is a **deliberately deferred later Part** — none 
   `LocalStrategy.COPY`. ECAPA load + embed validated headless. The ~89 MB model is downloaded.
 - **Michael-run (not yet done — now folded into the Stage 7 GUI live-pass):** enroll Michael + a
   guest and tune `match_threshold` **via the dashboard** (enroll button + live-score threshold
-  slider), confirm the guardrail (guest turn writes no fact; Michael's still does), and approve the
-  two speaker persona strings.
+  slider), confirm the guardrail (guest turn writes no fact; Michael's still does). The two speaker
+  persona strings are APPROVED as-is (2026-07-15).
 
 ---
 

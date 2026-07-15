@@ -37,7 +37,7 @@ live-pass is done by touch (enroll button + threshold slider) instead of CLI. Pl
       use **Talk** to converse; **enroll Michael + a guest via the button**; **tune `match_threshold`
       with the slider watching live scores**; confirm a guest turn writes no fact; exercise the toggles.
       Then repeat from the 10" touchscreen (set `host` to the LAN/Tailscale IP).
-- [ ] Approve the two speaker persona strings (`SPEAKER_KNOWN`/`SPEAKER_UNKNOWN`) — carried over from Stage 6.
+- [x] Approve the two speaker persona strings (`SPEAKER_KNOWN`/`SPEAKER_UNKNOWN`) — **APPROVED as-is by Michael 2026-07-15.**
 - Commit: built + offline-verified; ready to push to `main`.
 
 ---
@@ -91,7 +91,7 @@ Plan: `~/.claude/plans/lexical-baking-hippo.md`. Full architecture: CLAUDE.md �
       pulls ~89 MB ECAPA); run a session — confirm Michael IDs, a known guest is greeted by name, an
       unknown voice gets the guarded register, **tune `match_threshold`** from logged scores, and
       verify a guest turn writes NO fact to `echo.db` while Michael's still does.
-- [ ] **Approval gate — speaker persona strings** (`SPEAKER_KNOWN`/`SPEAKER_UNKNOWN`, persona
+- [x] **Approval gate — speaker persona strings** — **APPROVED as-is 2026-07-15.** (`SPEAKER_KNOWN`/`SPEAKER_UNKNOWN`, persona
       content, like the Part-5 LOCATION_CONTEXTS gate). Approve/tweak, then it's closed out.
 - Commit: built + offline-verified code is ready to push to `main` (solo-repo workflow) —
   pending Michael's go / whether to fold in the live-pass tweaks first.
