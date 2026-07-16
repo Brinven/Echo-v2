@@ -23,7 +23,7 @@ except Exception:
 import numpy as np
 
 import speaker_id
-from speaker_id import SpeakerRegistry, load_speaker_config, _MODEL_TAG
+from speaker_id import SpeakerRegistry, load_speaker_config, voiced_only, _MODEL_TAG, _PREP_TAG
 from persona import (
     speaker_context, build_system_prompt, SPEAKER_KNOWN, SPEAKER_UNKNOWN, MULTI_SPEAKER_NOTE,
 )
@@ -194,6 +194,45 @@ def run() -> None:
     assert "Echo: Morning, Michael." in text
     assert "User:" not in text, "guest turns still anonymised into the summary prompt"
     print("  [PASS] per-turn attribution survives into the dashboard payload + the summary prompt")
+
+    # 15. voiced_only(): trims the dead air the embedder would otherwise pool over.
+    # Model-free — a sine burst stands in for speech, digital silence for the pre-roll and
+    # the VAD hangover. webrtcvad classifies frames on real speech, so this asserts the
+    # CONTRACT (never longer, never raises, contiguous span, fail-soft), not the VAD's taste.
+    sr = 16000
+    tone = (0.3 * np.sin(2 * np.pi * 180 * np.arange(int(1.5 * sr)) / sr)).astype(np.float32)
+    quiet = np.zeros(int(4.0 * sr), dtype=np.float32)
+    padded = np.concatenate([quiet, tone, quiet])
+    out = voiced_only(padded)
+    assert len(out) <= len(padded), "must never grow the buffer"
+    assert out.dtype == np.float32
+    # Whatever survives must be a contiguous slice of the input — trimmed, never spliced.
+    if len(out) < len(padded):
+        assert any(np.array_equal(out, padded[i:i + len(out)])
+                   for i in range(0, len(padded) - len(out) + 1, 480)), "must be a contiguous span"
+    print("  [PASS] voiced_only: returns a contiguous span, never longer than its input")
+
+    # Fail-soft: pure silence has no voiced frame to anchor on, and a runt buffer is not
+    # worth trimming — both must hand back the original rather than an empty array. An
+    # empty buffer into ECAPA would be a crash in the voice loop.
+    assert len(voiced_only(np.zeros(int(3.0 * sr), dtype=np.float32))) == int(3.0 * sr)
+    tiny = np.ones(10, dtype=np.float32)
+    assert np.array_equal(voiced_only(tiny), tiny), "sub-frame buffer → unchanged"
+    assert len(voiced_only(np.concatenate([quiet, tone[:int(0.1 * sr)], quiet]))) > 0
+    print("  [PASS] voiced_only: silence / runt / too-little-speech fall back to the raw buffer")
+
+    # 16. Prints made before the silence-trim fix are flagged, but still MATCH. A stale print
+    # scores worse than it should (it lost the shared-silence bias a raw query used to give
+    # it back) — that is a re-enroll prompt, not a reason to stop recognising someone.
+    stale_reg = _reg([_prof("Michael", [1, 0, 0, 0])])           # _prof stamps no 'prep'
+    assert stale_reg.stale_prints() == ["Michael"]
+    assert stale_reg.identify(np.array([0.9, 0.1, 0.0, 0.0], dtype=np.float32))[0] == "Michael", \
+        "a stale print must still identify — warn, don't silently stop knowing someone"
+    fresh = _reg([])
+    fresh.enroll("Hillary", np.array([0, 1, 0, 0], dtype=np.float32))
+    assert fresh.stale_prints() == [], "a freshly enrolled print is never stale"
+    assert fresh.profiles[0]["prep"] == _PREP_TAG
+    print("  [PASS] stale prints flagged for re-enrol but still identify; new prints stamped")
 
     print("  OFFLINE: all speaker-awareness checks passed.")
 

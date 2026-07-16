@@ -40,6 +40,13 @@ _CONFIG_PATH = Path(__file__).resolve().parent / "echo_speakers.json"
 # print made by a different model is ignored at match time rather than mis-compared.
 _MODEL_TAG = "ecapa"
 
+# Audio-prep tag. Prints enrolled before voiced_only() were embedded from a padded buffer
+# and carry a silence bias; a trimmed query scored against one loses the shared-silence
+# component that used to prop the number up, so those prints score WORSE after the fix,
+# not better. They are still usable (hence a warning, not a skip like a model mismatch),
+# but re-enrolling is what actually collects the win.
+_PREP_TAG = "voiced-v1"
+
 # Fail-soft defaults if echo_speakers.json is missing/corrupt (mirrors search._DEFAULT_CONFIG).
 # match_threshold is EMPIRICAL — tune it from the logged speaker_score values, the same way
 # retrieval.MIN_SCORE=0.4 was tuned. ECAPA cosine on same-speaker audio typically lands well
@@ -83,6 +90,87 @@ def _l2(vec: np.ndarray) -> np.ndarray:
     vec = np.asarray(vec, dtype=np.float32).ravel()
     norm = float(np.linalg.norm(vec))
     return vec / norm if norm > 0.0 else vec
+
+
+# ── Speech extraction ───────────────────────────────────────────────────────
+# ECAPA pools over EVERY frame it is handed, so dead air is not ignored — it is averaged
+# in. Worse, silence contributes a SHARED bias direction to any two embeddings that both
+# contain it, so a raw score is part speaker-similarity and part how-alike-was-the-silence.
+# When the amounts differ (a short question inside a long buffer, matched against a profile
+# recorded close to the mic) that shared component vanishes and the score craters.
+#
+# Measured on this machine — one synthetic voice, identical speech, only the padding
+# changed, scored against that voice's own profile:
+#
+#                                   raw      trimmed
+#     clean 2.0s of speech .....  0.6668     0.4996
+#     +5s silence  (7.0s) ......  0.2098     0.4996
+#     +8s silence  (10.0s) .....  0.0631     0.4996
+#     +13s silence (15.0s) ..... -0.0606     0.4996
+#     +8s quiet room noise .....  0.2990     0.3324
+#     a DIFFERENT speaker ......  0.0132     0.0303
+#
+# Read the last two rows together: RAW, a genuine speaker in a padded buffer scores BELOW
+# an impostor (-0.07 margin). Trimmed, the worst genuine case still clears the impostor by
+# +0.30 and the spread across padding collapses from 0.73 to 0.17. The 0.6668 was never
+# real headroom — it was that shared-silence bias inflating a like-for-like pair.
+#
+# This is why Hillary's "Hey Echo, do you know who this is?" — a ~2s question inside a
+# 9.69s buffer — scored 0.2598 and made Echo call her a stranger, while her next, denser
+# utterance hit 0.7296. It was never the threshold, and never the mic.
+#
+# Trim the ends rather than splicing the voiced runs together: measured identical (+0.3021
+# vs +0.3032 margin), and trimming keeps the interior intact. Real dead air is at the ends
+# (pre-roll, and the hangover after the last word); interior pauses are speech rhythm that
+# ECAPA saw throughout training.
+_VOICED_FRAME_MS = 30
+_VOICED_MARGIN_FRAMES = 3     # keep a little air at each edge; onsets carry identity
+_VOICED_MIN_S = 0.6           # too little speech found → trust the raw buffer instead
+
+
+def voiced_only(audio: np.ndarray, sr: int = 16000, aggressiveness: int = 2) -> np.ndarray:
+    """Trim leading/trailing non-speech so the embedder pools over speech, not dead air.
+
+    Returns the contiguous span from the first to the last voiced frame (plus a small
+    margin) — NOT a splice of the voiced runs, which would cut the natural pauses out of
+    the middle for no measured gain.
+
+    Fail-soft by construction, like the rest of this module: without webrtcvad, on any
+    error, or when the span would be too short to trust, this returns `audio` UNCHANGED —
+    i.e. exactly the previous behaviour. It can cost a little accuracy, never the run.
+
+    Deliberately NOT vad.VADDetector: that is a stateful streaming detector with
+    onset/hangover logic for deciding when a turn starts and stops. This is a stateless
+    pass over a finished buffer — a different job.
+    """
+    audio = np.asarray(audio, dtype=np.float32).ravel()
+    frame_len = int(sr * _VOICED_FRAME_MS / 1000)
+    if len(audio) < frame_len * 2:
+        return audio
+    try:
+        import webrtcvad
+    except ImportError:
+        return audio   # PTT-only install; nothing lost that we had before
+    try:
+        vad = webrtcvad.Vad(aggressiveness)
+        n_frames = len(audio) // frame_len
+        pcm = np.clip(audio[: n_frames * frame_len] * 32767.0, -32768, 32767).astype(np.int16)
+        flags = [
+            vad.is_speech(pcm[i * frame_len:(i + 1) * frame_len].tobytes(), sr)
+            for i in range(n_frames)
+        ]
+        if not any(flags):
+            return audio
+
+        first = max(0, flags.index(True) - _VOICED_MARGIN_FRAMES)
+        last = min(n_frames, (n_frames - 1 - flags[::-1].index(True)) + _VOICED_MARGIN_FRAMES + 1)
+        span = audio[first * frame_len:last * frame_len]
+        if len(span) < _VOICED_MIN_S * sr:
+            return audio
+        return span
+    except Exception as e:   # noqa: BLE001 — never raise into the voice loop
+        logger.debug(f"voiced_only fell back to the raw buffer: {e}")
+        return audio
 
 
 # ── Embedder (swappable backend) ────────────────────────────────────────────
@@ -236,6 +324,14 @@ class SpeakerRegistry:
         low = (name or "").strip().lower()
         return any((p.get("name", "").lower() == low) for p in self.profiles)
 
+    def stale_prints(self) -> list[str]:
+        """Names whose voiceprint predates the voiced_only() audio-prep fix.
+
+        These still match, just worse than they should — see _PREP_TAG. Surfaced at startup
+        so a bad score gets blamed on the stale print rather than on the mic or the threshold.
+        """
+        return [p.get("name", "?") for p in self.profiles if p.get("prep") != _PREP_TAG]
+
     def identify(self, emb: np.ndarray, threshold: float | None = None) -> tuple[str | None, float]:
         """Best cosine match among enrolled prints.
 
@@ -268,6 +364,12 @@ class SpeakerRegistry:
         profile = {
             "name": name,
             "model": model or self.model_tag,
+            # How the audio was prepared before embedding. A print made from an untrimmed
+            # buffer carries a silence bias, so it is not really comparable to a trimmed
+            # query — the same reason `model` is stamped. Absent → enrolled before the
+            # voiced_only fix; stale_prints() surfaces those so they can be re-enrolled
+            # rather than quietly scoring badly forever.
+            "prep": _PREP_TAG,
             "embedding": [float(x) for x in _l2(emb).tolist()],
             "enrolled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }

@@ -27,7 +27,7 @@ import time
 import numpy as np
 
 from audio import AudioRecorder, SAMPLE_RATE
-from speaker_id import SpeakerRegistry, build_embedder
+from speaker_id import SpeakerRegistry, build_embedder, voiced_only
 
 GREEN = "\033[32m"; YELLOW = "\033[33m"; CYAN = "\033[36m"; DIM = "\033[2m"; RESET = "\033[0m"
 
@@ -62,14 +62,19 @@ def _capture_embedding(embedder, seconds: int, samples: int) -> np.ndarray | Non
         if samples > 1:
             print(f"\n  {CYAN}Sample {i + 1}/{samples}{RESET}")
         audio = _record_once(seconds)
-        if len(audio) < SAMPLE_RATE * _MIN_SECONDS:
-            print(f"  {YELLOW}too short — skipping this sample{RESET}")
+        # Trim to speech BEFORE the quality gates. A fixed-length recording is mostly dead
+        # air, so "too short" should mean too few WORDS, not too short a recording — and a
+        # print built from a padded buffer carries a silence bias into every future match.
+        speech = voiced_only(audio)
+        if len(speech) < SAMPLE_RATE * _MIN_SECONDS:
+            print(f"  {YELLOW}only {len(speech)/SAMPLE_RATE:.1f}s of speech — "
+                  f"say a full sentence; skipping this sample{RESET}")
             continue
-        rms = float(np.sqrt(np.mean(np.square(audio)))) if len(audio) else 0.0
+        rms = float(np.sqrt(np.mean(np.square(speech)))) if len(speech) else 0.0
         if rms < _MIN_RMS:
             print(f"  {YELLOW}very quiet (rms={rms:.4f}) — is the mic live? skipping{RESET}")
             continue
-        vecs.append(embedder.embed(audio))
+        vecs.append(embedder.embed(speech))
 
     if not vecs:
         return None

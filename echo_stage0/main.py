@@ -52,7 +52,7 @@ from daily_state import get_daily_snark_level
 from search import build_provider, load_search_config, format_search_block
 from search_decision import decide_search
 from location import resolve_location
-from speaker_id import SpeakerRegistry, build_embedder
+from speaker_id import SpeakerRegistry, build_embedder, voiced_only
 from webui import EchoControl, start_webui
 import gpu
 
@@ -218,7 +218,9 @@ def run_streaming_pipeline(
             reply = f"That was too short to learn your voice, {pending}. Give me a full sentence when you're ready."
         else:
             try:
-                emb = speaker_embedder.embed(audio)
+                # Trim here too: a print made from a padded buffer carries the same silence
+                # bias, and then every future match is measured against a diluted profile.
+                emb = speaker_embedder.embed(voiced_only(audio))
                 speaker_registry.enroll(pending, emb)
                 speaker_registry.config["enabled"] = True
                 speaker_registry.save()
@@ -362,7 +364,10 @@ def run_streaming_pipeline(
     speaker_known = True
     if speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 0:
         try:
-            _emb = speaker_embedder.embed(audio)
+            # voiced_only, not the raw buffer: the capture runs from the pre-roll to the VAD
+            # hangover, and the dead air at each end drags the embedding off the speaker hard
+            # enough that a genuine voice can score below a stranger. See speaker_id.voiced_only.
+            _emb = speaker_embedder.embed(voiced_only(audio))
             _name, speaker_score = speaker_registry.identify(_emb)
         except Exception as e:
             print(f"  [speaker-id error: {e}]")
@@ -721,6 +726,11 @@ def main():
             print(f"  Speaker ID: on ({speaker_registry.count} enrolled: {', '.join(speaker_registry.names)})"
                   + ("" if michael_enrolled
                      else "  [WARN: Michael not enrolled — his turns read as 'unknown' and won't be saved]"))
+            stale = speaker_registry.stale_prints()
+            if stale:
+                print(f"    [WARN: {', '.join(stale)} enrolled before the silence-trim fix — those prints")
+                print( "           carry a silence bias and now score LOWER than they should.")
+                print( "           Re-enroll from the dashboard to collect the fix.]")
     elif speaker_registry.enabled:
         print("  Speaker ID: enabled but the voice model couldn't load — assuming Michael (see logs)")
     else:
