@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Echo — Memory</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#141b24; --panel2:#1b2430; --edge:#2a3644;
+    --ink:#eef4fb; --dim:#9fb0c3; --accent:#4aa3ff; --good:#3fb950; --bad:#f85149;
+    --warn:#f0a020; --echo:#7ee0c0; --you:#ffd479;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{background:var(--bg); color:var(--ink); font-size:17px;
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+    padding:12px; display:flex; flex-direction:column; gap:12px; overflow:hidden;}
+  a{color:var(--accent); text-decoration:none;}
+  header{display:flex; align-items:center; gap:14px; padding:6px 4px; flex-wrap:wrap;}
+  .brand{font-size:26px; font-weight:800; letter-spacing:.04em;}
+  .sub{font-size:15px; color:var(--dim); text-transform:uppercase; letter-spacing:.12em;}
+  .navbtn{background:var(--panel2); border:1px solid var(--edge); border-radius:10px;
+    padding:9px 14px; font-weight:700; font-size:15px; color:var(--ink); min-height:44px; display:flex; align-items:center;}
+  .navbtn:active{background:#26313f;}
+  .tools{margin-left:auto; display:flex; gap:10px; align-items:center;}
+
+  #scroll{flex:1; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:12px; padding-right:4px;}
+  #scroll::-webkit-scrollbar{width:14px;}
+  #scroll::-webkit-scrollbar-thumb{background:var(--edge); border-radius:8px; border:3px solid var(--bg);}
+
+  .note{background:#12202b; border:1px solid var(--edge); color:var(--dim); border-radius:12px; padding:10px 14px; font-size:14px; line-height:1.5;}
+  .note b{color:var(--ink);}
+  .card{background:var(--panel); border:1px solid var(--edge); border-radius:14px; padding:14px;}
+  h2{margin:0 0 12px; font-size:14px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); display:flex; gap:8px; align-items:center;}
+  h2 .n{color:var(--ink); background:var(--panel2); border:1px solid var(--edge); border-radius:999px; padding:1px 9px; font-size:12px;}
+
+  .mrow{display:flex; gap:10px; align-items:flex-start; padding:11px 0; border-top:1px solid var(--edge); flex-wrap:wrap;}
+  .mrow:first-of-type{border-top:none;}
+  .key{min-width:150px; max-width:220px; font-weight:700; color:var(--you); font-size:14px; word-break:break-word; padding-top:8px;}
+  .key .attr{display:block; color:var(--dim); font-weight:500; font-size:13px;}
+  .fields{flex:1; min-width:220px; display:flex; flex-direction:column; gap:8px;}
+  .inline{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  .actions{display:flex; gap:8px; align-items:center;}
+  textarea,input[type=text],input[type=number],input[type=search]{font-family:inherit; font-size:15px; padding:9px 11px; border-radius:9px;
+    background:#0a1017; color:var(--ink); border:1px solid var(--edge); width:100%;}
+  textarea{resize:vertical; min-height:44px; line-height:1.4;}
+  input[type=number]{width:90px;}
+  .lbl{font-size:13px; color:var(--dim);}
+  label.ck{display:flex; align-items:center; gap:7px; font-size:14px; color:var(--dim); user-select:none;}
+  label.ck input{width:20px; height:20px; accent-color:var(--accent);}
+  button{font-family:inherit; font-size:14px; font-weight:700; color:var(--ink);
+    background:var(--panel2); border:1px solid var(--edge); border-radius:9px;
+    min-height:42px; padding:8px 14px; cursor:pointer; touch-action:manipulation;}
+  button:active{background:#26313f;}
+  button.save{border-color:#2f5f8f; color:#cfe6ff;}
+  button.del{border-color:#5a2b2b; color:#ffb4ac;}
+  button.del:active{background:#3a1f1f;}
+  .ro{color:var(--ink); line-height:1.45; padding-top:6px;}
+  .ro small{color:var(--dim);}
+  .empty{color:var(--dim); font-style:italic; padding:6px 0;}
+
+  /* search results */
+  .searchbox{display:flex; gap:10px;}
+  .res{margin-top:12px; display:flex; flex-direction:column; gap:8px;}
+  .res .hit{padding:9px 12px; border-radius:10px; background:var(--panel2); border:1px solid var(--edge); font-size:14px;}
+  .res .sc{color:var(--good); font-weight:700; margin-right:8px;}
+  .flash{font-size:13px; color:var(--good); align-self:center;}
+  .flash.bad{color:var(--bad);}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">ECHO</div>
+    <div class="sub">Memory</div>
+    <a class="navbtn" href="/">← Control</a>
+    <a class="navbtn" href="/history">🕘 History</a>
+    <div class="tools"><button id="reload">↻ Reload</button></div>
+  </header>
+
+  <div id="scroll">
+    <div class="note">
+      Edits take effect <b>immediately</b> — this is Echo's live memory. Editing a fact's value
+      re-computes its search embedding so retrieval keeps working. Episodic session-summaries are
+      <b>view + delete only</b>. Anyone who can reach this page can read and change these memories,
+      so keep the dashboard on <b>127.0.0.1</b> unless you trust the network.
+    </div>
+
+    <div class="card">
+      <h2>🔎 Search — the way Echo retrieves</h2>
+      <div class="searchbox">
+        <input id="q" type="search" placeholder="e.g. the jeep, Hillary, crows…" autocomplete="off">
+        <button id="go" style="flex:none;">Search</button>
+      </div>
+      <div id="res" class="res"></div>
+    </div>
+
+    <div class="card"><h2>Facts <span class="n" id="n-facts">0</span></h2><div id="facts"></div></div>
+    <div class="card"><h2>Core memory <span class="n" id="n-core">0</span></h2><div id="core"></div></div>
+    <div class="card"><h2>Policy / rules <span class="n" id="n-policy">0</span></h2><div id="policy"></div></div>
+    <div class="card"><h2>Preferences <span class="n" id="n-prefs">0</span></h2><div id="prefs"></div></div>
+    <div class="card"><h2>Episodic (past sessions) <span class="n" id="n-epi">0</span></h2><div id="epi"></div></div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s??"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function api(path, method="GET", body=null){
+  try{
+    const opt = {method, headers:{"Content-Type":"application/json"}};
+    if(body) opt.body = JSON.stringify(body);
+    const r = await fetch(path, opt); return await r.json();
+  }catch(e){ return null; }
+}
+function fmt(ts){ if(!ts) return ""; const d = new Date(ts.includes("T")?ts:ts.replace(" ","T")+"Z"); return isNaN(d)?ts:d.toLocaleString([], {month:"short",day:"numeric",year:"numeric"}); }
+function flash(row, ok, msg){
+  let f = row.querySelector(".flash"); if(!f){ f=document.createElement("span"); f.className="flash"; row.querySelector(".actions").appendChild(f); }
+  f.className = "flash" + (ok?"":" bad"); f.textContent = msg; setTimeout(()=>{ if(f) f.textContent=""; }, 2000);
+}
+
+function row(inner, table, id){ return `<div class="mrow" data-table="${esc(table)}" data-id="${esc(id)}">${inner}<div class="actions"><button class="save">Save</button><button class="del">Delete</button></div></div>`; }
+
+function render(m){
+  if(!m){ $("facts").innerHTML = `<div class="empty">Can't reach Echo.</div>`; return; }
+  const c = m.counts||{};
+  $("n-facts").textContent = c.fact_memory||0; $("n-core").textContent = c.core_memory||0;
+  $("n-policy").textContent = c.policy_memory||0; $("n-prefs").textContent = c.preference_memory||0;
+  $("n-epi").textContent = c.episodic_memory||0;
+
+  $("facts").innerHTML = (m.facts||[]).map(f=> row(
+    `<div class="key">${esc(f.entity)}<span class="attr">${esc(f.attribute)}</span></div>`
+    + `<div class="fields"><textarea class="f-value" rows="2">${esc(f.value)}</textarea>`
+    + `<div class="inline"><span class="lbl">confidence</span><input class="f-conf" type="number" min="0" max="1" step="0.05" value="${esc(f.confidence)}"><span class="lbl">updated ${esc(fmt(f.updated_at))}</span></div></div>`,
+    "fact", f.id)).join("") || `<div class="empty">No facts yet.</div>`;
+
+  $("core").innerHTML = (m.core||[]).map(x=> row(
+    `<div class="key">${esc(x.key)}</div><div class="fields"><textarea class="c-content" rows="3">${esc(x.content)}</textarea></div>`,
+    "core", x.key)).join("") || `<div class="empty">No core memories.</div>`;
+
+  $("policy").innerHTML = (m.policy||[]).map(p=> row(
+    `<div class="key">${esc(p.key)}</div><div class="fields"><textarea class="p-rule" rows="2">${esc(p.rule)}</textarea>`
+    + `<div class="inline"><span class="lbl">priority</span><input class="p-prio" type="number" min="1" max="10" step="1" value="${esc(p.priority)}">`
+    + `<label class="ck"><input class="p-active" type="checkbox" ${p.active?"checked":""}> active</label></div></div>`,
+    "policy", p.key)).join("") || `<div class="empty">No policy rules.</div>`;
+
+  $("prefs").innerHTML = (m.prefs||[]).map(p=> row(
+    `<div class="key">${esc(p.key)}</div><div class="fields"><textarea class="pr-value" rows="2">${esc(p.value)}</textarea></div>`,
+    "pref", p.key)).join("") || `<div class="empty">No preferences.</div>`;
+
+  // Episodic: view + delete only (episodic_fts has no update trigger — see memory_admin).
+  $("epi").innerHTML = (m.episodic||[]).map(e=>{
+    let topics = ""; try{ const a = JSON.parse(e.key_topics||"[]"); if(a.length) topics = a.join(", "); }catch(_){}
+    return `<div class="mrow" data-table="episodic" data-id="${esc(e.id)}">`
+      + `<div class="key">${esc(fmt(e.created_at))}<span class="attr">${esc(e.mood_signal||"")}${e.turn_count?` · ${e.turn_count} turns`:``}</span></div>`
+      + `<div class="fields"><div class="ro">${esc(e.summary)}${topics?`<br><small>Topics: ${esc(topics)}</small>`:``}</div></div>`
+      + `<div class="actions"><button class="del">Delete</button></div></div>`;
+  }).join("") || `<div class="empty">No past-session summaries.</div>`;
+}
+
+// ── save / delete (event delegation over #scroll) ──
+$("scroll").addEventListener("click", async (ev)=>{
+  const btn = ev.target.closest("button"); if(!btn) return;
+  const r = btn.closest(".mrow"); if(!r) return;
+  const table = r.dataset.table, id = r.dataset.id;
+
+  if(btn.classList.contains("del")){
+    if(!confirm(`Delete this ${table} memory? This can't be undone.`)) return;
+    const res = await api("/api/memory/delete","POST",{table, id});
+    if(res && res.ok){ r.style.opacity = .35; setTimeout(load, 300); } else flash(r, false, "delete failed");
+    return;
+  }
+  if(!btn.classList.contains("save")) return;
+
+  btn.disabled = true; const done = ()=>{ btn.disabled = false; };
+  let res, body;
+  if(table==="fact"){
+    body = {id, value:r.querySelector(".f-value").value, confidence:Number(r.querySelector(".f-conf").value)};
+    res = await api("/api/memory/fact","POST",body);
+  } else if(table==="core"){
+    res = await api("/api/memory/core","POST",{key:id, content:r.querySelector(".c-content").value});
+  } else if(table==="policy"){
+    res = await api("/api/memory/policy","POST",{key:id, rule:r.querySelector(".p-rule").value,
+      priority:Number(r.querySelector(".p-prio").value), active:r.querySelector(".p-active").checked});
+  } else if(table==="pref"){
+    res = await api("/api/memory/pref","POST",{key:id, value:r.querySelector(".pr-value").value});
+  }
+  done();
+  flash(r, !!(res && res.ok), (res && res.ok) ? "✓ saved" : "save failed");
+});
+
+// ── search (shows Echo's real retrieval scores) ──
+async function search(){
+  const q = $("q").value.trim(); if(!q){ $("res").innerHTML=""; return; }
+  $("res").innerHTML = `<div class="empty">Searching…</div>`;
+  const r = await api("/api/memory/search?q=" + encodeURIComponent(q));
+  if(!r){ $("res").innerHTML = `<div class="empty">Search failed.</div>`; return; }
+  const facts = (r.facts||[]).map(f=>`<div class="hit"><span class="sc">${Number(f.score).toFixed(2)}</span>${esc(f.entity)} — ${esc(f.attribute)}: ${esc(f.value)} <small>(conf ${esc(f.confidence)})</small></div>`);
+  const eps = (r.episodes||[]).map(e=>`<div class="hit"><span class="sc">${Number(e.score).toFixed(2)}</span>${esc(e.summary)}</div>`);
+  $("res").innerHTML = (facts.concat(eps).join("")) || `<div class="empty">Nothing scored above Echo's retrieval floor for “${esc(q)}”.</div>`;
+}
+$("go").onclick = search;
+$("q").addEventListener("keydown", e=>{ if(e.key==="Enter") search(); });
+
+async function load(){ render(await api("/api/memory")); }
+$("reload").onclick = load;
+load();
+</script>
+</body>
+</html>

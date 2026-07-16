@@ -591,6 +591,7 @@ def run_streaming_pipeline(
 
     logger.log_run(
         stage=5,
+        session_id=session.session_id,   # exact History grouping; legacy rows fall back to a time-gap heuristic
         model=llm.model_name,
         stt_backend=stt.backend,
         tts_backend=tts.backend,

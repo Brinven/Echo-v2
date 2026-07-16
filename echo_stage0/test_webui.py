@@ -9,6 +9,7 @@ Run:  python test_webui.py     (exit 0 = all assertions passed)
 """
 
 import sys
+import json
 import threading
 import tempfile
 from pathlib import Path
@@ -19,10 +20,16 @@ except Exception:
     pass
 
 import webui.control as ctrlmod
-from webui import EchoControl, create_app, load_webui_config
+from webui import EchoControl, create_app, load_webui_config, memory_admin
+from webui import history as history_mod
 from session import Session
 from state import StateMachine
 from speaker_id import SpeakerRegistry
+from ib_lite import db
+
+# A stand-in embedder for fact-value edits: a valid 384-float32 zeros blob, so the memory tests
+# never load the real MiniLM model (the production route uses memory_admin's default `encode`).
+_FAKE_EMB = lambda text: b"\x00" * (384 * 4)
 
 
 _FAKE_MODELS = ["test/model-x", "test/model-y", "vendor/big-12b@q4"]
@@ -306,6 +313,139 @@ def run() -> None:
     print("  OFFLINE: all dashboard checks passed.")
 
 
+# ─────────────────────────── Phase 3: History page ───────────────────────────
+
+def run_history() -> None:
+    print("\n── History reader (offline) ──")
+    d = Path(tempfile.mkdtemp())
+    p = d / "log.jsonl"
+    # A deliberately messy fixture: keyed sessions (S1/S2), keyless legacy rows split by a time
+    # gap, a couple of malformed lines, and rows missing fields — all of which must be tolerated.
+    # S2 is written FIRST (out of chronological order) to prove the reader sorts before grouping.
+    lines = [
+        json.dumps({"timestamp": "2026-06-01T09:00:00+00:00", "session_id": "S2", "speaker": "Michael",
+                    "transcript": "crows again on the fence", "response_full": "They love your homestead, Michael.",
+                    "total_latency_s": 1.2, "location": "home", "speaker_known": True, "speaker_score": 0.61}),
+        "not valid json",                          # skipped
+        "[]",                                      # skipped (not a dict)
+        "",                                        # skipped (blank)
+        json.dumps({"timestamp": "2026-04-01T10:00:00+00:00", "transcript": "legacy one", "response_full": "ok"}),
+        json.dumps({"timestamp": "2026-04-01T10:05:00+00:00", "transcript": "legacy two", "response_full": "sure"}),
+        json.dumps({"timestamp": "2026-04-01T12:00:00+00:00", "transcript": "legacy three"}),  # 2h gap → new
+        json.dumps({"timestamp": "2026-05-01T09:00:00+00:00", "session_id": "S1", "speaker": "Michael",
+                    "transcript": "hello the jeep runs great"}),                                # missing reply
+        json.dumps({"timestamp": "2026-05-01T09:01:00+00:00", "session_id": "S1", "speaker": "Hillary",
+                    "transcript": "my head hurts", "response_full": "Rest up, Hillary."}),
+    ]
+    p.write_text("\n".join(lines), encoding="utf-8")
+
+    s = history_mod.read_history(p)["sessions"]
+    assert len(s) == 4, [x["session_id"] for x in s]
+    assert s[0]["session_id"] == "S2" and s[0]["count"] == 1 and s[0]["speakers"] == ["Michael"] and s[0]["synthetic"] is False
+    assert s[1]["session_id"] == "S1" and s[1]["count"] == 2 and s[1]["speakers"] == ["Hillary", "Michael"]
+    assert s[2]["synthetic"] is True and s[2]["count"] == 1          # legacy 12:00 (gap from 10:05)
+    assert s[3]["synthetic"] is True and s[3]["count"] == 2          # legacy 10:00 + 10:05 (5 min apart)
+    assert s[2]["turns"][0]["reply"] == ""                           # missing response_full tolerated
+    assert history_mod.read_history(p)["speakers"] == ["Hillary", "Michael"]
+    print("  [PASS] grouping: session_id exact, legacy by 20-min gap, newest first, bad lines skipped")
+
+    assert [x["session_id"] for x in history_mod.read_history(p, q="crows")["sessions"]] == ["S2"]
+    sp = history_mod.read_history(p, speaker="Hillary")["sessions"]
+    assert len(sp) == 1 and sp[0]["session_id"] == "S1" and sp[0]["count"] == 1
+    lim = history_mod.read_history(p, limit=1)
+    assert len(lim["sessions"]) == 1 and lim["sessions"][0]["session_id"] == "S2" and lim["session_count"] == 4
+    assert history_mod.read_history(d / "missing.jsonl")["sessions"] == []      # missing file → empty, not fatal
+    print("  [PASS] q / speaker / limit filters + missing-file tolerance")
+
+
+# ─────────────────────── Phase 3: Memory browser / editor ─────────────────────
+
+def _temp_db() -> Path:
+    """A fresh, schema-initialized echo.db with one seeded fact (bypassing the gate)."""
+    dbp = Path(tempfile.mkdtemp()) / "echo.db"
+    conn = db.get_connection(dbp)
+    db.init_schema(conn)     # creates tables + seeds 2 core / 4 policy rows
+    conn.execute("INSERT INTO fact_memory (id, entity, attribute, value, embedding) VALUES (?,?,?,?,?)",
+                 ("f1", "Jeep", "type", "2000 Wrangler TJ", _FAKE_EMB("")))
+    conn.commit()
+    conn.close()
+    return dbp
+
+
+def run_memory() -> None:
+    print("\n── Memory admin (offline) ──")
+    conn = memory_admin.open_conn(_temp_db())
+
+    m = memory_admin.dump_all(conn)
+    assert m["counts"]["fact_memory"] == 1 and m["counts"]["core_memory"] == 2 and m["counts"]["policy_memory"] == 4
+    assert m["facts"][0]["entity"] == "Jeep"
+    print("  [PASS] dump_all returns counts + all five tables")
+
+    # Editing a fact's VALUE re-embeds (fake encoder) AND the AFTER UPDATE trigger re-syncs FTS —
+    # the new keyword becomes findable, the old one stops matching. This is the load-bearing rule.
+    row = memory_admin.edit_fact(conn, "f1", value="1997 Wrangler sasquatch edition", confidence=0.5, encoder=_FAKE_EMB)
+    assert row["value"].startswith("1997") and abs(row["confidence"] - 0.5) < 1e-9
+    assert conn.execute("SELECT embedding FROM fact_memory WHERE id='f1'").fetchone()[0] == _FAKE_EMB("")
+    assert len(conn.execute("SELECT rowid FROM fact_fts WHERE fact_fts MATCH 'sasquatch'").fetchall()) == 1
+    assert conn.execute("SELECT rowid FROM fact_fts WHERE fact_fts MATCH 'tj'").fetchall() == []
+    assert memory_admin.edit_fact(conn, "nonexistent", value="x", encoder=_FAKE_EMB) is None
+    print("  [PASS] edit_fact re-embeds on value change, keeps FTS in sync; unknown id → None")
+
+    assert memory_admin.edit_core(conn, "user_profile", "Edited profile line.")["content"] == "Edited profile line."
+    assert memory_admin.edit_core(conn, "brand_new", "a new core fact")["key"] == "brand_new"
+    assert memory_admin.edit_pref(conn, "coffee", "black")["value"] == "black"
+    assert memory_admin.edit_policy(conn, "directness", active=False)["active"] == 0
+    assert memory_admin.edit_policy(conn, "does_not_exist", rule="x") is None    # editor won't mint policies
+    print("  [PASS] edit_core / edit_pref (upsert) + edit_policy (existing rows only)")
+
+    conn.execute("INSERT INTO fact_memory (id, entity, attribute, value) VALUES ('f2','X','y','disposable zebra')")
+    conn.commit()
+    assert memory_admin.delete_row(conn, "fact", "f2") == 1
+    assert conn.execute("SELECT rowid FROM fact_fts WHERE fact_fts MATCH 'zebra'").fetchall() == []
+    assert memory_admin.delete_row(conn, "core", "brand_new") == 1
+    assert memory_admin.delete_row(conn, "sessions", "anything") == 0            # FK parent — never deletable
+    assert memory_admin.delete_row(conn, "bogus", "x") == 0
+    conn.execute("INSERT INTO sessions (id) VALUES ('sess1')")
+    conn.execute("INSERT INTO episodic_memory (id, session_id, summary) VALUES ('e1','sess1','a summary')")
+    conn.commit()
+    assert memory_admin.delete_row(conn, "episodic", "e1") == 1
+    print("  [PASS] delete_row: fact (FTS synced) / core / episodic; refuses sessions + unknown tables")
+    conn.close()
+
+
+def run_routes() -> None:
+    print("\n── Memory + History routes (offline) ──")
+    control, session, sm, reg, events = _mk()
+    control.memory_db_path = _temp_db()          # never the real echo.db under test
+    client = create_app(control).test_client()
+
+    m = client.get("/api/memory").get_json()
+    for k in ("counts", "core", "policy", "prefs", "facts", "episodic"):
+        assert k in m, k
+    assert m["counts"]["fact_memory"] == 1
+    print("  [PASS] GET /api/memory dumps the store")
+
+    assert client.post("/api/memory/core", json={"key": "user_profile", "content": "http edit"}).get_json()["core"]["content"] == "http edit"
+    assert client.post("/api/memory/pref", json={"key": "tea", "value": "green"}).get_json()["pref"]["value"] == "green"
+    assert client.post("/api/memory/policy", json={"key": "directness", "active": False}).get_json()["policy"]["active"] == 0
+    assert client.post("/api/memory/policy", json={"key": "nope"}).get_json()["ok"] is False
+    # Confidence-only fact edit — no value change, so no embedder call: the route stays model-free.
+    assert abs(client.post("/api/memory/fact", json={"id": "f1", "confidence": 0.3}).get_json()["fact"]["confidence"] - 0.3) < 1e-9
+    assert client.post("/api/memory/delete", json={"table": "pref", "id": "tea"}).get_json()["deleted"] == 1
+    assert client.post("/api/memory/delete", json={"table": "sessions", "id": "x"}).get_json()["ok"] is False
+    print("  [PASS] core/pref/policy/fact edits + delete via HTTP; sessions delete refused")
+
+    h = client.get("/api/history").get_json()    # read-only, against the real log — shape only
+    for k in ("sessions", "session_count", "speakers"):
+        assert k in h, k
+    assert isinstance(h["sessions"], list)
+    assert b"History" in client.get("/history").data and b"Memory" in client.get("/memory").data
+    print("  [PASS] /api/history shape + /history + /memory pages served")
+
+
 if __name__ == "__main__":
     run()
+    run_history()
+    run_memory()
+    run_routes()
     print()

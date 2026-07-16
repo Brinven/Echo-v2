@@ -48,8 +48,12 @@ def load_webui_config() -> dict:
 
 
 def create_app(control):
-    """Build the Flask app. Routes are thin — all logic lives on EchoControl."""
+    """Build the Flask app. Routes are thin — all logic lives on EchoControl / memory_admin."""
     from flask import Flask, jsonify, request, send_from_directory
+
+    # Imported here, not at module top, so importing the webui package stays cheap and
+    # flask-free (memory_admin pulls in ib_lite). Only paid when the dashboard is actually built.
+    from . import memory_admin
 
     app = Flask(__name__, static_folder=None)
 
@@ -164,6 +168,94 @@ def create_app(control):
     def api_quit():
         control.request_quit()
         return jsonify(ok=True)
+
+    # ── History page (Phase 3): read-only view over logs/stage0_log.jsonl ──
+    @app.get("/history")
+    def history_page():
+        return send_from_directory(_STATIC_DIR, "history.html")
+
+    @app.get("/api/history")
+    def api_history():
+        return jsonify(control.history(
+            q=request.args.get("q") or None,
+            speaker=request.args.get("speaker") or None,
+            limit=request.args.get("limit", type=int),
+        ))
+
+    # ── Memory browser / editor (Phase 3): a web front-end over ib_lite_cli's curation ──
+    # Each route opens its OWN connection to control.memory_db_path (real echo.db in production,
+    # a temp DB under test) so it never shares IbLite's main-thread connection. See memory_admin.
+    @app.get("/memory")
+    def memory_page():
+        return send_from_directory(_STATIC_DIR, "memory.html")
+
+    @app.get("/api/memory")
+    def api_memory():
+        conn = memory_admin.open_conn(control.memory_db_path)
+        try:
+            return jsonify(memory_admin.dump_all(conn))
+        finally:
+            conn.close()
+
+    @app.get("/api/memory/search")
+    def api_memory_search():
+        conn = memory_admin.open_conn(control.memory_db_path)
+        try:
+            return jsonify(memory_admin.search(conn, request.args.get("q", "")))
+        finally:
+            conn.close()
+
+    @app.post("/api/memory/fact")
+    def api_memory_fact():
+        data = request.get_json(silent=True) or {}
+        conn = memory_admin.open_conn(control.memory_db_path)
+        try:
+            row = memory_admin.edit_fact(conn, data.get("id"),
+                                         value=data.get("value"), confidence=data.get("confidence"))
+            return jsonify(ok=row is not None, fact=row)
+        finally:
+            conn.close()
+
+    @app.post("/api/memory/core")
+    def api_memory_core():
+        data = request.get_json(silent=True) or {}
+        conn = memory_admin.open_conn(control.memory_db_path)
+        try:
+            row = memory_admin.edit_core(conn, data.get("key"), data.get("content"))
+            return jsonify(ok=row is not None, core=row)
+        finally:
+            conn.close()
+
+    @app.post("/api/memory/policy")
+    def api_memory_policy():
+        data = request.get_json(silent=True) or {}
+        conn = memory_admin.open_conn(control.memory_db_path)
+        try:
+            row = memory_admin.edit_policy(conn, data.get("key"), rule=data.get("rule"),
+                                           priority=data.get("priority"), active=data.get("active"))
+            return jsonify(ok=row is not None, policy=row)
+        finally:
+            conn.close()
+
+    @app.post("/api/memory/pref")
+    def api_memory_pref():
+        data = request.get_json(silent=True) or {}
+        conn = memory_admin.open_conn(control.memory_db_path)
+        try:
+            row = memory_admin.edit_pref(conn, data.get("key"), data.get("value"))
+            return jsonify(ok=row is not None, pref=row)
+        finally:
+            conn.close()
+
+    @app.post("/api/memory/delete")
+    def api_memory_delete():
+        data = request.get_json(silent=True) or {}
+        conn = memory_admin.open_conn(control.memory_db_path)
+        try:
+            n = memory_admin.delete_row(conn, data.get("table", ""), data.get("id"))
+            return jsonify(ok=n > 0, deleted=n)
+        finally:
+            conn.close()
 
     return app
 

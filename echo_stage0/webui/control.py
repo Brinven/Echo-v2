@@ -52,9 +52,14 @@ class EchoControl:
         list_voices=None,
         model_state=None,
         voice_name: str = "",
+        memory_db_path=None,
         lm_studio_url: str = _DEFAULT_LM_URL,
         kokoro_url: str = _DEFAULT_KOKORO_URL,
     ):
+        # Memory-page DB. None → the real echo.db (db.DB_PATH); tests inject a temp path so a
+        # memory edit/delete route never mutates Michael's production memory. The web thread
+        # opens its OWN connection to this per request — it never touches IbLite._conn.
+        self.memory_db_path = memory_db_path
         self.session = session
         self.sm = sm
         self.registry = registry                 # SpeakerRegistry or None
@@ -357,3 +362,12 @@ class EchoControl:
             if len(out) >= n:
                 break
         return list(reversed(out))
+
+    def history(self, *, q=None, speaker=None, limit=None) -> dict:
+        """Grouped conversation history for the /history page, read from the same JSONL log.
+
+        Read-only. Imported lazily so this module stays importable without the history helper
+        (and keeps the 'importing webui is cheap' property the package docstring promises).
+        """
+        from . import history as _history
+        return _history.read_history(_LOG_FILE, q=q, speaker=speaker, limit=limit)

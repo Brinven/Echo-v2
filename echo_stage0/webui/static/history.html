@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Echo — History</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#141b24; --panel2:#1b2430; --edge:#2a3644;
+    --ink:#eef4fb; --dim:#9fb0c3; --accent:#4aa3ff; --good:#3fb950; --bad:#f85149;
+    --warn:#f0a020; --echo:#7ee0c0; --you:#ffd479;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{background:var(--bg); color:var(--ink); font-size:18px;
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+    padding:12px; display:flex; flex-direction:column; gap:12px; overflow:hidden;}
+  a{color:var(--accent); text-decoration:none;}
+  header{display:flex; align-items:center; gap:14px; padding:6px 4px; flex-wrap:wrap;}
+  .brand{font-size:26px; font-weight:800; letter-spacing:.04em;}
+  .sub{font-size:15px; color:var(--dim); text-transform:uppercase; letter-spacing:.12em;}
+  .navbtn{background:var(--panel2); border:1px solid var(--edge); border-radius:10px;
+    padding:9px 14px; font-weight:700; font-size:15px; color:var(--ink); min-height:44px; display:flex; align-items:center;}
+  .navbtn:active{background:#26313f;}
+  .tools{margin-left:auto; display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+  input[type=text],select{font-family:inherit; font-size:16px; padding:10px 12px; border-radius:10px;
+    background:#0a1017; color:var(--ink); border:1px solid var(--edge); min-height:44px;}
+  input[type=text]{min-width:200px;}
+  button{font-family:inherit; font-size:15px; font-weight:700; color:var(--ink);
+    background:var(--panel2); border:1px solid var(--edge); border-radius:10px;
+    min-height:44px; padding:9px 14px; cursor:pointer; touch-action:manipulation;}
+  button:active{background:#26313f;}
+
+  #sessions{flex:1; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:12px; padding-right:4px;}
+  #sessions::-webkit-scrollbar{width:14px;}
+  #sessions::-webkit-scrollbar-thumb{background:var(--edge); border-radius:8px; border:3px solid var(--bg);}
+
+  .session{background:var(--panel); border:1px solid var(--edge); border-radius:14px; overflow:hidden;}
+  .s-head{display:flex; align-items:center; gap:12px; padding:14px 16px; cursor:pointer; user-select:none; flex-wrap:wrap;}
+  .s-head:active{background:var(--panel2);}
+  .s-date{font-weight:700; font-size:17px;}
+  .s-meta{color:var(--dim); font-size:14px;}
+  .s-chips{display:flex; gap:6px; flex-wrap:wrap; margin-left:auto;}
+  .chip{background:var(--panel2); border:1px solid var(--edge); border-radius:999px; padding:4px 11px; font-size:13px;}
+  .chip.legacy{color:var(--dim); border-style:dashed;}
+  .caret{color:var(--dim); font-size:14px; width:16px; text-align:center;}
+
+  .s-body{padding:4px 16px 14px; display:flex; flex-direction:column; gap:14px;}
+  .exchange{display:flex; flex-direction:column; gap:6px; padding-top:12px; border-top:1px solid var(--edge);}
+  .exchange:first-child{border-top:none; padding-top:4px;}
+  .bubble{padding:10px 13px; border-radius:11px; background:var(--panel2); line-height:1.4; user-select:text; -webkit-user-select:text;}
+  .bubble.reply{background:#10201b; border:1px solid #204034;}
+  .who{font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.05em; display:block; margin-bottom:3px;}
+  .who.you{color:var(--you);} .who.echo{color:var(--echo);}
+  .tmeta{font-size:12px; color:var(--dim); margin-top:4px; display:flex; gap:12px; flex-wrap:wrap;}
+  .tmeta .hit{color:var(--good);}
+  .empty{color:var(--dim); font-style:italic; padding:24px; text-align:center;}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">ECHO</div>
+    <div class="sub">History</div>
+    <a class="navbtn" href="/">← Control</a>
+    <a class="navbtn" href="/memory">🧠 Memory</a>
+    <div class="tools">
+      <input id="q" type="text" placeholder="Search what was said…" autocomplete="off">
+      <select id="speaker"><option value="">Everyone</option></select>
+      <button id="refresh">↻ Refresh</button>
+    </div>
+  </header>
+  <div id="sessions"><div class="empty">Loading…</div></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s??"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const expanded = new Set();     // session_ids currently open — preserved across refreshes
+let lastSig = "", speakersSig = "";
+
+async function api(path){ try{ const r = await fetch(path); return await r.json(); }catch(e){ return null; } }
+
+function fmtDate(ts){ if(!ts) return "—"; const d = new Date(ts); return isNaN(d) ? ts : d.toLocaleString([], {month:"short", day:"numeric", year:"numeric"}); }
+function fmtTime(ts){ if(!ts) return ""; const d = new Date(ts); return isNaN(d) ? "" : d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}); }
+
+function turnHtml(t){
+  // Meta arrays hold pre-built HTML fragments (values already escaped where needed), so they're
+  // joined without a further esc() pass — double-escaping was mangling the search query.
+  const said = (t.said||"").trim(), reply = (t.reply||"").trim();
+  const who = t.speaker || "You";
+  const saidMeta = [];
+  if(t.location) saidMeta.push(esc(t.location));
+  if(t.score != null) saidMeta.push(`<span class="${t.known?"hit":""}">match ${Number(t.score).toFixed(2)}${t.known?"":" · unknown"}</span>`);
+  if(fmtTime(t.time)) saidMeta.push(esc(fmtTime(t.time)));
+  const replyMeta = [];
+  if(t.searched && t.query) replyMeta.push("🔎 " + esc(t.query));
+  if(t.memories) replyMeta.push("🧠 " + Number(t.memories) + " recalled");
+  if(t.latency != null) replyMeta.push(Number(t.latency).toFixed(1) + "s");
+  let h = `<div class="exchange">`;
+  if(said) h += `<div class="bubble"><span class="who you">${esc(who)}</span>${esc(said)}`
+             + (saidMeta.length?`<div class="tmeta">${saidMeta.join(" · ")}</div>`:``) + `</div>`;
+  if(reply) h += `<div class="bubble reply"><span class="who echo">Echo</span>${esc(reply)}`
+             + (replyMeta.length?`<div class="tmeta">${replyMeta.join(" · ")}</div>`:``) + `</div>`;
+  return h + `</div>`;
+}
+
+function sessionHtml(s){
+  const open = expanded.has(s.session_id);
+  const chips = (s.speakers||[]).map(n=>`<span class="chip">${esc(n)}</span>`).join("")
+    + (s.synthetic?`<span class="chip legacy" title="Grouped by a time gap — predates session tracking">legacy</span>`:``);
+  const range = fmtDate(s.started) + (fmtTime(s.started)?` · ${fmtTime(s.started)}–${fmtTime(s.ended)}`:``);
+  return `<div class="session">
+      <div class="s-head" data-sid="${esc(s.session_id)}">
+        <span class="caret">${open?"▾":"▸"}</span>
+        <span class="s-date">${range}</span>
+        <span class="s-meta">${s.count} turn${s.count===1?"":"s"}</span>
+        <span class="s-chips">${chips}</span>
+      </div>
+      ${open?`<div class="s-body">${s.turns.map(turnHtml).join("")}</div>`:``}
+    </div>`;
+}
+
+function render(data){
+  if(!data){ $("sessions").innerHTML = `<div class="empty">Can't reach Echo.</div>`; return; }
+  const sessions = data.sessions||[];
+  // Populate the speaker filter once (or when the roster changes), keeping the current choice.
+  const sp = JSON.stringify(data.speakers||[]);
+  if(sp !== speakersSig){
+    speakersSig = sp;
+    const cur = $("speaker").value;
+    $("speaker").innerHTML = `<option value="">Everyone</option>`
+      + (data.speakers||[]).map(n=>`<option value="${esc(n)}"${n===cur?" selected":""}>${esc(n)}</option>`).join("");
+  }
+  const sig = JSON.stringify(sessions.map(s=>[s.session_id, s.count]));  // structure only; expand state is client-side
+  if(sig === lastSig && !renderForced){ return; }        // skip no-op re-render (don't fight scroll)
+  lastSig = sig; renderForced = false;
+  if(!sessions.length){ $("sessions").innerHTML = `<div class="empty">No conversations found.</div>`; return; }
+  // Newest session auto-expands the first time it appears.
+  if(sessions[0] && !seededTop){ expanded.add(sessions[0].session_id); seededTop = true; }
+  $("sessions").innerHTML = sessions.map(sessionHtml).join("");
+  for(const h of document.querySelectorAll(".s-head")){
+    h.onclick = ()=>{ const sid = h.dataset.sid; expanded.has(sid)?expanded.delete(sid):expanded.add(sid); renderForced = true; render(lastData); };
+  }
+}
+
+let lastData = null, renderForced = false, seededTop = false;
+async function load(){
+  const q = encodeURIComponent($("q").value.trim());
+  const sp = encodeURIComponent($("speaker").value);
+  lastData = await api(`/api/history?q=${q}&speaker=${sp}`);
+  render(lastData);
+}
+
+let t = null;
+$("q").addEventListener("input", ()=>{ clearTimeout(t); t = setTimeout(()=>{ lastSig=""; load(); }, 250); });
+$("speaker").addEventListener("change", ()=>{ lastSig=""; load(); });
+$("refresh").onclick = ()=>{ lastSig=""; load(); };
+load();
+// Gentle live-tail: re-fetch every 20s, re-rendering only when the session list actually changed.
+setInterval(load, 20000);
+</script>
+</body>
+</html>

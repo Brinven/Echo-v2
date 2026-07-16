@@ -983,3 +983,66 @@ voice that isn't a person. Config: `ignore: true` per profile in `echo_speakers.
   `max_profiles` (default 10) is a runaway guard: refuses a NEW name, never blocks a re-enroll.
 - Generalises to a TV, a podcast, or Echo hearing her own replies.
 
+---
+
+## ⚠ Stage 8.5 / Phase 3 (2026-07-16) — History page + Memory browser/editor
+
+Two new **read/edit surfaces on the dashboard** (`webui/`) so Michael can see her past
+conversations and hand-fix bad memories without the CLI or touching code. Both are additive +
+fail-soft: if the dashboard is off, the voice loop is byte-identical. No new dependencies (Flask,
+sqlite-vec, `ib_lite.embedder.encode`, httpx all already in play). Plan/checklist: `tasks/todo.md`.
+
+### History (`/history`, `webui/history.py`)
+- **Backed by `logs/stage0_log.jsonl`, NOT `sessions/`** — the per-turn append survives hard kills,
+  carries resolved speaker names, and reaches back to April (the `sessions/` files only exist from
+  07-15 on, after the per-turn-save fix). Read-only.
+- `read_history(log_path, q, speaker, limit)` is a **pure function** (unit-tested against a temp
+  log): tolerant JSONL parse (bad line / missing key skipped, never fatal — the field set has grown
+  since April), groups turns into sessions, newest first. **New records carry `session_id`** (added
+  to `logger.log_run` in `main.py`) for exact grouping; the ~90 legacy rows group by a **20-min
+  timestamp gap**. Records are sorted before grouping (a rescued/merged log could be out of order).
+- Served via `EchoControl.history()` → `GET /api/history`; page is `webui/static/history.html`
+  (session cards, You/Echo bubbles, per-turn meta: score/known, location, latency, 🔎 query,
+  🧠 memories; search + speaker filter; 20s live-tail that only re-renders on change).
+
+### Memory browser/editor (`/memory`, `webui/memory_admin.py`)
+- **A web front-end over the same curation `ib_lite_cli.py` does.** The web thread opens its **OWN**
+  `db.get_connection()` per request via `memory_admin.open_conn(control.memory_db_path)` — it NEVER
+  shares `IbLite._conn` (main-thread only; sqlite3 conns aren't thread-safe). `open_conn` sets
+  `PRAGMA busy_timeout=4000` so a concurrent background significance-gate write can't error the
+  editor with "database is locked" (WAL + a private connection — the same isolation `_insert` uses).
+- **`control.memory_db_path`** (new EchoControl arg, default None → the real `echo.db`) exists so
+  tests inject a temp DB — a memory edit/delete route must never mutate Michael's production memory
+  (same rule as the temp `echo_speakers.json` in the speaker tests).
+- **Two schema-driven rules, both load-bearing:**
+  - **Editing a fact's VALUE re-embeds it** (`encode(f"{entity} {attribute} {value}")`, injectable so
+    tests stay model-free) so semantic retrieval keeps finding it, and the plain UPDATE fires
+    `fact_touch` + `fact_fts_update` so BM25/FTS stays in sync. Confidence-only edits skip the
+    re-embed (no value change → no `encode`).
+  - **Episodic summaries are VIEW + DELETE only.** `episodic_fts` has an insert and a delete trigger
+    but **no AFTER UPDATE trigger**, so a summary edit via UPDATE would silently desync its search
+    index. Delete is safe (delete trigger exists). Do not add episodic-summary editing without first
+    adding that trigger.
+- **Edit scope (v1):** facts → value + confidence + delete; core/pref → content/value (upsert) +
+  delete; policy → rule + priority + **active toggle**, existing rows only (the editor tweaks
+  seeded/gate-authored rules, it doesn't mint new behavioral rules from the touchscreen); episodic →
+  view + delete. **`sessions` is never deletable** (FK parent of facts/prefs/policies/episodic).
+  No fact entity/attribute renaming (UNIQUE(entity,attribute) ON CONFLICT REPLACE would silently
+  delete a colliding row — delete-and-let-the-gate-relearn is the safe path).
+- The `/memory` search box runs the **real hybrid retrieval** (`fact_search`/`episodic_search`) and
+  shows the actual scores — genuinely useful for seeing WHY a bad fact surfaces (or whether
+  down-ranking its confidence hid it). Route: `GET /api/memory/search`.
+- **Security:** memory content is more sensitive than talk/mute. Same surface caveat as the rest of
+  the dashboard — binding off-loopback (`host` ≠ 127.0.0.1 for the touchscreen) exposes reading AND
+  editing Echo's memory to that network. No auth in v1 (Michael's call: "nothing crazy"); keep it on
+  loopback / a trusted Tailscale net. The page carries this warning inline.
+- **Tests:** `test_webui.py` gained `run_history` (grouping / gap heuristic / q+speaker+limit /
+  bad-line + missing-file tolerance), `run_memory` (edit_fact re-embed → `fact_fts` tracks the new
+  value + drops the old; core/pref/policy edits; delete incl. FTS sync; sessions/unknown refused),
+  and `run_routes` (the Flask routes against a temp DB; confidence-only fact edit keeps it
+  model-free). Real-bind HTTP smoke confirmed both pages serve, a real value edit re-embeds and the
+  hybrid search finds it (score 0.811, exercising real `encode` + sqlite-vec), and the real 104-row
+  log grouped into 20 sessions. All prior offline suites green.
+- **v1 out of scope (later):** memory *add* from the UI (facts are gate-authored; add core/pref by
+  editing an existing key), undo, per-turn deep-links from History into Memory, auth.
+

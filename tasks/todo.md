@@ -1,5 +1,71 @@
 # Echo — tasks/todo.md
 
+## ▶ ACTIVE (2026-07-16) — Phase 3: History page + Memory browser/editor
+
+Michael's call after Phase 1: **build the History view, and a way to look through / edit the
+memory system** so bad entries can be cleaned up by hand (no Anubis-style auto-detector — manual
+is fine; editing entries, not code). Both are new **read/edit surfaces on the existing dashboard**
+(`webui/`), fully additive + fail-soft: if the dashboard is off, the voice loop is byte-identical.
+
+### Decisions locked (this session)
+- **History is backed by `logs/stage0_log.jsonl`, NOT `sessions/`** — per-turn append survives hard
+  kills, has resolved speaker names, reaches back to April (104 turns). New records gain a
+  `session_id` for exact grouping; the 91 legacy rows group by a **timestamp-gap heuristic** (>20 min
+  gap = new session). Read-only page.
+- **Memory editor = a web front-end over what `ib_lite_cli.py` already does.** The web thread opens
+  its **OWN** `db.get_connection()` per request (never shares `IbLite._conn`, which is main-thread
+  only) with `PRAGMA busy_timeout` so a concurrent background gate-write can't collide (the `_insert`
+  pattern). Editing a fact's **value re-embeds** it (`encode(f"{entity} {attribute} {value}")`) so
+  semantic retrieval stays correct; the plain UPDATE fires `fact_touch` + `fact_fts_update` so FTS
+  stays in sync too.
+- **Edit scope (v1):** facts → value + confidence + delete; core → content + delete; policy → rule +
+  priority + active + delete; prefs → value + delete; **episodic → VIEW + DELETE only**. Episodic is
+  view-only-editable because `episodic_fts` has **no AFTER UPDATE trigger** (only insert/delete) — a
+  summary edit via plain UPDATE would silently desync its search index. Delete is safe (delete trigger
+  exists). No entity/attribute renaming in v1 (UNIQUE(entity,attribute) ON CONFLICT REPLACE makes a
+  rename that collides delete another row — delete-and-let-the-gate-relearn is the safe path).
+- **Separate pages, not tabs** (`/history`, `/memory`), linked from the control-panel header. Each is
+  one self-contained dark/touch HTML file (vanilla JS, no build step), matching `index.html`.
+- **Security:** same surface as the rest of the dashboard — off-loopback binding exposes memory
+  content + editing to the LAN/Tailscale. Default host stays `127.0.0.1`; note extended in code +
+  CLAUDE.md. No auth in v1 (Michael: "nothing crazy").
+
+### Build checklist — DONE (offline + real-bind HTTP verified here)
+- [x] **M1** `session_id` into `log_run` (`main.py`) — exact grouping going forward.
+- [x] **M2** `webui/history.py` — pure `read_history()`: tolerant JSONL parse, session grouping
+      (session_id else 20-min gap), newest-first, sorts before grouping. Unit-tested.
+- [x] **M3** `webui/memory_admin.py` — pure fns over a conn (mirror `ib_lite_cli.py`): `dump_all`,
+      `search`, `edit_fact` (re-embed on value change; injectable encoder), `edit_core`/`edit_pref`
+      (upsert) / `edit_policy` (existing only), `delete_row`. `open_conn` sets busy_timeout.
+- [x] **M4** `webui/server.py` routes: `/history` + `/api/history`; `/memory` + `/api/memory` +
+      `/api/memory/search` + `POST /api/memory/{fact,core,policy,pref,delete}`. Own conn per request
+      via `control.memory_db_path`. `EchoControl` gained `memory_db_path` + `history()`.
+- [x] **M5** `webui/static/history.html` — session cards, You/Echo bubbles, per-turn meta, search +
+      speaker filter, 20s live-tail (re-render only on change), back links.
+- [x] **M6** `webui/static/memory.html` — sections per table, inline Save/Delete, hybrid-search box
+      with scores, episodic view+delete, security note. Dark/touch, matches the panel.
+- [x] **M7** `webui/static/index.html` — header links to 🕘 History + 🧠 Memory.
+- [x] **M8** `test_webui.py` +3 sections: `run_history` (grouping/filter/tolerance, temp log),
+      `run_memory` (edit_fact re-embed → FTS tracks new value drops old; edits; deletes incl. FTS
+      sync + sessions/unknown refused), `run_routes` (Flask routes, temp DB, model-free).
+- [x] **M9** Verified: full `test_webui.py` (32 checks) + speaker(22)/audio(18) green, imports clean.
+      Real-bind smoke: both pages serve, a real value edit re-embeds and hybrid search finds it
+      (0.811, real encode + sqlite-vec), real 104-row log → 20 sessions. Docs: CLAUDE.md ⚠ Stage 8.5.
+
+### Review
+**Status: BUILT + verified here; ready to push to `main` (solo-repo).** Shipped: `webui/history.py`,
+`webui/memory_admin.py`, `webui/static/history.html`, `webui/static/memory.html`, routes +
+`memory_db_path`/`history()` in `webui/server.py`/`control.py`, header links in `index.html`,
+`session_id` in `main.py`'s `log_run`, `test_webui.py` (+3 sections). No new deps; fully additive +
+fail-soft. Key design calls: History from the log (not `sessions/`); memory editor opens its own
+busy-timeout connection (never IbLite's); fact-value edits re-embed; episodic is view+delete (no
+FTS update trigger); `sessions` undeletable; policy edits are existing-rows-only.
+
+### Open for Michael
+- [ ] Live pass: open `/history` and `/memory` from the panel; confirm history reads right and a bad
+      fact can be corrected/deleted by touch. Then from the touchscreen. **Reminder: `/memory` can
+      read AND edit Echo's memory — keep `host` on 127.0.0.1 unless the network is trusted.**
+
 ## ✅ DONE (2026-07-16) — Phase 1: stop losing sessions, stop talking to the clock
 
 Fallout from reviewing the 3-way live pass (Michael + Hillary + Echo), which itself went well.
@@ -38,11 +104,11 @@ Plan: `~/.claude/plans/precious-scribbling-starfish.md`.
       drops, a real stranger still gets a (guarded) reply.
 
 ### Open / next
-- [ ] **Michael's live pass on Kairos**: tick "Not a person", enroll it, wait for the half hour.
-      Expect `[ignored voice: Kairos …]`, no reply, no transcript entry, no turn counter move,
-      and no new record in `stage0_log.jsonl`.
-- [ ] **Re-enroll Michael + Hillary** — both prints predate the silence-trim fix (`prep` tag
-      absent), so they score LOWER than they should until redone. Startup warns.
+- [x] **Enroll Kairos as an ignored voice** — done (Michael, 2026-07-16, "Not a person" ticked).
+      Half-hour silent-drop is his to eyeball: expect `[ignored voice: Kairos …]`, no reply, no
+      transcript entry, no turn-counter move, no new `stage0_log.jsonl` record.
+- [x] **Re-enroll Michael + Hillary** — done (Michael, 2026-07-16). Both prints now carry the
+      `prep=voiced-v1` tag, so the startup staleness warning should be gone.
 - [ ] **Phase 2 — guest memory + the loyalty register** (its own plan; contains character content
       so CC drafts and Michael signs off). `fact_memory` gains `source_speaker` via a
       `user_version < 2` migration; `UNIQUE(entity, attribute)` stays (entity = who it's ABOUT,

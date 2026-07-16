@@ -34,6 +34,9 @@
   .hdr-meta{margin-left:auto; display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
   .tag{background:var(--panel2); border:1px solid var(--edge); border-radius:8px; padding:6px 12px; font-size:15px; color:var(--dim);}
   .tag b{color:var(--ink);}
+  .navbtn{background:var(--panel2); border:1px solid var(--edge); border-radius:10px; padding:8px 13px;
+    font-weight:700; font-size:14px; color:var(--ink); text-decoration:none; display:flex; align-items:center; min-height:44px;}
+  .navbtn:active{background:#26313f;}
 
   /* zoom — the panel has no keyboard, so Ctrl+/- and window-resizing aren't available to it */
   .zoom{display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--edge); border-radius:10px; padding:4px;}
@@ -138,6 +141,8 @@
       <div class="tag">Snark <b id="snark">—</b></div>
       <div class="tag">Where <b id="location">—</b></div>
       <div class="tag">Turn <b id="turns">0</b></div>
+      <a class="navbtn" href="/history">🕘 History</a>
+      <a class="navbtn" href="/memory">🧠 Memory</a>
       <div class="zoom">
         <button id="zoom-out" title="Zoom out">−</button>
         <button id="zoom-reset" title="Reset zoom"><span id="zoom-val">100%</span></button>
