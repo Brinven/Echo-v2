@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from . import db
 from .embedder import encode
-from .significance import run_gate
+from .significance import run_gate, reject_reason
 from .schema import validate_write
 from .retrieval import fact_search, episodic_search
 
@@ -198,8 +198,12 @@ class IbLite:
 
     # ── writes (background) ──────────────────────────────────────────────
 
-    def write_memory(self, session_id: str, turn_text: str) -> None:
-        """Fire the significance gate on a background thread. Non-blocking, single-flight."""
+    def write_memory(self, session_id: str, turn_text: str, searched: bool = False) -> None:
+        """Fire the significance gate on a background thread. Non-blocking, single-flight.
+
+        `searched` is passed through to the gate so a web-lookup turn doesn't file the
+        looked-up conditions (weather/news) as durable facts.
+        """
         if not self._available or not turn_text.strip():
             return
         with self._gate_lock:
@@ -208,25 +212,33 @@ class IbLite:
                 return
             self._gate_busy = True
         threading.Thread(
-            target=self._gate_worker, args=(session_id, turn_text), daemon=True
+            target=self._gate_worker, args=(session_id, turn_text, searched), daemon=True
         ).start()
 
-    def _gate_worker(self, session_id: str, turn_text: str) -> None:
+    def _gate_worker(self, session_id: str, turn_text: str, searched: bool = False) -> None:
         try:
-            payload = run_gate(turn_text, self._model)
+            payload = run_gate(turn_text, self._model, searched=searched)
             if not isinstance(payload, dict) or not payload.get("save"):
                 return
 
             ok, err = validate_write(payload)
             if not ok:
                 # Retry once with the validation error as a correction hint.
-                payload = run_gate(turn_text, self._model, correction=err)
+                payload = run_gate(turn_text, self._model, correction=err, searched=searched)
                 if not isinstance(payload, dict) or not payload.get("save"):
                     return
                 ok, err = validate_write(payload)
                 if not ok:
                     self._log_failure(turn_text, payload, err)
                     return
+
+            # Deterministic backstop: drop non-durable saves (ephemeral state, self/meta entities)
+            # even when the model returns save=true. The tightened prompt is the primary defense;
+            # this guarantees the noise classes never reach the store.
+            reason = reject_reason(payload)
+            if reason:
+                logger.info(f"significance gate: dropped non-durable save ({reason}): {payload}")
+                return
 
             self._insert(session_id, payload)
         except Exception as e:

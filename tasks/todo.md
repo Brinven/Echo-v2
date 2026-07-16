@@ -66,6 +66,28 @@ FTS update trigger); `sessions` undeletable; policy edits are existing-rows-only
       fact can be corrected/deleted by touch. Then from the touchscreen. **Reminder: `/memory` can
       read AND edit Echo's memory — keep `host` on 127.0.0.1 unless the network is trusted.**
 
+## ✅ DONE (2026-07-16) — Memory gate stops hoarding noise
+
+Michael, poking around the new `/memory` page: the gate was "writing down basically everything" —
+a weather query left "flooding in south central Texas" as a durable fact; also ephemeral state
+(`current_task`, `homestead/current_state=quiet`), self/meta (`entity=Echo`, `memory_system`), and
+duplicates (`Michael` vs `Michael's location`). This is the deferred Stage 5 Part 3 M9 "web junk"
+item, now triggered. `fact_memory` is durable (low decay), so these accumulate — his instinct was right.
+
+- [x] **Tightened `GATE_SYSTEM`** (explicit NEVER-save list: right-now state, looked-up
+      weather/news/prices, facts about Echo/the software, smalltalk; canonical entity naming).
+- [x] **`run_gate(searched=…)`** — web-search turns tell the gate the facts were looked up, not
+      lived. Threaded from `main.py` (`search_meta["web_search_triggered"]`) → `write_memory` → gate.
+- [x] **`reject_reason()`** deterministic backstop in `_gate_worker` before `_insert` — drops
+      self/meta entities + ephemeral (`current_*`/status/state/mood) attrs even if the model says save.
+- [x] **`test_significance.py`** (offline, model-free): net catches all 7 real noise facts, passes
+      durable ones. Live-verified: weather→no save; "testing image models"→net caught `current_project`;
+      "sister Anna allergic to cats"→saved clean (`Anna/allergy/cats`).
+- [x] **Cleared the accumulated junk** in `echo.db` (Michael deleted several; I cleared the rest —
+      left 1 clean fact `Michael/location/Magnolia, Texas`). Full architecture: CLAUDE.md ⚠ Ib-Lite.
+- **Michael must restart Echo** (stop-echo → start-echo, or restart-echo) to load the new gate —
+      the running process is still on the old gate until then.
+
 ## ✅ DONE (2026-07-16) — Phase 1: stop losing sessions, stop talking to the clock
 
 Fallout from reviewing the 3-way live pass (Michael + Hillary + Echo), which itself went well.

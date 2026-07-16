@@ -307,6 +307,29 @@ completion. This is the ONLY knob that works for this template — `reasoning_ef
 and `chat_template_kwargs.enable_thinking=false` do NOT disable it. With it: clean JSON in
 ~1s. If the gate is ever pointed at a different thinking model, re-verify reasoning is off.
 
+### Gate saves durable facts only — noise exclusion (2026-07-16)
+
+The gate was over-writing (Michael flagged it): ephemeral state (`current_task`,
+`homestead/current_state=quiet`), self/meta facts (`entity=Echo`, `memory_system/status`), and
+**looked-up** info (a weather query filed "flooding in south central Texas" as a durable fact —
+exactly the deferred Stage 5 Part 3 M9 "ephemeral web junk" item, now triggered). Three layers keep
+`fact_memory` clean, all in `significance.py`, none touch Echo's persona:
+- **Tightened `GATE_SYSTEM`** with an explicit NEVER-save list (momentary/"right now" state,
+  looked-up weather/news/prices/conditions, facts about Echo or the software, smalltalk) + "use
+  `Michael` as the entity, not `Michael's location`" canonicalization.
+- **`run_gate(..., searched=bool)`** — on a web-search turn the gate is told the facts were looked
+  up, not lived. Threaded from `main.py` via `search_meta["web_search_triggered"]` →
+  `ib.write_memory(..., searched=...)` → `_gate_worker` → both `run_gate` calls.
+- **`reject_reason(payload)`** — a deterministic backstop in `_gate_worker` (before `_insert`) that
+  drops facts with a self/meta entity (`echo`, `memory_system`, `the system`, …) or an ephemeral
+  attribute (`current_*`, or bare `status`/`state`/`mood`) **even if the model returns save=true**.
+  Facts only — prefs/policies pass. **This layer is load-bearing:** live-verified, the model still
+  tried to save "testing image models" as `current_project` and the net caught it. The prompt is the
+  primary defense; the net is the guarantee.
+- Offline test `test_significance.py` pins the net against all 7 real accumulated-noise facts +
+  durable-facts-pass. The one-time junk already in `echo.db` was cleared via the CLI / `/memory`
+  editor (left 1 clean fact: `Michael/location/Magnolia, Texas`).
+
 ### FTS5 stays in sync via UPSERT, not REPLACE
 
 Fact writes use explicit `INSERT ... ON CONFLICT(entity,attribute) DO UPDATE` (NOT

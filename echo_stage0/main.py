@@ -560,7 +560,10 @@ def run_streaming_pipeline(
         # Facts ABOUT a guest told BY Michael ("Jon loves hiking") still save — that's Michael's turn.
         if ib and ib.available and session.current_speaker_is_michael:
             turn_text = f"{session.current_speaker}: {transcript}\nEcho: {full_response}"
-            ib.write_memory(session.session_id, turn_text)
+            # searched=True tells the gate this turn's facts were looked up (weather/news), so it
+            # won't file them as durable memories — the "flooding in south central TX" class.
+            ib.write_memory(session.session_id, turn_text,
+                            searched=search_meta["web_search_triggered"])
         elif ib and ib.available:
             print(f"  [memory: skipped — speaker is {session.current_speaker}, not Michael]")
 
