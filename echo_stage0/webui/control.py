@@ -231,8 +231,12 @@ class EchoControl:
         self._quit.set()
 
     # ── speaker controls ──
-    def start_enroll(self, name: str) -> bool:
-        """Arm enrollment: the next spoken utterance becomes this person's voiceprint.
+    def start_enroll(self, name: str, ignore: bool = False) -> bool:
+        """Arm enrollment: the next spoken utterance becomes this voice's print.
+
+        `ignore=True` enrolls it as furniture — a voice Echo recognizes and never answers
+        (Michael's Kokoro clock, a TV). Arm-and-wait is the right shape for those: a clock
+        only speaks on the half hour, so a CLI that records on demand can't catch it.
 
         No-op (returns False) if speaker awareness isn't active — otherwise session.enrolling
         would get stuck (the capture guard needs the embedder).
@@ -240,11 +244,15 @@ class EchoControl:
         name = (name or "").strip()
         if not name or not self.speaker_active:
             return False
+        # Order matters: the capture guard reads `enrolling` to fire, so set the flag it will
+        # read FIRST. Two plain attribute writes, GIL-atomic, no lock — the house pattern.
+        self.session.enrolling_ignore = bool(ignore)
         self.session.enrolling = name[:1].upper() + name[1:]
         return True
 
     def cancel_enroll(self) -> None:
         self.session.enrolling = None
+        self.session.enrolling_ignore = False
 
     def set_threshold(self, value: float) -> float | None:
         """Update the speaker match threshold LIVE (identify() reads it per call) and persist."""
@@ -284,11 +292,15 @@ class EchoControl:
             "voice": self._voice_name,
             "pending_voice": self.pending_voice,
             "enrolling": s.enrolling,
+            "enrolling_ignore": bool(s.enrolling_ignore),
             "turn_count": s.turn_count,
             "exchange_count": s.exchange_count,
             "transcript": turns,
             "speaker_active": self.speaker_active,
-            "enrolled": self.registry.names if self.registry else [],
+            # active_names, not names: the chips list PEOPLE. Ignored voices are reported
+            # separately so the panel can show them muted rather than as guests.
+            "enrolled": self.registry.active_names if self.registry else [],
+            "ignored": self.registry.ignored_names if self.registry else [],
             "match_threshold": self.registry.match_threshold if self.registry else None,
         }
 

@@ -234,6 +234,51 @@ def run() -> None:
     assert fresh.profiles[0]["prep"] == _PREP_TAG
     print("  [PASS] stale prints flagged for re-enrol but still identify; new prints stamped")
 
+    # 17. Ignored voices ("not a person": Michael's Kokoro clock, a TV).
+    # The counter-intuitive one first: identify() must STILL MATCH an ignored print. Filtering
+    # it out of the match loop would drop the clock to "unknown" → the guarded-stranger block →
+    # Echo answers it politely, which is the exact bug the flag exists to kill.
+    clock = _reg([_prof("Michael", [1, 0, 0, 0]), dict(_prof("Kairos", [0, 1, 0, 0]), ignore=True)])
+    name, score = clock.identify(np.array([0.05, 0.99, 0.0, 0.0], dtype=np.float32))
+    assert name == "Kairos" and score > 0.9, (name, score)
+    assert clock.is_ignored("Kairos") and clock.is_ignored("kairos"), "is_ignored is case-insensitive"
+    assert not clock.is_ignored("Michael") and not clock.is_ignored("nobody")
+    print("  [PASS] identify STILL matches an ignored voice (you must know it to decline it)")
+
+    # active_* is the roster of PEOPLE. `count > 1` is what switches on [Name] tagging, so a
+    # solo Michael + a clock must NOT read as multi-speaker — that would tag his own turns.
+    assert clock.count == 2 and clock.active_count == 1, (clock.count, clock.active_count)
+    assert clock.active_names == ["Michael"] and clock.ignored_names == ["Kairos"]
+    assert clock.stale_prints() == ["Michael"], "a clock is never nagged to re-enroll"
+    print("  [PASS] active_count excludes the clock → a solo Michael is not multi-speaker")
+
+    # enroll() must CARRY the flag forward. It replaces the whole profile dict on a name
+    # collision, so a default re-enroll would silently un-ignore the clock and it would start
+    # talking to Echo again.
+    clock.enroll("Kairos", np.array([0, 1, 0, 0], dtype=np.float32))          # no ignore= given
+    assert clock.is_ignored("Kairos"), "re-enroll silently dropped ignore — the clock is back"
+    clock.enroll("Kairos", np.array([0, 1, 0, 0], dtype=np.float32), ignore=False)   # explicit
+    assert not clock.is_ignored("Kairos"), "explicit ignore=False must still win"
+    clock.enroll("Kairos", np.array([0, 1, 0, 0], dtype=np.float32), ignore=True)
+    assert clock.is_ignored("Kairos")
+    print("  [PASS] enroll preserves ignore by default; explicit True/False still wins")
+
+    # max_profiles is a runaway guard: refuse a NEW name, always allow an upsert.
+    full = _reg([_prof(f"P{i}", [1, 0, 0, 0]) for i in range(3)], max_profiles=3)
+    try:
+        full.enroll("Newcomer", np.array([1, 0, 0, 0], dtype=np.float32))
+        raise AssertionError("max_profiles did not refuse a new name")
+    except ValueError as e:
+        assert "full" in str(e).lower()
+    full.enroll("P1", np.array([0, 0, 1, 0], dtype=np.float32))   # upsert of an existing name
+    assert full.count == 3
+    print("  [PASS] max_profiles refuses a new name but never blocks a re-enroll")
+
+    # Session flags: the dashboard arms both together and cancel clears both.
+    s3 = Session(model="m", stt_backend="b", tts_backend="t", user_name="Michael")
+    assert s3.enrolling is None and s3.enrolling_ignore is False
+    print("  [PASS] session enrolling_ignore defaults off")
+
     print("  OFFLINE: all speaker-awareness checks passed.")
 
 

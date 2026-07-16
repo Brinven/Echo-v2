@@ -922,3 +922,64 @@ What's built:
 - **`main._print_vram_hint()`** after any LLM timeout/error, so the cryptic failure names its suspect.
 - Diagnosis by hand: `lms ps` (what's resident), `nvidia-smi` (idle desktop baseline ≈3.0/16.3 GB),
   or set LM Studio's **Max Loaded Models = 1**. Cross-project gotcha — also in Hindsight `axly-infra`.
+
+---
+
+## ⚠ Stage 8.4 (2026-07-16) — sessions persist per turn; some voices are furniture
+
+### Sessions save after EVERY turn — do not "optimise" this back to the end
+
+`save_session_file()` runs after each completed turn (`main.py`, right after `logger.log_run`).
+It used to run ONLY at the end — sign-off or a clean exit — and there was no `stop-echo.bat`,
+so the only way to stop Echo was closing the window, which hard-kills the process before either
+save. **Every conversation from 2026-07-14 to 2026-07-16 was thrown away**, including the 3-way
+Hillary session; `speaker_name` (added 2026-07-15) had never once reached disk. Autopsy:
+`tasks/lessons.md` 2026-07-16.
+
+- It's a full idempotent rewrite (~10KB, a few ms) that re-stamps `ended_at`, so per-turn needs
+  nothing from `session.py`. The end-of-run saves stay — they also write the summary.
+- **A GUI-driven process has no reliable "end."** Anything that must survive belongs on the
+  per-turn path, not the shutdown path.
+- **`stop-echo.bat` / `restart-echo.bat` now exist** (the global start/stop/restart convention;
+  Echo had shipped start-only). They try `POST /api/quit` first — the same graceful path as the
+  dashboard's Stop button — and force-kill only if that doesn't take.
+- **The kill filter is `ExecutablePath -like '<repo>\*'`, never CommandLine.** Verified against
+  every python.exe on this box (2026-07-16): ExecutablePath → **1** proc (correct);
+  `CommandLine -match '.venv\Scripts\python.exe'` → **6**, including **Kokoro-FastAPI, Echo's
+  own TTS**; `CommandLine -match 'Echo'` → **14**. Echo's command line is the RELATIVE
+  `".venv\Scripts\python.exe  main.py"` and contains no "Echo" at all, so a CommandLine filter
+  cannot work. **The venv launcher spawns the base interpreter as a CHILD whose ExecutablePath
+  is the GLOBAL python** — no path filter can see it; it's found by ParentProcessId and must be
+  killed too, or a force-stop leaves half of Echo holding the mic and the port.
+
+### Ignored voices — Echo recognises them and says nothing
+
+`Kairos` (Michael's own Kokoro clock app on the Mac) announces the time aloud; Echo's mic heard
+it and she replied **every 30 minutes for a day**, weaving it into the live conversation. Voice-ID
+worked perfectly and didn't help: it returned `unknown` (0.09–0.17), and `unknown` gets the
+*courteous guarded stranger* treatment — and strangers get answered. There was no concept of a
+voice that isn't a person. Config: `ignore: true` per profile in `echo_speakers.json`.
+
+- **`identify()` still MATCHES an ignored print — do not "fix" this.** Filtering them out of the
+  match loop recreates the bug exactly: the clock falls to `(None, score)` → `"unknown"` →
+  `SPEAKER_UNKNOWN` → a polite reply. **You have to recognise a voice to decline it.** The flag
+  is read *after* the match, via `is_ignored()`. `test_speaker_id.py` asserts this directly.
+- **`active_count`/`active_names` = PEOPLE; `count`/`names` = all prints.** One counter was
+  answering two questions. `active_count > 1` drives `[Name]` tagging — using `count` would make
+  a solo Michael + a clock start tagging his own turns and injecting `MULTI_SPEAKER_NOTE`,
+  breaking the guarantee that a solo roster stays byte-identical to pre-Stage-6. It also feeds the
+  dashboard chips, the startup line, `michael_enrolled`, and `stale_prints()`. **But the identify
+  gate is deliberately `count > 0`** — a roster of only Kairos must still fingerprint, or she'd
+  answer the clock as Michael.
+- **`enroll()` preserves `ignore` by default** (`ignore=None` → carry the existing flag). It
+  replaces the whole profile dict on a name collision, so a plain re-enroll would silently
+  un-ignore the clock and it would start talking again weeks later, apparently spontaneously.
+- **The drop sits after `identify()` and before everything that commits**: `add_user_turn` (never
+  reaches the transcript, the dashboard, the session file, or the sign-off summarizer — a second
+  memory-write path), `increment_exchange` (anti-drift cadence stays honest), `decide_search` (an
+  LLM call), and `audio_q.start()`. `return None` — the `[Too short]` contract.
+- Enroll one with the dashboard's **"Not a person"** checkbox (arm-and-wait — a clock only speaks
+  on the half hour, so a CLI that records on cue can't catch it) or `enroll.py <name> --ignore`.
+  `max_profiles` (default 10) is a runaway guard: refuses a NEW name, never blocks a re-enroll.
+- Generalises to a TV, a podcast, or Echo hearing her own replies.
+

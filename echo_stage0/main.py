@@ -212,6 +212,7 @@ def run_streaming_pipeline(
         session.add_user_turn(transcript, stt_latency)
         if is_enroll_cancel(transcript):
             session.enrolling = None
+            session.enrolling_ignore = False
             reply = "Alright, cancelled — no new voice saved."
         elif len(audio) < SAMPLE_RATE * 2.0:
             # Too little audio for a reliable print — keep enrolling armed and re-prompt.
@@ -221,14 +222,18 @@ def run_streaming_pipeline(
                 # Trim here too: a print made from a padded buffer carries the same silence
                 # bias, and then every future match is measured against a diluted profile.
                 emb = speaker_embedder.embed(voiced_only(audio))
-                speaker_registry.enroll(pending, emb)
+                as_ignored = bool(session.enrolling_ignore)
+                speaker_registry.enroll(pending, emb, ignore=as_ignored)
                 speaker_registry.config["enabled"] = True
                 speaker_registry.save()
                 session.enrolling = None
-                reply = f"Got it — I'll know your voice now, {pending}."
+                session.enrolling_ignore = False
+                reply = (f"Got it — that's {pending}. I'll know it, and I'll leave it alone."
+                         if as_ignored else f"Got it — I'll know your voice now, {pending}.")
             except Exception as e:
                 print(f"  [enroll error: {e}]")
                 session.enrolling = None
+                session.enrolling_ignore = False
                 reply = "Something went wrong saving that voice. We can try again another time."
         print_conversation("Echo", reply)
         audio_q.start()
@@ -362,6 +367,11 @@ def run_streaming_pipeline(
     # and the memory guardrail below withholds the write — never misattributed to Michael).
     speaker_score = 0.0
     speaker_known = True
+    # `count`, NOT `active_count` — deliberate. This gate asks "is there any print to match
+    # against?", and an ignored voice is very much worth matching: recognising the clock is the
+    # whole point. active_count is for "how many PEOPLE do I know" (tagging, chips, the startup
+    # line). Swapping this one to active_count would make a roster of just Kairos skip
+    # identification entirely and answer the clock as Michael.
     if speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 0:
         try:
             # voiced_only, not the raw buffer: the capture runs from the pre-roll to the VAD
@@ -379,11 +389,30 @@ def run_streaming_pipeline(
         session.current_speaker = session.user_name or "Michael"
     session.last_speaker_score = speaker_score
 
-    # Tag utterances with WHO said them once there's more than one voice on file. Resolved per
+    # ── Not a person: say nothing ──
+    # Michael's Kokoro clock app announces the time over the Mac speakers; Echo's mic hears it
+    # and she answered it every 30 minutes for a day, weaving it into the live conversation
+    # ("Are we moving into the evening routine, or are you still finding your way out of that
+    # headache?"). Voice-ID already knew it wasn't Michael — that didn't help, because she
+    # answers strangers too. So the roster learns that some voices are furniture.
+    #
+    # This has to sit exactly here. AFTER identify() (you can't know it's the clock until the
+    # voice resolves) and BEFORE everything that costs or commits anything: add_user_turn (the
+    # clock never reaches the transcript, the dashboard, the session file, or the sign-off
+    # summarizer — a second memory-write path), increment_exchange (the anti-drift cadence
+    # stays honest), decide_search (an LLM call), and audio_q.start (no playback cycle opened,
+    # none owed). Returning None is the same contract as [Too short] / [No speech detected].
+    if speaker_registry is not None and speaker_registry.is_ignored(session.current_speaker):
+        print(f"  [ignored voice: {session.current_speaker} ({speaker_score:.2f}) — not a person, no reply]")
+        return None
+
+    # Tag utterances with WHO said them once there's more than one PERSON on file. Resolved per
     # turn, not at startup: enrollment can add a voice mid-session. A solo roster (or the feature
     # off) leaves the message stream byte-identical to pre-Stage-6 — no regression on the path
-    # Michael actually uses 99% of the time.
-    multi_speaker = speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 1
+    # Michael actually uses 99% of the time. active_count, not count: enrolling the clock must
+    # not make a solo Michael conversation start tagging itself [Michael].
+    multi_speaker = (speaker_embedder is not None and speaker_registry is not None
+                     and speaker_registry.active_count > 1)
 
     print_conversation(session.current_speaker if multi_speaker else "You", transcript)
     session.add_user_turn(transcript, stt_latency, speaker=session.current_speaker)
@@ -585,6 +614,22 @@ def run_streaming_pipeline(
         **search_meta,
     )
 
+    # Persist the session after every completed turn, not just at the end.
+    #
+    # save_session_file() used to run ONLY on sign-off (do_signoff) or a clean exit (main's
+    # tail). There is no way to reach either by closing the window, which is how a GUI-driven
+    # Echo actually gets stopped — so every conversation between 2026-07-14 and 2026-07-16 was
+    # thrown away, including the 3-way session with Hillary. Seven sessions ran on 2026-07-15
+    # and not one produced a file. `speaker_name` had never once reached disk.
+    #
+    # This is a full idempotent rewrite (~10KB, a few ms) that re-stamps ended_at, so calling
+    # it per turn needs nothing from session.py and bounds the loss to the turn in flight.
+    # The end-of-run saves stay — they're the ones that also write the summary.
+    try:
+        session.save_session_file()
+    except OSError as e:
+        print(f"  [session save failed: {e}]")
+
     return {"stt": stt_latency, "first_audio": first_audio, "passed": passed}
 
 
@@ -719,13 +764,16 @@ def main():
     speaker_embedder = build_embedder(speaker_registry.config) if speaker_registry.enabled else None
     if speaker_embedder is not None:
         owner = (user_name or "Michael").lower()
-        michael_enrolled = any(n.lower() == owner for n in speaker_registry.names)
-        if speaker_registry.count == 0:
+        # active_* everywhere here: an ignored voice is furniture, not an enrolled person.
+        michael_enrolled = any(n.lower() == owner for n in speaker_registry.active_names)
+        if speaker_registry.active_count == 0:
             print("  Speaker ID: on — no voices enrolled yet (enroll via the dashboard, or: python enroll.py Michael)")
         else:
-            print(f"  Speaker ID: on ({speaker_registry.count} enrolled: {', '.join(speaker_registry.names)})"
+            print(f"  Speaker ID: on ({speaker_registry.active_count} enrolled: {', '.join(speaker_registry.active_names)})"
                   + ("" if michael_enrolled
                      else "  [WARN: Michael not enrolled — his turns read as 'unknown' and won't be saved]"))
+            if speaker_registry.ignored_names:
+                print(f"    [ignoring: {', '.join(speaker_registry.ignored_names)} — recognized, never answered]")
             stale = speaker_registry.stale_prints()
             if stale:
                 print(f"    [WARN: {', '.join(stale)} enrolled before the silence-trim fix — those prints")

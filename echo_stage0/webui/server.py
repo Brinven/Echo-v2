@@ -150,8 +150,9 @@ def create_app(control):
         if data.get("cancel"):
             control.cancel_enroll()
             return jsonify(ok=True, enrolling=None)
-        ok = control.start_enroll(data.get("name", ""))
-        return jsonify(ok=ok, enrolling=control.session.enrolling)
+        ok = control.start_enroll(data.get("name", ""), ignore=bool(data.get("ignore")))
+        return jsonify(ok=ok, enrolling=control.session.enrolling,
+                       enrolling_ignore=control.session.enrolling_ignore)
 
     @app.post("/api/threshold")
     def api_threshold():

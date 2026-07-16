@@ -171,6 +171,10 @@ class Session:
         # enrolling: a pending in-conversation enrollment. "Echo, this is Jon" sets the name;
         # the NEXT utterance's audio is captured as Jon's voiceprint. None when not enrolling.
         self.enrolling: str | None = None
+        # enrolling_ignore: enroll the pending voice as furniture rather than a person — a
+        # voice Echo recognizes and never answers (the Kokoro clock, a TV). Set alongside
+        # `enrolling` by the dashboard's ignore checkbox; cleared with it.
+        self.enrolling_ignore: bool = False
         # last_speaker_score: cosine score of the most recent speaker identification, surfaced
         # in the GUI for threshold tuning. Set each real turn alongside current_speaker.
         self.last_speaker_score = 0.0

@@ -148,6 +148,70 @@ assume about exclusivity that is no longer true?
 **Tooling**: for a hung/unresponsive loop, `py-spy dump --pid <pid>` gives every thread's stack of a
 LIVE process without restarting or instrumenting it. It found this in one shot after theory failed.
 
+## 2026-07-16: Echo threw away every conversation for two days, and answered a clock
+
+Two findings from reviewing the 3-way live pass. Neither was the thing being reviewed.
+
+### 1. Seven sessions, zero files
+
+**Problem**: `sessions/` ended at `session_2026-07-14_08-44-32`. Seven sessions ran on
+2026-07-15 (their ids are in `persona_divergence.jsonl`) and **not one produced a file** —
+including the Hillary conversation that motivated the whole speaker-attribution effort. The
+`speaker_name` field added on 2026-07-15 had **never once reached disk**.
+
+**Root cause**: `save_session_file()` was called in exactly two places, both at the END of a
+run — sign-off, or a clean exit. And there was **no `stop-echo.bat`**: the repo shipped
+`start-echo.bat`, `start-dashboard.bat`, `stop-dashboard.bat` and nothing else. The only way
+to stop Echo was closing the window, which hard-kills the process before either save runs.
+Every conversation was being discarded at the moment it ended.
+
+**Fix**: save after every completed turn (a full idempotent rewrite, ~10KB, a few ms), plus
+the missing `stop-echo.bat` / `restart-echo.bat`, which try the graceful `/api/quit` path
+first. Running the new stop script against the still-live process **rescued the Hillary
+session** — 18 turns, correctly attributed to Michael/Hillary/unknown.
+
+**Lessons**:
+- **The missing launcher was the bug.** `~/.claude/CLAUDE.md` mandates start/stop/restart at
+  the repo root, scaffolded early, "don't wait to be asked". Echo shipped start-only, so the
+  only available stop was the one path that loses data. A convention gap didn't stay cosmetic;
+  it silently deleted two days of the thing the project exists to accumulate.
+- **"Save at the end" assumes there is an end.** Any long-lived process that a human closes by
+  closing its window has no reliable end. Persist incrementally or accept that you're building
+  a feature nobody can use — Phase 3's History page would have had nothing to read.
+- **The absence of a file is not a loud failure.** Nothing errored, nothing logged. It was only
+  visible by *going to look* for the transcripts, which happened only because Michael asked for
+  a reader. Ask "where did that actually land?" before building the thing that reads it.
+
+### 2. She was talking to a clock
+
+**Problem**: `Kairos` — Michael's own Kokoro-based clock app on the Mac — announces the time
+aloud. Echo's mic hears it. Eight logged turns, one every 30 minutes, each a real LLM
+round-trip to an empty room, each woven into the live conversation: *"Are we moving into the
+evening routine, Michael, or are you still finding your way out of that headache?"*
+
+**Root cause**: voice-ID worked perfectly and did not help. It returned `unknown` (0.09–0.17)
+every time — but `unknown` gets the *courteous guarded stranger* treatment, and a stranger
+gets a reply. There was no concept of a voice that isn't a person.
+
+**Fix**: an `ignore: true` flag per profile. Enroll the clock so Echo can recognise it and say
+nothing.
+
+**Lessons**:
+- **You have to recognise a voice to decline it.** The obvious implementation — filter ignored
+  prints out of `identify()` — recreates the bug exactly: the clock falls through to
+  "unknown" → guarded stranger → reply. The flag has to be read *after* the match. The tests
+  assert this directly, because it reads backwards and someone will "clean it up".
+- **One counter, two questions.** `count` answered both "is there a print to match against?"
+  (wants the clock) and "how many people do I know?" (must not count it). The second drives
+  `[Name]` tagging, so enrolling a clock next to a solo Michael would have started tagging his
+  own turns. Splitting to `active_count` was most of the work; the flag itself was trivial.
+- **A flag that survives one write path but not another is a bug with a delay.** `enroll()`
+  replaces the whole profile dict on a name collision, so a re-enroll would silently drop
+  `ignore` and the clock would come back weeks later, apparently spontaneously.
+- **Michael's hardware is not the problem; Michael's own software is.** The transcripts read
+  like Whisper hallucinating on a chime. It was a real voice, saying real words, synthesized
+  by the same TTS engine Echo uses.
+
 ## 2026-07-16: "She learned Hillary's voice on the fly!" — she did not; ECAPA was eating silence
 
 **Problem**: In the 3-way live pass Hillary asked "Hey Echo, do you know who this is?" and

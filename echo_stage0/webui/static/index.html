@@ -107,7 +107,11 @@
   /* speaker */
   .chips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; min-height:20px;}
   .chip{background:var(--panel2); border:1px solid var(--edge); border-radius:999px; padding:5px 12px; font-size:15px;}
+  .chip.ignored{color:var(--dim); border-style:dashed; background:transparent;}
   .enroll-row{display:flex; gap:10px;}
+  .ignore-row{display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--dim);
+    font-size:14px; cursor:pointer; user-select:none;}
+  .ignore-row input{width:22px; height:22px; accent-color:var(--accent); flex:none; cursor:pointer;}
   input[type=text]{flex:1; font-size:17px; padding:12px; border-radius:10px; background:#0a1017; color:var(--ink); border:1px solid var(--edge);}
   select{flex:1; min-width:0; font-family:inherit; font-size:15px; padding:12px; border-radius:10px;
     background:#0a1017; color:var(--ink); border:1px solid var(--edge); min-height:48px;}
@@ -206,6 +210,13 @@
           <input id="enroll-name" type="text" placeholder="Name (enroll Michael first)" autocomplete="off">
           <button id="enroll-btn" style="flex:none;">Enroll</button>
         </div>
+        <!-- Not a person: a voice Echo should recognise and never answer (the Kokoro clock,
+             a TV). Arm-and-wait is the only shape that works for these — a clock speaks on
+             the half hour, so you can't record it on demand. -->
+        <label class="ignore-row" for="enroll-ignore">
+          <input id="enroll-ignore" type="checkbox">
+          <span>🔇 Not a person — recognise this voice and never answer it</span>
+        </label>
         <div class="scorebar">
           <span class="lbl" style="color:var(--dim);">MATCH ≥</span>
           <input id="thr-range" type="range" min="0" max="1" step="0.01" value="0.30">
@@ -299,17 +310,24 @@ function renderState(s){
     $("thr-mark").style.left = (thr*100)+"%";
   }
 
-  // enrolled chips
+  // Chips: people first, then ignored voices (dashed + muted — recognised, never answered).
   const chips = $("chips");
-  if(s.enrolled && s.enrolled.length){
-    chips.innerHTML = s.enrolled.map(n=>`<span class="chip">${esc(n)}</span>`).join("");
-  } else { chips.innerHTML = `<span class="empty">no voices enrolled</span>`; }
+  const people = (s.enrolled || []).map(n=>`<span class="chip">${esc(n)}</span>`);
+  const muted  = (s.ignored || []).map(n=>`<span class="chip ignored" title="Recognised and never answered">🔇 ${esc(n)}</span>`);
+  chips.innerHTML = (people.length || muted.length)
+    ? people.concat(muted).join("")
+    : `<span class="empty">no voices enrolled</span>`;
   $("enroll-btn").disabled = !s.speaker_active;
 
   // enrolling banner
   const b = $("enroll-banner");
   if(s.enrolling){
-    b.innerHTML = `<span>Enrolling <b>${esc(s.enrolling)}</b> — press &amp; hold Talk and say a sentence.</span><button id="cancel-enroll">Cancel</button>`;
+    // An ignored voice is armed and waited for, not recorded on cue — the clock speaks on the
+    // half hour. Say so, or the banner looks stuck.
+    const how = s.enrolling_ignore
+      ? `— now let it speak (a clock only talks on the half hour). It'll be recognised and never answered.`
+      : `— press &amp; hold Talk and say a sentence.`;
+    b.innerHTML = `<span>Enrolling <b>${esc(s.enrolling)}</b>${s.enrolling_ignore ? " 🔇" : ""} ${how}</span><button id="cancel-enroll">Cancel</button>`;
     $("cancel-enroll").onclick = ()=> api("/api/enroll","POST",{cancel:true});
   } else b.innerHTML = "";
 
@@ -458,7 +476,10 @@ $("thr-range").onchange = e=> api("/api/threshold","POST",{value:Number(e.target
 $("enroll-btn").onclick = ()=>{
   const n = $("enroll-name").value.trim();
   if(!n) return;
-  api("/api/enroll","POST",{name:n}).then(()=>{ $("enroll-name").value=""; loopState(); });
+  const ign = $("enroll-ignore").checked;
+  api("/api/enroll","POST",{name:n, ignore:ign}).then(()=>{
+    $("enroll-name").value = ""; $("enroll-ignore").checked = false; loopState();
+  });
 };
 $("enroll-name").addEventListener("keydown", e=>{ if(e.key==="Enter") $("enroll-btn").click(); });
 

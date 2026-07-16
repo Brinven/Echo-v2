@@ -117,9 +117,31 @@ def run() -> None:
     # 6. enroll arms session.enrolling only when speaker awareness is active.
     r = client.post("/api/enroll", json={"name": "jon"}).get_json()
     assert r["enrolling"] == "Jon" and session.enrolling == "Jon"
+    assert session.enrolling_ignore is False, "a person must not arm as an ignored voice"
     client.post("/api/enroll", json={"cancel": True})
     assert session.enrolling is None
     print("  [PASS] /api/enroll arms + cancels enrollment (name title-cased)")
+
+    # 6a2. Arming an IGNORED voice (the Kokoro clock) sets BOTH flags, and cancel clears both —
+    # a stuck enrolling_ignore would silently enroll the next real person as furniture.
+    r = client.post("/api/enroll", json={"name": "kairos", "ignore": True}).get_json()
+    assert r["enrolling"] == "Kairos" and r["enrolling_ignore"] is True
+    assert session.enrolling == "Kairos" and session.enrolling_ignore is True
+    st = client.get("/api/state").get_json()
+    assert st["enrolling_ignore"] is True, "the banner needs this to explain the arm-and-wait"
+    client.post("/api/enroll", json={"cancel": True})
+    assert session.enrolling is None and session.enrolling_ignore is False
+    print("  [PASS] /api/enroll arms an ignored voice; cancel clears both flags")
+
+    # 6a3. /api/state splits people from furniture. The chips list PEOPLE — a clock has no
+    # business appearing as an enrolled guest.
+    ig_control, _, _, ig_reg, _ = _mk()
+    ig_reg.config["profiles"].append(
+        {"name": "Kairos", "model": "ecapa", "ignore": True, "embedding": [0.0, 1.0, 0.0, 0.0]})
+    ig_st = create_app(ig_control).test_client().get("/api/state").get_json()
+    assert ig_st["enrolled"] == ["Michael"], ig_st["enrolled"]
+    assert ig_st["ignored"] == ["Kairos"], ig_st["ignored"]
+    print("  [PASS] /api/state lists people in `enrolled`, furniture in `ignored`")
 
     # 6b. with speaker awareness OFF, enroll is refused (no stuck flag).
     off_control, off_session, *_ = _mk(speaker_active=False)

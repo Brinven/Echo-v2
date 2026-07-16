@@ -27,7 +27,7 @@ import time
 import numpy as np
 
 from audio import AudioRecorder, SAMPLE_RATE
-from speaker_id import SpeakerRegistry, build_embedder, voiced_only
+from speaker_id import SpeakerRegistry, build_embedder, voiced_only, _PREP_TAG
 
 GREEN = "\033[32m"; YELLOW = "\033[33m"; CYAN = "\033[36m"; DIM = "\033[2m"; RESET = "\033[0m"
 
@@ -90,7 +90,13 @@ def cmd_list(registry: SpeakerRegistry) -> int:
         print(f"  {DIM}(none — run: python enroll.py Michael){RESET}")
         return 0
     for p in registry.profiles:
-        print(f"  {p.get('name')!r:16} model={p.get('model')}  enrolled={p.get('enrolled_at')}")
+        tags = []
+        if p.get("ignore"):
+            tags.append("IGNORED — recognized, never answered")
+        if p.get("prep") != _PREP_TAG:
+            tags.append("stale print — re-enroll (predates the silence-trim fix)")
+        suffix = f"  {YELLOW}[{'; '.join(tags)}]{RESET}" if tags else ""
+        print(f"  {p.get('name')!r:16} model={p.get('model')}  enrolled={p.get('enrolled_at')}{suffix}")
     return 0
 
 
@@ -103,7 +109,8 @@ def cmd_remove(registry: SpeakerRegistry, name: str) -> int:
     return 1
 
 
-def cmd_enroll(registry: SpeakerRegistry, name: str, seconds: int, samples: int) -> int:
+def cmd_enroll(registry: SpeakerRegistry, name: str, seconds: int, samples: int,
+               ignore: bool = False) -> int:
     # Force the embedder on regardless of the `enabled` flag — enrollment is explicit.
     cfg = dict(registry.config)
     cfg["enabled"] = True
@@ -117,18 +124,26 @@ def cmd_enroll(registry: SpeakerRegistry, name: str, seconds: int, samples: int)
 
     replacing = registry.has(name)
     print(f"\n{CYAN}Enrolling {name!r}{RESET}"
+          + (f"  {DIM}as an IGNORED voice — recognized, never answered{RESET}" if ignore else "")
           + (f"  {YELLOW}(replacing existing print){RESET}" if replacing else ""))
     emb = _capture_embedding(embedder, seconds, samples)
     if emb is None:
         print(f"{YELLOW}No usable audio captured — nothing enrolled.{RESET}")
         return 1
 
-    registry.enroll(name, emb)
+    try:
+        # `ignore=` is passed explicitly (not left to default) only because the CLI flag is
+        # explicit. Note enroll() would otherwise PRESERVE an existing flag — re-enrolling
+        # Kairos without --ignore must not quietly turn the clock back into a person.
+        registry.enroll(name, emb, ignore=ignore or registry.is_ignored(name))
+    except ValueError as e:
+        print(f"{YELLOW}{e}{RESET}")
+        return 1
     # Activate speaker awareness now that at least one print exists.
     registry.config["enabled"] = True
     registry.save()
     print(f"{GREEN}✓ enrolled {name!r}{RESET} ({registry.count} profile(s) total; speaker awareness enabled)")
-    if not any(n.lower() == "michael" for n in registry.names):
+    if not any(n.lower() == "michael" for n in registry.active_names):
         print(f"  {YELLOW}Reminder: enroll Michael too (python enroll.py Michael) so his turns"
               f" are attributed.{RESET}")
     return 0
@@ -141,6 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--samples", "-n", type=int, default=1, help="clips to average for a sturdier print")
     p.add_argument("--list", action="store_true", help="list enrolled profiles")
     p.add_argument("--rm", metavar="NAME", default=None, help="remove a profile by name")
+    p.add_argument("--ignore", action="store_true",
+                   help="enroll as a voice to RECOGNIZE and never answer (a clock, a TV) "
+                        "rather than as a person")
     return p
 
 
@@ -158,7 +176,7 @@ def main() -> int:
 
     seconds = args.seconds if args.seconds is not None else registry.enroll_seconds
     samples = max(1, args.samples)
-    return cmd_enroll(registry, args.name, seconds, samples)
+    return cmd_enroll(registry, args.name, seconds, samples, ignore=args.ignore)
 
 
 if __name__ == "__main__":

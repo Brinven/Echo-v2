@@ -1,5 +1,64 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-16) — Phase 1: stop losing sessions, stop talking to the clock
+
+Fallout from reviewing the 3-way live pass (Michael + Hillary + Echo), which itself went well.
+Michael sequenced four items smallest-and-most-damaging first; this is Phase 1.
+Plan: `~/.claude/plans/precious-scribbling-starfish.md`.
+
+- [x] **Sessions were being thrown away entirely.** Seven ran on 2026-07-15, zero produced a
+      file; the newest was 2026-07-14. `save_session_file()` only ran at the END (sign-off or
+      clean exit) and there was **no stop-echo.bat**, so closing the window — the only way to
+      stop Echo — hard-killed it first. `speaker_name` had never reached disk. Now saves after
+      every turn (idempotent rewrite, a few ms).
+- [x] **`stop-echo.bat` + `restart-echo.bat`** (the global start/stop/restart convention; Echo
+      had shipped start-only). Graceful `POST /api/quit` first, force only if needed. Kill filter
+      is `ExecutablePath -like '<repo>\*'` — dry-run proved CommandLine filters hit 6 procs
+      **including Kokoro**, and a bare 'Echo' match hits 14. The venv's global-interpreter CHILD
+      is invisible to any path filter and is killed via ParentProcessId.
+- [x] **Rescued the Hillary session.** Running the new stop script against the still-live process
+      wrote `session_2026-07-15_20-59-26.json` — 18 turns, Michael/Hillary/unknown all correctly
+      attributed. The first session file since 07-14 and the first ever with `speaker_name`.
+- [x] **Ignored voices.** Kairos (Michael's Kokoro clock app on the Mac) was triggering a real LLM
+      reply every 30 minutes, woven into the live conversation. Voice-ID correctly said `unknown`
+      and that didn't help — strangers get answered too. `ignore: true` per profile; `identify()`
+      still MATCHES it (you must recognise a voice to decline it); the drop sits after identify
+      and before add_user_turn / increment_exchange / decide_search / audio_q.start.
+- [x] **`active_count` vs `count`.** One counter was answering two questions — "is there a print
+      to match?" (wants the clock) and "how many people do I know?" (must not count it). The
+      second drives `[Name]` tagging, so enrolling a clock would have started tagging a solo
+      Michael's own turns. This split was most of the work; the flag was trivial.
+- [x] **`enroll()` preserves `ignore`** — it replaces the whole profile dict on a name collision,
+      so a plain re-enroll would silently un-ignore the clock weeks later.
+- [x] **Dashboard "Not a person" checkbox** (arm-and-wait — a clock only speaks on the half hour)
+      + muted 🔇 chips; `enroll.py --ignore`; `max_profiles` (10) runaway guard.
+- [x] **Verified.** Offline suite green (speaker 17→22 checks, webui 21→23). Live: graceful stop
+      saved the session; kill filter dry-run spared all 5 sibling repos incl. Kokoro; Echo
+      restarted clean on the new code; decision matrix confirms Michael/Hillary reply, the clock
+      drops, a real stranger still gets a (guarded) reply.
+
+### Open / next
+- [ ] **Michael's live pass on Kairos**: tick "Not a person", enroll it, wait for the half hour.
+      Expect `[ignored voice: Kairos …]`, no reply, no transcript entry, no turn counter move,
+      and no new record in `stage0_log.jsonl`.
+- [ ] **Re-enroll Michael + Hillary** — both prints predate the silence-trim fix (`prep` tag
+      absent), so they score LOWER than they should until redone. Startup warns.
+- [ ] **Phase 2 — guest memory + the loyalty register** (its own plan; contains character content
+      so CC drafts and Michael signs off). `fact_memory` gains `source_speaker` via a
+      `user_version < 2` migration; `UNIQUE(entity, attribute)` stays (entity = who it's ABOUT,
+      source_speaker = who SAID it); the gate learns to resolve "I" to the labelled speaker; the
+      guardrail widens from Michael-only to any KNOWN speaker (unknown still never writes, and
+      per Michael's call an unknown speaker's turn injects **no memory block at all**).
+      The register: she's partisan and doesn't keep things from Michael, that's usually comedy,
+      read the room and don't play a vulnerable moment for laughs, and **never promise a secrecy
+      or a memory she won't honour** — the "I will, Hillary. You are a permanent part of the
+      homestead now" problem, which is a promise the guardrail structurally prevents.
+- [ ] **Phase 3 — History page** (its own plan). Separate `/history` page, backed by
+      `logs/stage0_log.jsonl` (per-turn append → survives hard kills, has resolved speaker names,
+      reaches back to April) rather than `sessions/`. Add `session_id` to `log_run` for exact
+      grouping; timestamp-gap heuristic for the legacy 91 records.
+
+
 ## ✅ DONE (2026-07-15) — Stage 6 Part 1 follow-up: Echo replies to the person who spoke
 
 Michael's first live multi-speaker session (Hillary enrolled): "it works, and the readout shows

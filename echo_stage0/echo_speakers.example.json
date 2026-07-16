@@ -1,11 +1,15 @@
 {
-  "_comment": "Copy to echo_speakers.json (gitignored — it holds biometric voiceprints). Enroll people with: python enroll.py <name>. The enroll tool auto-sets enabled=true once the first profile exists. Set enabled=false to turn speaker awareness off (the pipeline then assumes Michael, the pre-Stage-6 behavior). match_threshold is EMPIRICAL — watch the logged speaker_score values and tune it: raise it if guests get matched as Michael, lower it if Michael reads as 'unknown'. IMPORTANT: enroll Michael FIRST (python enroll.py Michael) or his turns won't be attributed and won't be saved to memory.",
-  "_profile_shape": "profiles: [ { name: 'Michael', model: 'ecapa', embedding: [192 floats], enrolled_at: '<iso8601>' }, ... ]  — written by enroll.py, not by hand.",
+  "_comment": "Copy to echo_speakers.json (gitignored — it holds biometric voiceprints). Enroll people with: python enroll.py <name>, or from the dashboard's Speaker ID panel. The enroll tool auto-sets enabled=true once the first profile exists. Set enabled=false to turn speaker awareness off (the pipeline then assumes Michael, the pre-Stage-6 behavior). IMPORTANT: enroll Michael FIRST (python enroll.py Michael) or his turns won't be attributed and won't be saved to memory.",
+  "_threshold": "match_threshold is EMPIRICAL — watch the logged speaker_score values and tune it: raise it if guests get matched as Michael, lower it if Michael reads as 'unknown'. TUNE IT LAST, though: until 2026-07-16 the threshold was being blamed for a dilution bug in the INPUT (the embedder was being handed the whole capture buffer, dead air included, which could drag a genuine speaker BELOW an impostor). speaker_id.voiced_only() fixed that, and 0.30 is fine once the input is. See CLAUDE.md.",
+  "_profile_shape": "profiles: [ { name: 'Michael', model: 'ecapa', prep: 'voiced-v1', ignore: false, embedding: [192 floats], enrolled_at: '<iso8601>' }, ... ]  — written by enroll.py / the dashboard, not by hand.",
+  "_prep": "prep records how the audio was prepared before embedding. A print without prep:'voiced-v1' predates the silence-trim fix, carries a silence bias, and scores LOWER than it should — Echo warns about these at startup. Re-enroll to collect the fix. Any future change to how audio reaches the embedder invalidates every stored print: bump _PREP_TAG in speaker_id.py.",
+  "_ignore": "ignore:true = NOT A PERSON. A voice Echo should recognise and never answer — Michael's Kokoro clock app (Kairos) announcing the half hour over the Mac speakers, a TV, a podcast. She still fingerprints it (you have to know a voice to decline it), then drops the turn before it costs an LLM call, reaches the transcript, or moves the exchange counter. Ignored voices are excluded from the 'how many people do I know' count, so enrolling a clock never switches on [Name] tagging for a solo conversation. Enroll one with: python enroll.py Kairos --ignore, or tick 'Not a person' in the dashboard (better for a clock — you arm it and wait for the half hour).",
   "enabled": true,
   "match_threshold": 0.30,
   "model": "ecapa",
   "model_source": "speechbrain/spkrec-ecapa-voxceleb",
   "savedir": "models/ecapa",
   "enroll_seconds": 5,
+  "max_profiles": 10,
   "profiles": []
 }

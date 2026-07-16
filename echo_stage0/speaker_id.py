@@ -58,7 +58,10 @@ _DEFAULT_CONFIG = {
     "model_source": "speechbrain/spkrec-ecapa-voxceleb",
     "savedir": "models/ecapa",
     "enroll_seconds": 5,
-    "profiles": [],   # [{name, model, embedding: [float,...], enrolled_at}]
+    # Runaway guard, not a product limit (Michael: "10 MAX, but probably closer to 5-6").
+    # identify() is O(roster) per turn, so this fails loudly instead of degrading quietly.
+    "max_profiles": 10,
+    "profiles": [],   # [{name, model, prep, ignore?, embedding: [float,...], enrolled_at}]
 }
 
 
@@ -304,6 +307,13 @@ class SpeakerRegistry:
         return self._data.get("model", _MODEL_TAG)
 
     @property
+    def max_profiles(self) -> int:
+        try:
+            return int(self._data.get("max_profiles", _DEFAULT_CONFIG["max_profiles"]))
+        except (TypeError, ValueError):
+            return _DEFAULT_CONFIG["max_profiles"]
+
+    @property
     def config(self) -> dict:
         return self._data
 
@@ -320,6 +330,43 @@ class SpeakerRegistry:
     def count(self) -> int:
         return len(self.profiles)
 
+    # ── people vs furniture ──────────────────────────────────────────────────
+    # An ignored profile is a voice that isn't a person: Michael's Kokoro clock app
+    # announcing the half hour over the Mac speakers, a TV, a podcast. It is enrolled so
+    # Echo can RECOGNISE it and say nothing — see is_ignored().
+    #
+    # `active_*` is the roster of actual PEOPLE. Everything that asks "how many voices do I
+    # know?" wants this, not `count`: `count > 1` is what switches on [Name] tagging, so a
+    # solo Michael plus a clock would otherwise start tagging his own turns and injecting
+    # MULTI_SPEAKER_NOTE — breaking the guarantee that a solo roster stays byte-identical to
+    # pre-Stage-6. It's also what the dashboard chips and the startup line report, and a
+    # clock has no business being listed as an enrolled person.
+
+    @property
+    def active_profiles(self) -> list[dict]:
+        return [p for p in self.profiles if not p.get("ignore")]
+
+    @property
+    def active_names(self) -> list[str]:
+        return [p.get("name", "") for p in self.active_profiles if p.get("name")]
+
+    @property
+    def active_count(self) -> int:
+        return len(self.active_profiles)
+
+    @property
+    def ignored_names(self) -> list[str]:
+        return [p.get("name", "") for p in self.profiles if p.get("ignore") and p.get("name")]
+
+    def is_ignored(self, name: str) -> bool:
+        """True if this resolved speaker is a voice to say nothing to.
+
+        Consulted AFTER identify() returns a match, never inside it — see identify()'s note.
+        """
+        low = (name or "").strip().lower()
+        return any(bool(p.get("ignore")) for p in self.profiles
+                   if (p.get("name", "") or "").lower() == low)
+
     def has(self, name: str) -> bool:
         low = (name or "").strip().lower()
         return any((p.get("name", "").lower() == low) for p in self.profiles)
@@ -329,8 +376,9 @@ class SpeakerRegistry:
 
         These still match, just worse than they should — see _PREP_TAG. Surfaced at startup
         so a bad score gets blamed on the stale print rather than on the mic or the threshold.
+        Ignored voices are excluded: nobody needs nagging to re-enroll a clock.
         """
-        return [p.get("name", "?") for p in self.profiles if p.get("prep") != _PREP_TAG]
+        return [p.get("name", "?") for p in self.active_profiles if p.get("prep") != _PREP_TAG]
 
     def identify(self, emb: np.ndarray, threshold: float | None = None) -> tuple[str | None, float]:
         """Best cosine match among enrolled prints.
@@ -338,6 +386,12 @@ class SpeakerRegistry:
         Returns (name, score) if the best score ≥ threshold, else (None, best_score).
         Prints stamped with a different model tag are skipped (embeddings aren't comparable
         across models). Pure math — testable without any model by injecting embeddings.
+
+        Ignored profiles are deliberately still MATCHED here. It reads backwards, so: filtering
+        them out would drop the clock to (None, score) → "unknown" → the guarded-stranger block
+        → Echo answers it politely, which is the exact bug the ignore flag exists to kill. You
+        have to recognise a voice before you can decline to answer it. The caller checks
+        is_ignored() on the resolved name.
         """
         threshold = self.match_threshold if threshold is None else threshold
         query = _l2(emb)
@@ -356,11 +410,30 @@ class SpeakerRegistry:
             return best_name, best_score
         return None, (best_score if best_score > -1.0 else 0.0)
 
-    def enroll(self, name: str, emb: np.ndarray, *, model: str | None = None) -> dict:
-        """Upsert a voiceprint by name (case-insensitive). Does NOT save() — caller decides."""
+    def enroll(self, name: str, emb: np.ndarray, *, model: str | None = None,
+               ignore: bool | None = None) -> dict:
+        """Upsert a voiceprint by name (case-insensitive). Does NOT save() — caller decides.
+
+        `ignore=None` means "leave it as it was": this replaces the whole profile dict on a
+        name collision, so re-enrolling Kairos with the default would silently drop its
+        ignore flag and the clock would start talking to Echo again. Pass True/False only to
+        change it deliberately.
+
+        Refuses a NEW name past max_profiles; re-enrolling someone already on the roster is
+        always allowed (it's an upsert, not growth).
+        """
         name = (name or "").strip()
         if not name:
             raise ValueError("enroll requires a non-empty name")
+        existing = next((p for p in self.profiles
+                         if (p.get("name", "") or "").lower() == name.lower()), None)
+        if existing is None and self.count >= self.max_profiles:
+            raise ValueError(
+                f"roster is full ({self.count}/{self.max_profiles}) — remove a voice first "
+                f"(python enroll.py --rm <name>), or raise max_profiles in echo_speakers.json"
+            )
+        if ignore is None:
+            ignore = bool(existing.get("ignore")) if existing else False
         profile = {
             "name": name,
             "model": model or self.model_tag,
@@ -370,6 +443,8 @@ class SpeakerRegistry:
             # voiced_only fix; stale_prints() surfaces those so they can be re-enrolled
             # rather than quietly scoring badly forever.
             "prep": _PREP_TAG,
+            # Not a person — a voice Echo should recognise and never answer (a clock, a TV).
+            "ignore": bool(ignore),
             "embedding": [float(x) for x in _l2(emb).tolist()],
             "enrolled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
