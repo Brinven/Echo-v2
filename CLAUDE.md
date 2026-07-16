@@ -631,7 +631,32 @@ NOT to play that for laughs) is a **deliberately deferred later Part** — none 
   (biometric voiceprints), `echo_speakers.example.json` is the committed template. Starts
   `enabled:false` so an ordinary launch never triggers the model download; the embedder is built
   ONLY when enabled AND ≥1 profile exists. `match_threshold` (default 0.30) is **empirical** —
-  tune from the logged `speaker_score` values (like `retrieval.MIN_SCORE`).
+  tune from the logged `speaker_score` values (like `retrieval.MIN_SCORE`). **But tune it last:
+  see the silence rule below — until 2026-07-16 the threshold was being blamed for what was
+  actually a dilution bug, and 0.30 is fine once the input is.**
+
+### ⚠ The embedder gets SPEECH, never the raw buffer (2026-07-16)
+
+**`voiced_only()` is not optional cleanup — without it a genuine speaker can score BELOW a
+stranger.** ECAPA pools over every frame it is handed, so dead air is averaged in, and silence
+contributes a **shared bias direction** to any two embeddings that both contain it (a raw score
+is part speaker-similarity, part how-alike-was-the-silence). Measured: the same voice, same
+speech, +8s of silence → **0.0631** vs **0.6668** clean, against an impostor floor of 0.0132.
+Raw margin **-0.0738**; trimmed **+0.3021**. This is what made Hillary (a ~2s question inside a
+9.69s buffer) score 0.2598 and read as a stranger. Full autopsy: `tasks/lessons.md` 2026-07-16.
+
+- Applied at **all three** embed sites — the per-turn match and BOTH enrollment paths. A print
+  built from a padded buffer carries the bias into every future match, so **fixing the reader
+  without the writers just moves the problem.**
+- **Trims the ends, does NOT splice the voiced runs together** — measured identical (+0.3021 vs
+  +0.3032), and interior pauses are speech rhythm ECAPA trained on. Don't "improve" this into a
+  splice. Deliberately NOT `vad.VADDetector` (that's a stateful streaming turn-boundary
+  detector; this is a stateless pass over a finished buffer). Fail-soft: no webrtcvad / any
+  error / too little speech → the raw buffer unchanged.
+- **Prints are stamped `prep=voiced-v1`.** Any future change to how audio reaches the embedder
+  **invalidates every stored print** — bump the tag; `stale_prints()` warns at startup. Stale
+  prints still identify (a warning, not a skip like a model-tag mismatch) but score *worse*
+  than they should, because they lose the shared-silence bias that used to prop them up.
 - **Enrollment — both paths.** `enroll.py` CLI (`python enroll.py Michael [--seconds N] [--samples K]`,
   `--list`/`--rm`; records via `audio.AudioRecorder`, averages samples, auto-flips `enabled:true`
   on the first profile). In-conversation: **"Echo, this is Jon"** (`session.is_enroll_command`,

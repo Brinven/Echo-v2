@@ -148,6 +148,65 @@ assume about exclusivity that is no longer true?
 **Tooling**: for a hung/unresponsive loop, `py-spy dump --pid <pid>` gives every thread's stack of a
 LIVE process without restarting or instrumenting it. It found this in one shot after theory failed.
 
+## 2026-07-16: "She learned Hillary's voice on the fly!" — she did not; ECAPA was eating silence
+
+**Problem**: In the 3-way live pass Hillary asked "Hey Echo, do you know who this is?" and
+scored **0.2598** against a 0.30 floor → `unknown`. She introduced herself; her next sentence
+scored **0.7296** → `Hillary`. It read exactly like on-the-fly enrollment, and Michael asked
+"so it can update like that?"
+
+**It did not.** There is no auto-enroll path (only `enroll.py` and "Echo, this is X"), and
+`echo_speakers.json` still carried her original `enrolled_at` of `18:46:07` — unchanged. Two
+consecutive utterances, 17s apart: a miss then a hit. The coincidence of her introducing
+herself right then is what made a miss look like learning.
+
+**Root cause**: `main.py` handed the embedder the **whole capture buffer** — pre-roll, speech,
+and the VAD hangover. ECAPA pools over every frame it is given, so dead air is not ignored, it
+is averaged in. Worse: silence contributes a **shared bias direction** to any two embeddings
+that both contain it, so a raw score is part speaker-similarity and part
+how-alike-was-the-silence. Her miss was a ~2s question inside a **9.69s** buffer, matched
+against a profile recorded close to the mic — different silence amounts, shared component
+gone, score cratered. Her hit was a denser utterance in a similar-length buffer.
+
+Measured (one synthetic voice, identical speech, only the padding changed):
+
+|                      | raw     | trimmed |
+|----------------------|---------|---------|
+| clean 2.0s speech    |  0.6668 |  0.4996 |
+| +5s silence          |  0.2098 |  0.4996 |
+| +8s silence          |  0.0631 |  0.4996 |
+| +13s silence         | -0.0606 |  0.4996 |
+| a DIFFERENT speaker  |  0.0132 |  0.0303 |
+
+Raw, a genuine speaker in a padded buffer scores **below an impostor** (margin **-0.0738**).
+Trimmed, the worst genuine case clears the impostor by **+0.3021**, and the spread across
+padding collapses from 0.73 to 0.17.
+
+**Fix**: `speaker_id.voiced_only()` trims to the voiced span, applied at all three embed sites
+(the per-turn match and BOTH enrollment paths). Fail-soft: no webrtcvad / any error / too
+little speech → the raw buffer unchanged.
+
+**Lessons**:
+- **The open task was wrong, not just unfinished.** "Tune `match_threshold`" had been on the
+  list for days. The threshold was never the problem — the *input* was. Tuning it would have
+  traded Hillary's misses for false-accepts on strangers and made the guardrail worse. When a
+  tuning knob won't sit still, check what you're feeding the thing before you turn the knob.
+- **A high number is not automatically headroom.** The raw clean-vs-clean 0.6668 looked like
+  comfortable margin; ~0.17 of it was the shared-silence artifact, which is exactly why it
+  collapsed when conditions differed. It measured the room as much as the speaker.
+- **Suspect the mic last, not first.** Michael was about to test several mics. Same-speaker
+  scores swinging 0.24–0.75 looked like flaky hardware; it was deterministic dilution.
+- **Test your own fix, not just the bug.** The first version spliced the voiced runs together.
+  It fixed the dilution AND scored *lower* clean-vs-clean. Trimming the ends measured
+  identical (+0.3021 vs +0.3032) and is less destructive, so the clever version lost.
+- **Fixing the reader means re-reading the writers.** The profiles were built through the same
+  bad path, so the fix makes stale prints score *worse* (they lose the bias that propped them
+  up) until re-enrolled. Prints are now stamped `prep=voiced-v1` and `stale_prints()` warns at
+  startup — the same principle as the existing `model` tag. **Any change to how audio reaches
+  the embedder invalidates every stored print.**
+- **Feed a model what it claims to consume.** ECAPA's contract is "an utterance", not "a
+  buffer that contains an utterance". Silence isn't neutral to a pooling model.
+
 ## 2026-07-15: Echo answered a guest as if Michael said it — the prompt lost to the message stream
 
 **Problem**: First live multi-speaker session (Hillary's voice enrolled). Voice-ID worked
