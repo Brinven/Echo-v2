@@ -157,6 +157,24 @@ def tag_utterance(transcript: str, speaker: str, multi_speaker: bool) -> str:
     return f"[{speaker or 'unknown'}] {transcript}"
 
 
+def can_forget(speaker: str, is_michael: bool, last_fact: dict | None) -> bool:
+    """Forget permission (Stage 6 Phase 2). Pure — unit-tested without a mic or model.
+
+    Michael can take back anything; a known guest only a fact THEY said (matched against
+    the fact's source_speaker, voice-ID ground truth); unknown can never forget. The
+    explicit unknown guard is defensive — source_speaker can never be "unknown" because
+    only known speakers write, but the intent should not hinge on that invariant.
+    """
+    if last_fact is None:
+        return False
+    if is_michael:
+        return True
+    s = (speaker or "").strip().lower()
+    if not s or s == "unknown":
+        return False
+    return s == (last_fact.get("source_speaker") or "").strip().lower()
+
+
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 def run_streaming_pipeline(
@@ -247,6 +265,57 @@ def run_streaming_pipeline(
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
 
+    # ── Speaker identification (Stage 6 Part 1; moved above the command guards in Phase 2) ──
+    # Fingerprint this utterance and resolve who is talking. Feature off (embedder None) or no
+    # enrolled roster → assume Michael (pre-Stage-6 behavior). No match → "unknown" (guarded,
+    # and the memory guardrail below withholds the write — never misattributed to Michael).
+    #
+    # This runs BEFORE sign-off/forget/max-snark/etc. on purpose (Phase 2): the forget guard
+    # needs to know WHO is asking (a guest may only take back their own fact), command turns
+    # record the right speaker_name, and an ignored voice must never trigger a command at all.
+    # Same per-turn cost — the embed just runs earlier; command turns gain one CPU embed.
+    speaker_score = 0.0
+    speaker_known = True
+    # `count`, NOT `active_count` — deliberate. This gate asks "is there any print to match
+    # against?", and an ignored voice is very much worth matching: recognising the clock is the
+    # whole point. active_count is for "how many PEOPLE do I know" (tagging, chips, the startup
+    # line). Swapping this one to active_count would make a roster of just Kairos skip
+    # identification entirely and answer the clock as Michael.
+    if speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 0:
+        try:
+            # voiced_only, not the raw buffer: the capture runs from the pre-roll to the VAD
+            # hangover, and the dead air at each end drags the embedding off the speaker hard
+            # enough that a genuine voice can score below a stranger. See speaker_id.voiced_only.
+            _emb = speaker_embedder.embed(voiced_only(audio))
+            _name, speaker_score = speaker_registry.identify(_emb)
+        except Exception as e:
+            print(f"  [speaker-id error: {e}]")
+            _name = None
+        session.current_speaker = _name or "unknown"
+        speaker_known = _name is not None
+        print(f"  [speaker: {session.current_speaker} ({speaker_score:.2f})]")
+    else:
+        session.current_speaker = session.user_name or "Michael"
+    session.last_speaker_score = speaker_score
+
+    # ── Not a person: say nothing ──
+    # Michael's Kokoro clock app announces the time over the Mac speakers; Echo's mic hears it
+    # and she answered it every 30 minutes for a day, weaving it into the live conversation
+    # ("Are we moving into the evening routine, or are you still finding your way out of that
+    # headache?"). Voice-ID already knew it wasn't Michael — that didn't help, because she
+    # answers strangers too. So the roster learns that some voices are furniture.
+    #
+    # This has to sit exactly here. AFTER identify() (you can't know it's the clock until the
+    # voice resolves) and BEFORE everything that costs or commits anything: the command guards
+    # (sign-off/forget/location — a clock must never end a session or delete a fact),
+    # add_user_turn (the clock never reaches the transcript, the dashboard, the session file,
+    # or the sign-off summarizer — a second memory-write path), increment_exchange (the
+    # anti-drift cadence stays honest), decide_search (an LLM call), and audio_q.start (no
+    # playback cycle opened, none owed). Returning None is the same contract as [Too short].
+    if speaker_registry is not None and speaker_registry.is_ignored(session.current_speaker):
+        print(f"  [ignored voice: {session.current_speaker} ({speaker_score:.2f}) — not a person, no reply]")
+        return None
+
     # ── Sign-off check ──
     if is_signoff(transcript):
         print_conversation("You", transcript)
@@ -254,14 +323,24 @@ def run_streaming_pipeline(
         return {"signoff": True, "transcript": transcript, "stt": stt_latency}
 
     # ── Forget correction: "Echo, forget that" ──
+    # Phase 2 permission: Michael can forget anything; a known guest only a fact THEY said
+    # (peek the fact's source_speaker before deleting); unknown can never forget. This is why
+    # speaker-ID runs above the command guards — the check needs to know who's asking.
     if is_forget(transcript) and ib and ib.available:
         print_conversation("You", transcript)
         session.add_user_turn(transcript, stt_latency)
-        forgotten = ib.forget_last_fact()
-        if forgotten:
-            reply = f"Okay, I've let that go — the part about {forgotten['value']}."
-        else:
+        last = ib.peek_last_fact()
+        if last is None:
             reply = "There's nothing recent for me to forget."
+        elif not can_forget(session.current_speaker, session.current_speaker_is_michael, last):
+            # Character content — approved with the Phase 2 plan.
+            reply = "That one isn't yours to take back — Michael can ask me himself."
+        else:
+            forgotten = ib.forget_last_fact()
+            if forgotten:
+                reply = f"Okay, I've let that go — the part about {forgotten['value']}."
+            else:
+                reply = "There's nothing recent for me to forget."
         print_conversation("Echo", reply)
         audio_q.start()
         try:
@@ -361,51 +440,6 @@ def run_streaming_pipeline(
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
 
-    # ── Speaker identification (Stage 6 Part 1) ──
-    # Fingerprint this utterance and resolve who is talking. Feature off (embedder None) or no
-    # enrolled roster → assume Michael (pre-Stage-6 behavior). No match → "unknown" (guarded,
-    # and the memory guardrail below withholds the write — never misattributed to Michael).
-    speaker_score = 0.0
-    speaker_known = True
-    # `count`, NOT `active_count` — deliberate. This gate asks "is there any print to match
-    # against?", and an ignored voice is very much worth matching: recognising the clock is the
-    # whole point. active_count is for "how many PEOPLE do I know" (tagging, chips, the startup
-    # line). Swapping this one to active_count would make a roster of just Kairos skip
-    # identification entirely and answer the clock as Michael.
-    if speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 0:
-        try:
-            # voiced_only, not the raw buffer: the capture runs from the pre-roll to the VAD
-            # hangover, and the dead air at each end drags the embedding off the speaker hard
-            # enough that a genuine voice can score below a stranger. See speaker_id.voiced_only.
-            _emb = speaker_embedder.embed(voiced_only(audio))
-            _name, speaker_score = speaker_registry.identify(_emb)
-        except Exception as e:
-            print(f"  [speaker-id error: {e}]")
-            _name = None
-        session.current_speaker = _name or "unknown"
-        speaker_known = _name is not None
-        print(f"  [speaker: {session.current_speaker} ({speaker_score:.2f})]")
-    else:
-        session.current_speaker = session.user_name or "Michael"
-    session.last_speaker_score = speaker_score
-
-    # ── Not a person: say nothing ──
-    # Michael's Kokoro clock app announces the time over the Mac speakers; Echo's mic hears it
-    # and she answered it every 30 minutes for a day, weaving it into the live conversation
-    # ("Are we moving into the evening routine, or are you still finding your way out of that
-    # headache?"). Voice-ID already knew it wasn't Michael — that didn't help, because she
-    # answers strangers too. So the roster learns that some voices are furniture.
-    #
-    # This has to sit exactly here. AFTER identify() (you can't know it's the clock until the
-    # voice resolves) and BEFORE everything that costs or commits anything: add_user_turn (the
-    # clock never reaches the transcript, the dashboard, the session file, or the sign-off
-    # summarizer — a second memory-write path), increment_exchange (the anti-drift cadence
-    # stays honest), decide_search (an LLM call), and audio_q.start (no playback cycle opened,
-    # none owed). Returning None is the same contract as [Too short] / [No speech detected].
-    if speaker_registry is not None and speaker_registry.is_ignored(session.current_speaker):
-        print(f"  [ignored voice: {session.current_speaker} ({speaker_score:.2f}) — not a person, no reply]")
-        return None
-
     # Tag utterances with WHO said them once there's more than one PERSON on file. Resolved per
     # turn, not at startup: enrollment can add a voice mid-session. A solo roster (or the feature
     # off) leaves the message stream byte-identical to pre-Stage-6 — no regression on the path
@@ -488,8 +522,14 @@ def run_streaming_pipeline(
     memories_injected = 0
     memory_retrieval_ms = 0.0
     if ib and ib.available:
-        core_block = ib.build_context_block()
-        memory_block, memory_retrieval_ms, memories_injected = ib.read_memory(transcript)
+        # "Unknown gets nothing" (Michael, 2026-07-16): a voice she doesn't recognize gets no
+        # retrieved memories AND no core profile/preferences — only behavior policies + voice
+        # guidance survive (include_profile=False). Structural, not a prompt instruction: the
+        # knowledge simply isn't in the prompt, so it can't lose under pressure.
+        known = session.current_speaker_known
+        core_block = ib.build_context_block(include_profile=known)
+        if known:
+            memory_block, memory_retrieval_ms, memories_injected = ib.read_memory(transcript)
 
     # Mood opener only on the opening exchange; it fades after that. The self-check
     # correction (if the probe flagged a break on a prior cycle) is consumed here and
@@ -554,18 +594,19 @@ def run_streaming_pipeline(
         session.add_echo_turn(full_response, (t_first_audio - t0) if t_first_audio else 0.0)
 
         # ── Memory write (off the hot path): significance gate, background thread ──
-        # Guardrail (Stage 6 Part 1): only Michael's turns write to memory. A guest's or an
-        # unknown speaker's words are NOT attributed to Michael and are not stored — the gate
-        # stays Michael-only by construction. (Guest-memory attribution is a later Part.)
-        # Facts ABOUT a guest told BY Michael ("Jon loves hiking") still save — that's Michael's turn.
-        if ib and ib.available and session.current_speaker_is_michael:
+        # Guardrail (Stage 6 Phase 2): any KNOWN speaker's turn writes to memory, attributed —
+        # the gate resolves "I" to the labelled speaker and the row is stamped with
+        # source_speaker from voice-ID ground truth (never from the model). An UNKNOWN voice
+        # still never writes: nothing a stranger says survives the conversation.
+        if ib and ib.available and session.current_speaker_known:
             turn_text = f"{session.current_speaker}: {transcript}\nEcho: {full_response}"
             # searched=True tells the gate this turn's facts were looked up (weather/news), so it
             # won't file them as durable memories — the "flooding in south central TX" class.
             ib.write_memory(session.session_id, turn_text,
-                            searched=search_meta["web_search_triggered"])
+                            searched=search_meta["web_search_triggered"],
+                            speaker=session.current_speaker)
         elif ib and ib.available:
-            print(f"  [memory: skipped — speaker is {session.current_speaker}, not Michael]")
+            print("  [memory: skipped — speaker unknown, nothing kept]")
 
         # ── Persona self-check (off the hot path): every N exchanges, judge Echo's recent
         # replies on a background thread and queue a one-turn correction if she drifted.

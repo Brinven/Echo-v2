@@ -129,7 +129,9 @@ function render(m){
   $("facts").innerHTML = (m.facts||[]).map(f=> row(
     `<div class="key">${esc(f.entity)}<span class="attr">${esc(f.attribute)}</span></div>`
     + `<div class="fields"><textarea class="f-value" rows="2">${esc(f.value)}</textarea>`
-    + `<div class="inline"><span class="lbl">confidence</span><input class="f-conf" type="number" min="0" max="1" step="0.05" value="${esc(f.confidence)}"><span class="lbl">updated ${esc(fmt(f.updated_at))}</span></div></div>`,
+    + `<div class="inline"><span class="lbl">confidence</span><input class="f-conf" type="number" min="0" max="1" step="0.05" value="${esc(f.confidence)}">`
+    + (f.source_speaker ? `<span class="lbl">told by ${esc(f.source_speaker)}</span>` : ``)
+    + `<span class="lbl">updated ${esc(fmt(f.updated_at))}</span></div></div>`,
     "fact", f.id)).join("") || `<div class="empty">No facts yet.</div>`;
 
   $("core").innerHTML = (m.core||[]).map(x=> row(
@@ -193,7 +195,7 @@ async function search(){
   $("res").innerHTML = `<div class="empty">Searching…</div>`;
   const r = await api("/api/memory/search?q=" + encodeURIComponent(q));
   if(!r){ $("res").innerHTML = `<div class="empty">Search failed.</div>`; return; }
-  const facts = (r.facts||[]).map(f=>`<div class="hit"><span class="sc">${Number(f.score).toFixed(2)}</span>${esc(f.entity)} — ${esc(f.attribute)}: ${esc(f.value)} <small>(conf ${esc(f.confidence)})</small></div>`);
+  const facts = (r.facts||[]).map(f=>`<div class="hit"><span class="sc">${Number(f.score).toFixed(2)}</span>${esc(f.entity)} — ${esc(f.attribute)}: ${esc(f.value)} <small>(conf ${esc(f.confidence)}${f.source_speaker?`, told by ${esc(f.source_speaker)}`:``})</small></div>`);
   const eps = (r.episodes||[]).map(e=>`<div class="hit"><span class="sc">${Number(e.score).toFixed(2)}</span>${esc(e.summary)}</div>`);
   $("res").innerHTML = (facts.concat(eps).join("")) || `<div class="empty">Nothing scored above Echo's retrieval floor for “${esc(q)}”.</div>`;
 }

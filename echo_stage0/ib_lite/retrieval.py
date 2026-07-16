@@ -144,7 +144,7 @@ def fact_search(conn: sqlite3.Connection, query: str, **kw) -> list[dict]:
         table="fact_memory",
         fts_table="fact_fts",
         ts_col="updated_at",
-        select_cols=["id", "entity", "attribute", "value", "confidence"],
+        select_cols=["id", "entity", "attribute", "value", "confidence", "source_speaker"],
         query=query,
         confidence_col="confidence",
         **kw,

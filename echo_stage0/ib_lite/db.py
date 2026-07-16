@@ -56,10 +56,30 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     v1 (Stage 5 Part 2): identity moved out of core_memory into persona.PERSONA_BLOCK.
         Drop the legacy 'persona' core row so it can't duplicate/contradict the block.
+
+    v2 (Stage 6 Phase 2): fact_memory gains source_speaker (who SAID it; entity is who
+        it's ABOUT). A fresh DB already has the column from the schema file, so the ALTER
+        is guarded by PRAGMA table_info. Legacy facts backfill to 'Michael' — honest, not
+        a guess: the Stage 6 Part 1 guardrail let ONLY Michael's turns write facts.
     """
     version = conn.execute("PRAGMA user_version").fetchone()[0]
 
     if version < 1:
         conn.execute("DELETE FROM core_memory WHERE key = 'persona'")
         conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+
+    if version < 2:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(fact_memory)")}
+        if "source_speaker" not in cols:
+            conn.execute("ALTER TABLE fact_memory ADD COLUMN source_speaker TEXT")
+        # Rebuild the external-content FTS index BEFORE the backfill: the UPDATE below fires
+        # fact_fts_update, whose 'delete' step raises "database disk image is malformed" for
+        # any row the index doesn't already hold. A healthy DB is unaffected (rebuild is
+        # idempotent and the table is tiny); a drifted one is repaired instead of bricked.
+        conn.execute("INSERT INTO fact_fts(fact_fts) VALUES('rebuild')")
+        conn.execute(
+            "UPDATE fact_memory SET source_speaker = 'Michael' WHERE source_speaker IS NULL"
+        )
+        conn.execute("PRAGMA user_version = 2")
         conn.commit()

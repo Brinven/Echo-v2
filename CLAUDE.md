@@ -329,6 +329,8 @@ exactly the deferred Stage 5 Part 3 M9 "ephemeral web junk" item, now triggered)
 - Offline test `test_significance.py` pins the net against all 7 real accumulated-noise facts +
   durable-facts-pass. The one-time junk already in `echo.db` was cleared via the CLI / `/memory`
   editor (left 1 clean fact: `Michael/location/Magnolia, Texas`).
+- **Stage 6 Phase 2 (2026-07-16) widened the gate to guests** — it now resolves "I"/"my" to the
+  labelled speaker and rows carry `source_speaker`. See ⚠ Stage 6 Phase 2 at the end of this file.
 
 ### FTS5 stays in sync via UPSERT, not REPLACE
 
@@ -697,7 +699,8 @@ Raw margin **-0.0738**; trimmed **+0.3021**. This is what made Hillary (a ~2s qu
   to Michael or stored. So `ib_lite/significance.py` stays Michael-only **by construction and is
   untouched this Part**; `fact_memory` has no speaker column yet. Facts *about* a guest told *by
   Michael* ("Jon loves hiking") still save (it's Michael's turn). Guest-memory attribution +
-  speaker-aware retrieval = a later Part.
+  speaker-aware retrieval = a later Part. **→ SUPERSEDED 2026-07-16 by ⚠ Stage 6 Phase 2 (end of
+  this file): the write gate is now any KNOWN speaker, attributed via `source_speaker`.**
 - **Unknown fails to guarded/neutral, never silently to Michael for memory** (the Part-5 "unknown
   → neutral, never jeep" principle). If voice-ID is enabled but Michael isn't enrolled, his turns
   read as "unknown" and aren't saved — the startup line WARNS about this; **enroll Michael first.**
@@ -1068,4 +1071,72 @@ sqlite-vec, `ib_lite.embedder.encode`, httpx all already in play). Plan/checklis
   log grouped into 20 sessions. All prior offline suites green.
 - **v1 out of scope (later):** memory *add* from the UI (facts are gate-authored; add core/pref by
   editing an existing key), undo, per-turn deep-links from History into Memory, auth.
+
+---
+
+## ⚠ Stage 6 Phase 2 (2026-07-16) — Guest memory + the loyalty register
+
+Guest memory is real: **any KNOWN (enrolled, non-ignored) speaker's turns write to memory,
+attributed**; an unknown voice **reads and writes NOTHING**. This closes the "I will remember
+you, Hillary" problem — that promise is now structurally true for enrolled people. Plan (incl.
+the approved register wording): `~/.claude/plans/squishy-stirring-bentley.md`.
+
+- **`fact_memory.source_speaker`** = who SAID a fact; `entity` stays who it's ABOUT.
+  `UNIQUE(entity, attribute)` unchanged — a re-statement UPSERTs value AND provenance. Added by
+  the `user_version=2` migration in `db.py`: a `PRAGMA table_info`-guarded ALTER (fresh DBs get
+  the column from the schema file) + backfill of legacy rows to `'Michael'` (honest, not a
+  guess: the Part-1 guardrail let only Michael write facts).
+- **⚠ The migration rebuilds `fact_fts` BEFORE the backfill UPDATE.** The `fact_fts_update`
+  trigger's external-content 'delete' step raises **"database disk image is malformed"** for any
+  row the index doesn't already hold — rebuilding first (idempotent, tiny table) repairs drift
+  instead of bricking the DB. **Any future bulk UPDATE on `fact_memory` needs the same rebuild
+  or a verified-in-sync index.** Found by `test_guest_memory.py`, not in production.
+- **`source_speaker` is pipeline ground truth, never model output.** `main.py` passes
+  `speaker=session.current_speaker` → `IbLite.write_memory(speaker=)` → `_gate_worker` →
+  `_insert` stamps the row. The gate's JSON has no attribution field, so a hallucinating model
+  cannot misattribute a write.
+- **The gate resolves "I" to the labelled speaker** (`significance.py`): `GATE_SYSTEM` widened
+  to "the person speaking" + "facts a person states about themselves use THEIR name as the
+  entity"; the user message is built by the pure, offline-tested `_build_user_content(...)`,
+  which adds a speaker line only for non-Michael turns — **a Michael turn's gate prompt is
+  byte-identical to pre-Phase-2**. Live-verified on the 12B: Hillary "I'm allergic to
+  shellfish" → `entity=Hillary`; Hillary "Michael's brother Dave moved to Austin" →
+  `entity=Dave`; Hillary "I have a headache right now" → `save:false` (the NEVER-save list
+  applies to guests too).
+- **The write gate is `session.current_speaker_known`** (a resolved name, not "unknown";
+  feature off → Michael → True, solo path unchanged). `current_speaker_is_michael` remains as
+  the OWNER check, no longer the memory gate.
+- **Unknown gets nothing (Michael's call, 2026-07-16):** an unknown speaker's turn skips
+  `read_memory` entirely AND `build_context_block(include_profile=False)` drops the core
+  profile + preferences — behavior policies + voice guidance only. Structural: the knowledge
+  is not in the prompt, rather than an instruction not to share it (prompts lose under
+  pressure — the Hillary-attribution lesson).
+- **Speaker-ID + the ignored-voice drop moved ABOVE the command guards** in
+  `run_streaming_pipeline` (enrollment capture stays first — it consumes the utterance as the
+  voiceprint). The clock can no longer sign off, forget, or flip location; command turns record
+  the right `speaker_name`; the forget guard knows who's asking. Same per-turn cost — the embed
+  just runs earlier; command turns gain one ~0.1s CPU embed.
+- **Forget rights** — `can_forget()` (pure, module-level in `main.py`, like `trim_to_preroll`):
+  Michael → anything; a known guest → only a fact THEY said (checked against
+  `ib.peek_last_fact()["source_speaker"]` — peek is the new non-destructive, lock-guarded read);
+  unknown → never. Decline line (approved): *"That one isn't yours to take back — Michael can
+  ask me himself."*
+- **The loyalty register** rides in `SPEAKER_KNOWN`/`SPEAKER_UNKNOWN` (`persona.py`; wording
+  approved with the Phase 2 plan): she keeps no secrets from Michael, ever — dry humor when the
+  stakes are light, wit dropped entirely when the moment is genuinely vulnerable — and she
+  **never promises secrecy or a memory she won't honour**. The memory claims in both blocks are
+  structurally TRUE (known guests really are remembered; unknown really is not), which is the
+  point: register and guardrail can't drift apart. `_MEMORY_BLOCK_HEADER` is now
+  speaker-neutral ("from previous conversations" — facts may come from any known speaker).
+- **Surfaces:** `/memory` fact cards + hybrid-search hits show *told by X* (display-only —
+  there is deliberately NO route that edits provenance); `ib_lite_cli.py` `facts`/`list`
+  include it; `retrieval.fact_search` selects it (injected memory-line format unchanged in v1).
+- **Tests:** `test_guest_memory.py` (migration incl. the FTS-rebuild hazard, `_insert` stamping,
+  peek/forget, context gating, header) + extensions to `test_significance.py`
+  (`_build_user_content`), `test_speaker_id.py` (known-gate + `can_forget` matrix + register
+  strings), `test_webui.py` (provenance in `dump_all`). All offline suites green; live gate
+  smoke passed. **Michael must restart Echo (restart-echo.bat) to load Phase 2.**
+- **Out of scope (later):** speaker-aware retrieval bias, provenance in the injected memory
+  line ("Hillary told me…"), episodic `source_speaker` (summaries are multi-speaker by nature
+  and already attributed by real names), auth.
 

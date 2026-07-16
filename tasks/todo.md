@@ -1,6 +1,71 @@
 # Echo — tasks/todo.md
 
-## ▶ ACTIVE (2026-07-16) — Phase 3: History page + Memory browser/editor
+## ▶ ACTIVE (2026-07-16) — Stage 6 Phase 2: Guest memory + the loyalty register
+
+Michael greenlit Phase 2. Plan (approved, incl. the register wording verbatim):
+`~/.claude/plans/squishy-stirring-bentley.md`. Makes guest memory real — so "I will
+remember you, Hillary" becomes a promise Echo can keep — and gives her the loyalty
+register (partisan to Michael, no secrets from him, comedy when light, kind when not,
+never promise a secrecy or a memory she won't honour).
+
+### Decisions locked (Michael, 2026-07-16)
+- `fact_memory.source_speaker` via `user_version<2` migration; UNIQUE(entity,attribute)
+  stays — entity = who it's ABOUT, source_speaker = who SAID it. Backfill legacy → Michael.
+- Gate resolves "I"/"my" to the labelled speaker. `source_speaker` is pipeline ground
+  truth from voice-ID — NEVER model output.
+- Guardrail widens to any KNOWN speaker; unknown never writes.
+- Unknown gets NOTHING on read: no retrieved memories, no core profile, no preferences —
+  policies + voice guidance only (structural, not just the prompt instruction).
+- Forget rights: Michael → anything; known guest → only their own fact; unknown → never.
+- Register strings approved as drafted in the plan.
+
+### Build checklist — DONE (offline + live gate smoke verified here)
+- [x] **M1** Schema: `source_speaker TEXT` in `fact_memory` + v2 migration (PRAGMA
+      table_info check → ALTER if missing; backfill 'Michael'; user_version=2).
+      **Plus a real hazard the test caught:** the backfill UPDATE fires `fact_fts_update`,
+      whose external-content 'delete' bricks the DB ("malformed") for any row FTS doesn't
+      hold — the migration now rebuilds `fact_fts` first (idempotent). Autopsy: lessons.md.
+- [x] **M2** `significance.py`: pure `_build_user_content(...)` seam; `run_gate(speaker=)`;
+      GATE_SYSTEM widened to the speaking person; entity = speaker for self-facts. A
+      Michael turn's gate prompt stays byte-identical to pre-Phase-2 (asserted).
+- [x] **M3** `ib_lite.py`: `write_memory(speaker=)` → gate + `_insert` stamps
+      source_speaker (from the pipeline arg, NEVER the gate payload); `_last_fact` carries
+      it; `peek_last_fact()` (non-destructive, lock-guarded).
+- [x] **M4** `main.py`: speaker-ID + ignored-drop moved BEFORE the command guards (clock
+      can't sign off/forget/flip location; command turns attribute correctly); forget
+      permission via pure `can_forget()`; guardrail → `current_speaker_known` + `speaker=`;
+      unknown reads nothing (`include_profile=False`, `read_memory` skipped).
+- [x] **M5** `session.py`: `current_speaker_known` property (is_michael stays = owner check).
+- [x] **M6** `build_context_block(include_profile=)` — policies+voice guidance only when False.
+- [x] **M7** `persona.py` SPEAKER_KNOWN/SPEAKER_UNKNOWN register appends (approved wording);
+      forget-decline line; `_MEMORY_BLOCK_HEADER` drops "with Michael".
+- [x] **M8** Surfaces: /memory fact cards + search hits show "told by X" (display-only);
+      ib_lite_cli facts/list; retrieval select_cols += source_speaker.
+- [x] **M9** Verified: NEW `test_guest_memory.py` (migration incl. FTS-rebuild hazard,
+      _insert stamp, peek/forget, context gating, header) + extended test_significance /
+      test_speaker_id (+known-gate, can_forget matrix, register) / test_webui — ALL suites
+      green (guest-memory, significance, speaker 24, webui, audio 18, persona-check,
+      persona-matrix). **Live gate smoke on the real 12B:** Hillary "I'm allergic to
+      shellfish" → entity=Hillary; "Michael's brother Dave moved to Austin" → entity=Dave;
+      Michael control unchanged; guest "headache right now" → save:false. Docs: CLAUDE.md
+      ⚠ Stage 6 Phase 2 + supersede notes on Part 1/gate sections.
+
+### Review
+**Status: BUILT + verified; pushed to `main`.** The register and the guardrail can't drift
+apart by construction: the persona blocks claim exactly what the write path does (known guests
+really are remembered, unknown really isn't, nobody gets a secrecy promise). Key design calls:
+provenance is voice-ID ground truth stamped by the pipeline (the model never chooses
+attribution); unknown-gets-nothing is structural (knowledge absent from the prompt, not an
+instruction); speaker-ID above the command guards closes the clock-triggers-a-command hole.
+
+### Open for Michael (after build)
+- [ ] Restart Echo (stop-echo → start-echo) to load Phase 2.
+- [ ] Live pass: Hillary states a fact → saved as entity=Hillary / told by Hillary
+      (check /memory); your fact about her → entity=Hillary / told by Michael; unknown
+      voice → guarded, no memory block, no write; low-stakes secrecy ask → comedy refusal;
+      Hillary "forget that" on her fact works, on yours → the decline line.
+
+## ✅ DONE (2026-07-16) — Phase 3: History page + Memory browser/editor
 
 Michael's call after Phase 1: **build the History view, and a way to look through / edit the
 memory system** so bad entries can be cleaned up by hand (no Anubis-style auto-detector — manual

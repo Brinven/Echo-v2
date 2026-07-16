@@ -225,13 +225,27 @@ class Session:
 
     @property
     def current_speaker_is_michael(self) -> bool:
-        """True if the current speaker is Michael (the owner) — gates the memory write.
+        """True if the current speaker is Michael (the owner).
 
-        When speaker awareness is off, current_speaker stays Michael, so this is True and
-        memory behaves exactly as before Stage 6.
+        Stage 6 Phase 2: no longer the memory-write gate (that's current_speaker_known) —
+        now used for owner privileges like "forget anything". When speaker awareness is
+        off, current_speaker stays Michael, so this is True and behavior matches pre-Stage-6.
         """
         owner = (self._user_name or "Michael").strip().lower()
         return (self.current_speaker or "").strip().lower() == owner
+
+    @property
+    def current_speaker_known(self) -> bool:
+        """True if voice-ID resolved a NAME for this turn — the memory gate (Stage 6 Phase 2).
+
+        Known (Michael or an enrolled guest) → their turns write memory (attributed via
+        source_speaker) and read the full memory block. "unknown" → no write, no recall,
+        no core profile — a stranger gets Echo's personality and nothing else. Ignored
+        voices never reach this check (dropped right after identify()). Feature off →
+        current_speaker is Michael → True, so the solo path is unchanged.
+        """
+        s = (self.current_speaker or "").strip().lower()
+        return bool(s) and s != "unknown"
 
     def set_persona_correction(self, nudge: str) -> None:
         """Queue a self-check nudge for the next turn (called from the probe thread)."""

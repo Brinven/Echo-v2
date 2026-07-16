@@ -65,8 +65,9 @@ def cmd_list(conn, _args):
         n = conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
         print(f"  {label:10} {n}")
     _print_table("Recent facts", _rows(conn,
-        "SELECT entity,attribute,value,confidence FROM fact_memory ORDER BY updated_at DESC LIMIT 10"),
-        ["entity", "attribute", "value", "confidence"])
+        "SELECT entity,attribute,value,confidence,source_speaker FROM fact_memory "
+        "ORDER BY updated_at DESC LIMIT 10"),
+        ["entity", "attribute", "value", "confidence", "source_speaker"])
     _print_table("Recent episodes", _rows(conn,
         "SELECT session_id,mood_signal,summary FROM episodic_memory ORDER BY created_at DESC LIMIT 5"),
         ["session_id", "mood_signal", "summary"])
@@ -74,8 +75,9 @@ def cmd_list(conn, _args):
 
 def cmd_facts(conn, _args):
     _print_table("fact_memory", _rows(conn,
-        "SELECT id,entity,attribute,value,confidence,updated_at FROM fact_memory ORDER BY updated_at DESC"),
-        ["id", "entity", "attribute", "value", "confidence", "updated_at"])
+        "SELECT id,entity,attribute,value,confidence,source_speaker,updated_at "
+        "FROM fact_memory ORDER BY updated_at DESC"),
+        ["id", "entity", "attribute", "value", "confidence", "source_speaker", "updated_at"])
 
 
 def cmd_prefs(conn, args):

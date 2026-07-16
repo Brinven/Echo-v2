@@ -59,8 +59,8 @@ def dump_all(conn) -> dict:
                               "ORDER BY priority DESC, rowid"),
         "prefs": _rows(conn, "SELECT key, value, confidence, updated_at FROM preference_memory "
                              "ORDER BY updated_at DESC"),
-        "facts": _rows(conn, "SELECT id, entity, attribute, value, confidence, updated_at "
-                             "FROM fact_memory ORDER BY updated_at DESC"),
+        "facts": _rows(conn, "SELECT id, entity, attribute, value, confidence, source_speaker, "
+                             "updated_at FROM fact_memory ORDER BY updated_at DESC"),
         "episodic": _rows(conn, "SELECT id, session_id, summary, key_topics, mood_signal, "
                                 "turn_count, created_at FROM episodic_memory ORDER BY created_at DESC"),
     }
@@ -76,8 +76,11 @@ def search(conn, query: str) -> dict:
 
 
 def _fact(conn, fact_id):
+    # source_speaker is display-only provenance (voice-ID ground truth) — edit_fact never
+    # touches it; there is deliberately no route that can rewrite who said a thing.
     row = conn.execute(
-        "SELECT id, entity, attribute, value, confidence, updated_at FROM fact_memory WHERE id=?",
+        "SELECT id, entity, attribute, value, confidence, source_speaker, updated_at "
+        "FROM fact_memory WHERE id=?",
         (fact_id,)).fetchone()
     return dict(row) if row else None
 

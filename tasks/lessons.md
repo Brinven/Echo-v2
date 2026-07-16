@@ -271,6 +271,27 @@ little speech → the raw buffer unchanged.
 - **Feed a model what it claims to consume.** ECAPA's contract is "an utterance", not "a
   buffer that contains an utterance". Silence isn't neutral to a pooling model.
 
+## 2026-07-16: A migration backfill can brick external-content FTS5 — rebuild before bulk UPDATEs
+
+**Problem**: The Phase 2 `user_version=2` migration (add `fact_memory.source_speaker`, backfill
+legacy rows to 'Michael') died with `sqlite3.DatabaseError: database disk image is malformed` —
+in the offline test, before it ever saw the real DB.
+
+**Root cause**: the backfill `UPDATE` fires the `fact_fts_update` trigger, and an
+external-content FTS5 'delete' step demands the index already hold the row with those exact
+values. Any row FTS doesn't know about (the test's fixture predated the index; in production it
+would be any drifted index) errors the whole statement.
+
+**Fix**: the migration runs `INSERT INTO fact_fts(fact_fts) VALUES('rebuild')` BEFORE the
+backfill. Idempotent, trivial at this table size, and it repairs drift instead of bricking on it.
+
+**Rule**: any bulk UPDATE/DELETE on a table with external-content FTS5 sync triggers must
+either verify the index is in sync or rebuild it first. The triggers assume per-row writes that
+went through the normal path; a migration is exactly the writer that can't assume that.
+
+**Prevention**: `test_guest_memory.py` pins the migration against a fixture whose row predates
+the index — the worst case — and asserts the row is findable in FTS afterwards.
+
 ## 2026-07-15: Echo answered a guest as if Michael said it — the prompt lost to the message stream
 
 **Problem**: First live multi-speaker session (Hillary's voice enrolled). Voice-ID worked

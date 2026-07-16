@@ -28,9 +28,9 @@ from persona import (
     speaker_context, build_system_prompt, SPEAKER_KNOWN, SPEAKER_UNKNOWN, MULTI_SPEAKER_NOTE,
 )
 from session import is_enroll_command, is_enroll_cancel, Session
-# main imports the audio stack (sounddevice/torch); tag_utterance is pure string work, but it
-# lives in main.py next to the pipeline that uses it, so the import cost rides along.
-from main import tag_utterance
+# main imports the audio stack (sounddevice/torch); tag_utterance/can_forget are pure, but they
+# live in main.py next to the pipeline that uses them, so the import cost rides along.
+from main import tag_utterance, can_forget
 
 
 def _reg(profiles, **cfg) -> SpeakerRegistry:
@@ -137,6 +137,16 @@ def run() -> None:
     assert "not to Michael" in SPEAKER_UNKNOWN and "do not address them as Michael" in SPEAKER_UNKNOWN
     print("  [PASS] speaker blocks instruct WHO to address, not just how to feel")
 
+    # 8c. The loyalty register (Phase 2, wording approved with the plan). Both halves make
+    # memory claims that are structurally TRUE — known guests really do write (attributed),
+    # unknown really writes nothing — and both forbid the promise she can't keep.
+    assert "You remember what Jon tells you" in known, "known-guest memory claim missing"
+    assert "do not keep secrets from Michael" in known
+    assert "Never promise secrecy" in known
+    assert "You keep nothing this person tells you" in SPEAKER_UNKNOWN
+    assert "Never promise to remember them" in SPEAKER_UNKNOWN
+    print("  [PASS] loyalty register: no secrecy promises; memory claims match the guardrail")
+
     # 9. never trimmed: the speaker block survives an over-budget memory block.
     big_mem = "You know the following:\n" + "\n".join(f"- fact {i}: " + ("x" * 200) for i in range(40))
     p2 = build_system_prompt(2, 5, core_block="core", memory_block=big_mem, speaker="Jon")
@@ -144,17 +154,41 @@ def run() -> None:
     assert p2.count("- fact ") < 40, "memory not trimmed (test setup wrong)"
     print("  [PASS] speaker block never trimmed when memory is over budget")
 
-    # 10. session flags + the memory GUARDRAIL DECISION (current_speaker_is_michael gates the write).
+    # 10. session flags + the memory GUARDRAIL DECISION. Phase 2 widened the write gate from
+    # current_speaker_is_michael to current_speaker_known: any enrolled person writes
+    # (attributed via source_speaker); unknown still never writes. is_michael remains the
+    # OWNER check (forget-anything privilege).
     s = Session(model="m", stt_backend="b", tts_backend="t", user_name="Michael")
     assert s.current_speaker == "Michael" and s.current_speaker_is_michael is True
+    assert s.current_speaker_known is True                  # feature off → Michael → unchanged path
     s.current_speaker = "Jon"
-    assert s.current_speaker_is_michael is False            # guest → main.py skips ib.write_memory
+    assert s.current_speaker_is_michael is False
+    assert s.current_speaker_known is True                  # known guest → writes, attributed
     s.current_speaker = "unknown"
-    assert s.current_speaker_is_michael is False            # unknown → write withheld
+    assert s.current_speaker_is_michael is False
+    assert s.current_speaker_known is False                 # unknown → no write, no recall
+    s.current_speaker = ""
+    assert s.current_speaker_known is False                 # defensive: empty → treated unknown
     s.current_speaker = "michael"
     assert s.current_speaker_is_michael is True             # case-insensitive owner
+    assert s.current_speaker_known is True
     assert s.enrolling is None
-    print("  [PASS] session: current_speaker default Michael; guardrail decision True only for owner")
+    print("  [PASS] session: guardrail widened to KNOWN speakers; unknown/empty still never write")
+
+    # 10b. Forget permission (Phase 2): Michael takes back anything; a guest only their own
+    # fact (matched on the row's source_speaker — voice-ID ground truth); unknown never.
+    hers = {"entity": "Hillary", "attribute": "ailment", "value": "headaches", "source_speaker": "Hillary"}
+    his = {"entity": "Michael", "attribute": "favorite_bird", "value": "crows", "source_speaker": "Michael"}
+    assert can_forget("Michael", True, hers) is True        # owner → anything
+    assert can_forget("Hillary", False, hers) is True       # guest → her own fact
+    assert can_forget("hillary", False, hers) is True       # case-insensitive
+    assert can_forget("Hillary", False, his) is False       # guest → NOT Michael's fact
+    assert can_forget("unknown", False, hers) is False      # stranger → never
+    assert can_forget("", False, hers) is False             # defensive empty → never
+    assert can_forget("Michael", True, None) is False       # nothing to forget
+    # Legacy row shape (pre-migration dict without the key) must fail closed, not crash.
+    assert can_forget("Hillary", False, {"entity": "x", "attribute": "y", "value": "z"}) is False
+    print("  [PASS] can_forget: owner → anything, guest → own facts only, unknown → never")
 
     # ── Multi-speaker attribution (2026-07-15): the system prompt alone could not carry this. ──
 

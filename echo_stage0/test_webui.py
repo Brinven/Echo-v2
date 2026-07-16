@@ -365,8 +365,9 @@ def _temp_db() -> Path:
     dbp = Path(tempfile.mkdtemp()) / "echo.db"
     conn = db.get_connection(dbp)
     db.init_schema(conn)     # creates tables + seeds 2 core / 4 policy rows
-    conn.execute("INSERT INTO fact_memory (id, entity, attribute, value, embedding) VALUES (?,?,?,?,?)",
-                 ("f1", "Jeep", "type", "2000 Wrangler TJ", _FAKE_EMB("")))
+    conn.execute("INSERT INTO fact_memory (id, entity, attribute, value, source_speaker, embedding)"
+                 " VALUES (?,?,?,?,?,?)",
+                 ("f1", "Jeep", "type", "2000 Wrangler TJ", "Michael", _FAKE_EMB("")))
     conn.commit()
     conn.close()
     return dbp
@@ -379,7 +380,9 @@ def run_memory() -> None:
     m = memory_admin.dump_all(conn)
     assert m["counts"]["fact_memory"] == 1 and m["counts"]["core_memory"] == 2 and m["counts"]["policy_memory"] == 4
     assert m["facts"][0]["entity"] == "Jeep"
-    print("  [PASS] dump_all returns counts + all five tables")
+    # Phase 2 provenance: the Memory page shows WHO said a fact (display-only — no route edits it).
+    assert m["facts"][0]["source_speaker"] == "Michael"
+    print("  [PASS] dump_all returns counts + all five tables (facts carry source_speaker)")
 
     # Editing a fact's VALUE re-embeds (fake encoder) AND the AFTER UPDATE trigger re-syncs FTS —
     # the new keyword becomes findable, the old one stops matching. This is the load-bearing rule.

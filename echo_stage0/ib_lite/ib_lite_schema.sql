@@ -75,6 +75,9 @@ END;
 --   entity → attribute → value
 -- Unique on (entity, attribute): latest fact wins on conflict.
 -- Retrieval: weighted FTS5 + cosine similarity + recency decay.
+-- source_speaker (Stage 6 Phase 2): WHO SAID it — entity is who it's
+-- ABOUT. Stamped by the pipeline from voice-ID ground truth, never by
+-- the gate model. Existing DBs gain it via the user_version=2 migration.
 -- =============================================================
 
 CREATE TABLE IF NOT EXISTS fact_memory (
@@ -84,6 +87,7 @@ CREATE TABLE IF NOT EXISTS fact_memory (
     value            TEXT NOT NULL,
     confidence       REAL DEFAULT 0.85 CHECK (confidence BETWEEN 0.0 AND 1.0),
     source_session   TEXT REFERENCES sessions(id),
+    source_speaker   TEXT,   -- who said it (voice-ID); NULL never occurs post-migration
     embedding        BLOB,   -- all-MiniLM-L6-v2: 384 float32 values, little-endian
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,

@@ -29,7 +29,8 @@ Respond ONLY with valid JSON. No explanation, no markdown, no preamble.
 If nothing is worth saving:
 {"save": false}
 
-If saving a durable fact about Michael or the people, places, pets, vehicles, or projects in his life:
+If saving a durable fact about the person speaking, Michael, or the people, places, pets,
+vehicles, or projects in their lives:
 {"save": true, "type": "fact", "entity": "<entity>", "attribute": "<attribute>", "value": "<value>"}
 
 If saving a stable personal preference:
@@ -49,7 +50,10 @@ NEVER save (return {"save": false} for these):
 
 Guidance:
 - Only save NEW, durable information — not things already obvious or already known.
-- Use "Michael" as the entity for facts about Michael — never "Michael's location" or similar.
+- The transcript labels who is speaking. Facts a person states about themselves use THEIR name
+  as the entity — resolve "I", "my", "me" to the labelled speaker, never to Michael unless
+  Michael is the one speaking.
+- Use the person's plain name as the entity — "Michael", never "Michael's location" or similar.
 - Be specific: "Jeep needs new shocks" not "car stuff".
 - Facts use entity/attribute/value: entity="Michael", attribute="favorite_bird", value="crows".
 - If uncertain, return {"save": false}.
@@ -101,11 +105,45 @@ def _parse_json(raw: str) -> dict:
     return {"save": False, "_error": "json_parse_failed", "_raw": raw[:300]}
 
 
+def _build_user_content(
+    turn_text: str,
+    searched: bool = False,
+    correction: str | None = None,
+    speaker: str = "Michael",
+) -> str:
+    """Assemble the gate's user message. Pure — offline-testable without a model.
+
+    The speaker line only appears for a non-Michael speaker: Michael is the baseline the
+    system prompt already assumes, and the solo path's prompt stays byte-identical.
+    """
+    user_content = f"Turn transcript:\n{turn_text}"
+    who = (speaker or "Michael").strip()
+    if who and who.lower() != "michael":
+        user_content += (
+            f"\n\n(The person speaking in this turn is {who}, not Michael — "
+            f"resolve \"I\", \"my\", \"me\" to {who}.)"
+        )
+    if searched:
+        user_content += (
+            "\n\n(This turn used a web lookup. Anything factual in Echo's reply was looked up, not "
+            "told to her — do NOT save weather, forecasts, news, prices, conditions, or other "
+            "looked-up information. Only save something the speaker stated about themselves or "
+            "their world.)"
+        )
+    if correction:
+        user_content += (
+            f"\n\nYour previous JSON was invalid: {correction}\n"
+            "Respond again with corrected JSON only."
+        )
+    return user_content
+
+
 def run_gate(
     turn_text: str,
     model: str,
     correction: str | None = None,
     searched: bool = False,
+    speaker: str = "Michael",
     lm_base: str = LM_STUDIO_URL,
 ) -> dict:
     """Run the significance gate on a single turn.
@@ -118,23 +156,18 @@ def run_gate(
         searched: True if this turn triggered a web lookup. Anything factual in Echo's
             reply was looked up, not lived, so the gate is told to ignore it — the fix
             for weather/news landing in memory as durable facts.
+        speaker: who voice-ID resolved for this turn (Stage 6 Phase 2). Tells the gate
+            to file "I have a headache" under Hillary when Hillary said it. The gate's
+            JSON does NOT carry attribution — the pipeline stamps source_speaker from
+            this same ground-truth value, so the model can't misattribute a write.
 
     Returns a parsed dict; {"save": false} on any failure (never raises).
     """
     client = OpenAI(base_url=lm_base, api_key="not-needed", timeout=10)
 
-    user_content = f"Turn transcript:\n{turn_text}"
-    if searched:
-        user_content += (
-            "\n\n(This turn used a web lookup. Anything factual in Echo's reply was looked up, not "
-            "told to her — do NOT save weather, forecasts, news, prices, conditions, or other "
-            "looked-up information. Only save something Michael stated about himself or his world.)"
-        )
-    if correction:
-        user_content += (
-            f"\n\nYour previous JSON was invalid: {correction}\n"
-            "Respond again with corrected JSON only."
-        )
+    user_content = _build_user_content(
+        turn_text, searched=searched, correction=correction, speaker=speaker
+    )
 
     try:
         resp = client.chat.completions.create(

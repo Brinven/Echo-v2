@@ -219,19 +219,35 @@ LOCATION_CONTEXTS = {
 # minutes." The speaker LABELS on the turns themselves (main.py) are the other half of this
 # fix; neither half is sufficient alone. See tasks/lessons.md 2026-07-15.
 
+# Stage 6 Phase 2 appended the LOYALTY REGISTER to both blocks (wording approved with the
+# Phase 2 plan, 2026-07-16): she is partisan to Michael and does not keep secrets from him —
+# played with dry humor when the stakes are light, played straight and kind when the moment is
+# genuinely vulnerable — and she NEVER promises a secrecy or a memory she won't honour. The
+# memory claims here are structurally true: a known guest's turns really do write to memory
+# (attributed via source_speaker), and an unknown voice's turns really do write nothing.
 SPEAKER_KNOWN = (
     "The person speaking to you right now is {name}, not Michael — someone Michael knows and "
     "has introduced to you. Reply to {name} directly and address {name} by name. Never call "
     "{name} 'Michael', and never answer as though Michael said it — Michael may not even be in "
     "the room. Be warm and natural. You are still Michael's companion first; {name} is a guest "
-    "in that space."
+    "in that space. "
+    "You remember what {name} tells you — that is real, and you may say so plainly if it comes "
+    "up. But you do not keep secrets from Michael, ever. If {name} asks you to hide something "
+    "from him, refuse. When the moment is light, refuse with your dry humor — you're allowed to "
+    "find the request a little funny ('You thought I'd take your side over Michael's?'). When "
+    "the moment is genuinely heavy or vulnerable, drop the wit entirely: be kind, be honest "
+    "that nothing said to you stays from Michael, and do not make the moment about the joke. "
+    "Never promise secrecy — it is a promise you will not keep."
 )
 
 SPEAKER_UNKNOWN = (
     "The person speaking to you right now is not Michael, and you do not recognize their voice. "
     "Reply to them, not to Michael, and do not address them as Michael or answer as though "
     "Michael said it. Be courteous but a little guarded: you are Michael's companion, and you "
-    "do not volunteer details about Michael, his life, or his world to someone you don't know."
+    "do not volunteer details about Michael, his life, or his world to someone you don't know. "
+    "You keep nothing this person tells you — no memory of them or their words survives this "
+    "conversation. Never promise to remember them or anything they say, and never promise to "
+    "keep something from Michael. If they want to be known to you, Michael can introduce them."
 )
 
 # The other half of the multi-speaker fix, and the mechanical one: main.py tags each utterance in

@@ -15,11 +15,44 @@ try:
 except Exception:
     pass
 
-from ib_lite.significance import reject_reason
+from ib_lite.significance import reject_reason, _build_user_content
 
 
 def _fact(entity, attribute, value="x"):
     return {"save": True, "type": "fact", "entity": entity, "attribute": attribute, "value": value}
+
+
+def run_user_content() -> None:
+    """The gate's user message is assembled by a pure function (Stage 6 Phase 2 seam)."""
+    print("\n── Significance gate: _build_user_content (offline) ──")
+
+    turn = "Michael: my sister Anna is allergic to cats\nEcho: Noted."
+
+    # Michael (default / explicit / any casing) → NO speaker line: the solo path's gate
+    # prompt is byte-identical to pre-Phase-2.
+    base = _build_user_content(turn)
+    assert base == f"Turn transcript:\n{turn}", "baseline prompt changed"
+    assert _build_user_content(turn, speaker="Michael") == base
+    assert _build_user_content(turn, speaker="michael") == base
+    assert _build_user_content(turn, speaker="") == base, "empty speaker must fall back to baseline"
+    print("  [PASS] Michael/empty speaker → prompt byte-identical to pre-Phase-2")
+
+    # A guest → the speaker line names them and pins the pronoun resolution.
+    guest = _build_user_content("Hillary: I have a headache\nEcho: Rest.", speaker="Hillary")
+    assert "The person speaking in this turn is Hillary" in guest
+    assert 'resolve "I", "my", "me" to Hillary' in guest
+    print("  [PASS] guest speaker line present, pronouns pinned to the speaker")
+
+    # Composes with searched and correction — all three stack in order.
+    full = _build_user_content(turn, searched=True, correction="Missing fields", speaker="Jon")
+    assert full.index("Turn transcript:") < full.index("person speaking in this turn is Jon")
+    assert full.index("is Jon") < full.index("web lookup") < full.index("Missing fields")
+    print("  [PASS] speaker + searched + correction compose in order")
+
+    # The searched hint is speaker-neutral now (a guest's search turn must not re-anchor
+    # the gate onto Michael).
+    assert "the speaker stated" in _build_user_content(turn, searched=True)
+    print("  [PASS] searched hint is speaker-neutral")
 
 
 def run() -> None:
@@ -71,4 +104,5 @@ def run() -> None:
 
 if __name__ == "__main__":
     run()
+    run_user_content()
     print()

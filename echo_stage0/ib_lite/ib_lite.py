@@ -40,8 +40,9 @@ VOICE_GUIDANCE = (
 )
 
 # The subtlety instruction is functional, not stylistic. Do not reword.
+# ("with Michael" dropped in Stage 6 Phase 2 — facts can now come from any known speaker.)
 _MEMORY_BLOCK_HEADER = (
-    "You know the following from previous conversations with Michael. Use this "
+    "You know the following from previous conversations. Use this "
     "knowledge naturally — the way a close friend would, without announcing that "
     'you remember it. Never say "I remember", "last time we spoke", or "based on '
     'our conversations". Simply know it.'
@@ -113,15 +114,23 @@ class IbLite:
 
     # ── reads ────────────────────────────────────────────────────────────
 
-    def build_context_block(self) -> str:
-        """Always-injected base prompt: voice guidance + Core + Policy + Preferences."""
+    def build_context_block(self, include_profile: bool = True) -> str:
+        """Always-injected base prompt: voice guidance + Core + Policy + Preferences.
+
+        include_profile=False (Stage 6 Phase 2, unknown speaker on the mic): voice guidance
+        and behavior policies ONLY — no core rows (Michael's profile/relationship) and no
+        preferences. "Don't volunteer details about Michael to a stranger" is structural:
+        the knowledge is simply not in the prompt, rather than an instruction not to share
+        it (prompts lose under pressure — the Hillary attribution lesson).
+        """
         parts = [VOICE_GUIDANCE]
 
-        core = self._conn.execute(
-            "SELECT content FROM core_memory ORDER BY rowid"
-        ).fetchall()
-        if core:
-            parts.append("\n".join(r["content"] for r in core))
+        if include_profile:
+            core = self._conn.execute(
+                "SELECT content FROM core_memory ORDER BY rowid"
+            ).fetchall()
+            if core:
+                parts.append("\n".join(r["content"] for r in core))
 
         policy = self._conn.execute(
             "SELECT rule FROM policy_memory WHERE active = 1 ORDER BY priority DESC, rowid"
@@ -129,14 +138,15 @@ class IbLite:
         if policy:
             parts.append("Rules you follow:\n" + "\n".join(f"- {r['rule']}" for r in policy))
 
-        prefs = self._conn.execute(
-            "SELECT key, value FROM preference_memory ORDER BY updated_at DESC"
-        ).fetchall()
-        if prefs:
-            parts.append(
-                "Michael's preferences:\n"
-                + "\n".join(f"- {r['key']}: {r['value']}" for r in prefs)
-            )
+        if include_profile:
+            prefs = self._conn.execute(
+                "SELECT key, value FROM preference_memory ORDER BY updated_at DESC"
+            ).fetchall()
+            if prefs:
+                parts.append(
+                    "Michael's preferences:\n"
+                    + "\n".join(f"- {r['key']}: {r['value']}" for r in prefs)
+                )
 
         return "\n\n".join(parts)
 
@@ -198,11 +208,19 @@ class IbLite:
 
     # ── writes (background) ──────────────────────────────────────────────
 
-    def write_memory(self, session_id: str, turn_text: str, searched: bool = False) -> None:
+    def write_memory(
+        self, session_id: str, turn_text: str, searched: bool = False,
+        speaker: str = "Michael",
+    ) -> None:
         """Fire the significance gate on a background thread. Non-blocking, single-flight.
 
         `searched` is passed through to the gate so a web-lookup turn doesn't file the
         looked-up conditions (weather/news) as durable facts.
+
+        `speaker` (Stage 6 Phase 2) is voice-ID's resolved name for this turn. It goes to
+        the gate (so "I" resolves to the right person) AND is stamped on the row as
+        source_speaker — the model never chooses attribution. The caller (main.py) only
+        calls this for KNOWN speakers; unknown turns never reach here.
         """
         if not self._available or not turn_text.strip():
             return
@@ -212,19 +230,24 @@ class IbLite:
                 return
             self._gate_busy = True
         threading.Thread(
-            target=self._gate_worker, args=(session_id, turn_text, searched), daemon=True
+            target=self._gate_worker, args=(session_id, turn_text, searched, speaker),
+            daemon=True,
         ).start()
 
-    def _gate_worker(self, session_id: str, turn_text: str, searched: bool = False) -> None:
+    def _gate_worker(
+        self, session_id: str, turn_text: str, searched: bool = False,
+        speaker: str = "Michael",
+    ) -> None:
         try:
-            payload = run_gate(turn_text, self._model, searched=searched)
+            payload = run_gate(turn_text, self._model, searched=searched, speaker=speaker)
             if not isinstance(payload, dict) or not payload.get("save"):
                 return
 
             ok, err = validate_write(payload)
             if not ok:
                 # Retry once with the validation error as a correction hint.
-                payload = run_gate(turn_text, self._model, correction=err, searched=searched)
+                payload = run_gate(turn_text, self._model, correction=err,
+                                   searched=searched, speaker=speaker)
                 if not isinstance(payload, dict) or not payload.get("save"):
                     return
                 ok, err = validate_write(payload)
@@ -240,14 +263,14 @@ class IbLite:
                 logger.info(f"significance gate: dropped non-durable save ({reason}): {payload}")
                 return
 
-            self._insert(session_id, payload)
+            self._insert(session_id, payload, speaker=speaker)
         except Exception as e:
             logger.error(f"gate worker error: {e}")
         finally:
             with self._gate_lock:
                 self._gate_busy = False
 
-    def _insert(self, session_id: str, payload: dict) -> None:
+    def _insert(self, session_id: str, payload: dict, speaker: str = "Michael") -> None:
         """Write a validated payload using a thread-local connection.
 
         Facts/preferences/policies UPSERT via explicit ON CONFLICT ... DO UPDATE
@@ -261,23 +284,28 @@ class IbLite:
             ptype = payload["type"]
             if ptype == "fact":
                 text = f"{payload['entity']} {payload['attribute']} {payload['value']}"
+                # source_speaker comes from the `speaker` arg (voice-ID ground truth),
+                # NEVER from the gate payload — the model can't misattribute a write.
                 conn.execute(
                     """
-                    INSERT INTO fact_memory (id, entity, attribute, value, source_session, embedding)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO fact_memory
+                        (id, entity, attribute, value, source_session, source_speaker, embedding)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(entity, attribute) DO UPDATE SET
                         value = excluded.value,
                         embedding = excluded.embedding,
                         source_session = excluded.source_session,
+                        source_speaker = excluded.source_speaker,
                         updated_at = CURRENT_TIMESTAMP
                     """,
                     (_new_id(), payload["entity"], payload["attribute"],
-                     payload["value"], session_id, encode(text)),
+                     payload["value"], session_id, speaker, encode(text)),
                 )
                 wrote_fact = {
                     "entity": payload["entity"],
                     "attribute": payload["attribute"],
                     "value": payload["value"],
+                    "source_speaker": speaker,
                 }
             elif ptype == "preference":
                 conn.execute(
@@ -308,6 +336,16 @@ class IbLite:
                     self._last_fact = wrote_fact
         finally:
             conn.close()
+
+    def peek_last_fact(self) -> dict | None:
+        """The most recent fact written this session, WITHOUT deleting it.
+
+        For the forget-permission check (Stage 6 Phase 2): main.py looks at the fact's
+        source_speaker before deciding whether the person asking is allowed to take it
+        back. Lock-guarded like every other _last_fact access.
+        """
+        with self._gate_lock:
+            return dict(self._last_fact) if self._last_fact else None
 
     def forget_last_fact(self) -> dict | None:
         """Delete the most recent fact written this session (for "Echo, forget that").
