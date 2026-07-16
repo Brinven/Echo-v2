@@ -35,9 +35,19 @@
   .tag{background:var(--panel2); border:1px solid var(--edge); border-radius:8px; padding:6px 12px; font-size:15px; color:var(--dim);}
   .tag b{color:var(--ink);}
 
-  /* health */
-  .health{display:grid; grid-template-columns:repeat(5,1fr); gap:12px;}
-  .stat{display:flex; align-items:center; gap:12px; padding:14px; background:var(--panel2); border:1px solid var(--edge); border-radius:12px;}
+  /* zoom — the panel has no keyboard, so Ctrl+/- and window-resizing aren't available to it */
+  .zoom{display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--edge); border-radius:10px; padding:4px;}
+  .zoom button{min-height:44px; min-width:44px; padding:0; font-size:22px; line-height:1; border-radius:8px; border-color:transparent; background:transparent;}
+  .zoom button:active{background:#26313f;}
+  #zoom-val{min-width:56px; text-align:center; font-size:15px; font-weight:700; color:var(--dim);}
+
+  /* health — auto-fit so the tiles wrap to a second row instead of running off the panel
+     when zoomed in (the panel has no horizontal scroll and no keyboard to get it back). */
+  .health{display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px;}
+  /* min-width:0 twice, or the grid never shrinks below the model name's intrinsic width and the
+     ellipsis below is dead code — that blowout is what pushed VRAM/Enrolled off the right edge. */
+  .stat{display:flex; align-items:center; gap:12px; padding:14px; background:var(--panel2); border:1px solid var(--edge); border-radius:12px; min-width:0;}
+  .stat > div{min-width:0;}
   .dot{width:14px; height:14px; border-radius:50%; background:var(--dim); flex:none; box-shadow:0 0 0 0 rgba(0,0,0,0);}
   .dot.up{background:var(--good); box-shadow:0 0 10px var(--good);}
   .dot.down{background:var(--bad); box-shadow:0 0 10px var(--bad);}
@@ -47,6 +57,25 @@
   /* main */
   main{display:grid; grid-template-columns:1.1fr 1fr; gap:12px; flex:1; min-height:0;}
   .col{display:flex; flex-direction:column; gap:12px; min-height:0;}
+  /* The left column scrolls inside #transcript. The right column is a stack of cards taller than
+     the panel, so it needs its OWN scroller — body{overflow:hidden} was simply clipping it. */
+  .col.scrolls{overflow-y:auto; overscroll-behavior:contain; padding-right:4px;}
+  .col.scrolls > *{flex:none;}
+  /* Fat enough to drag with a fingertip — the default 8px bar is unusable on the 10" panel. */
+  .col.scrolls::-webkit-scrollbar, #transcript::-webkit-scrollbar{width:14px;}
+  .col.scrolls::-webkit-scrollbar-thumb, #transcript::-webkit-scrollbar-thumb{
+    background:var(--edge); border-radius:8px; border:3px solid var(--bg);}
+  .col.scrolls::-webkit-scrollbar-thumb:active, #transcript::-webkit-scrollbar-thumb:active{background:#3d4d5f;}
+
+  /* disconnected — the kiosk keeps polling a dead Echo and would otherwise sit on a frozen page */
+  #offline{position:fixed; inset:0; z-index:50; background:rgba(6,9,13,.92); display:none;
+    flex-direction:column; align-items:center; justify-content:center; gap:14px; text-align:center; padding:24px;}
+  #offline.show{display:flex;}
+  #offline .big{font-size:34px; font-weight:800; letter-spacing:.04em;}
+  #offline .sub{color:var(--dim); font-size:17px; max-width:34ch; line-height:1.45;}
+  #offline .spin{width:30px; height:30px; border:3px solid var(--edge); border-top-color:var(--accent);
+    border-radius:50%; animation:sp 1s linear infinite;}
+  @keyframes sp{to{transform:rotate(360deg);}}
 
   .card-head{display:flex; align-items:center; justify-content:space-between; gap:10px;}
   .card-head h2{margin-bottom:0;}
@@ -105,8 +134,20 @@
       <div class="tag">Snark <b id="snark">—</b></div>
       <div class="tag">Where <b id="location">—</b></div>
       <div class="tag">Turn <b id="turns">0</b></div>
+      <div class="zoom">
+        <button id="zoom-out" title="Zoom out">−</button>
+        <button id="zoom-reset" title="Reset zoom"><span id="zoom-val">100%</span></button>
+        <button id="zoom-in" title="Zoom in">+</button>
+      </div>
     </div>
   </header>
+
+  <div id="offline">
+    <div class="spin"></div>
+    <div class="big">ECHO IS OFFLINE</div>
+    <div class="sub">The control panel can't reach her. She's either stopped or restarting —
+      this will clear itself the moment she's back.</div>
+  </div>
 
   <div class="health">
     <div class="stat"><span id="d-lm" class="dot"></span><div><div class="lbl">LM Studio</div><div class="val" id="v-lm">—</div></div></div>
@@ -127,7 +168,7 @@
       </div>
     </div>
 
-    <div class="col">
+    <div class="col scrolls">
       <div class="card">
         <h2>Controls</h2>
         <div class="grid2">
@@ -284,20 +325,22 @@ function renderState(s){
   // out of the dashboard "wouldn't stay selected". Each turn is labelled with the name recorded
   // when it was SPOKEN (x.name), never the live current_speaker — that re-labelled the whole
   // backlog to whoever talked last.
+  // An EMPTY transcript is a real state, not a "no data yet" — it's what a restarted Echo reports.
+  // Guarding the whole render on .length meant the previous session's conversation stayed on the
+  // kiosk forever after a restart. Render the empty case too.
   const t = $("transcript");
-  if(s.transcript && s.transcript.length){
-    const sig = JSON.stringify(s.transcript);
-    if(sig !== lastTranscriptSig){
-      lastTranscriptSig = sig;
-      lastTranscript = s.transcript;
-      const atBottom = t.scrollHeight - t.scrollTop - t.clientHeight < 60;
-      t.innerHTML = s.transcript.map(x=>{
-        const cls = x.speaker==="echo" ? "echo" : "you";
-        const who = x.speaker==="echo" ? "Echo" : (x.name || s.user_name || "You");
-        return `<div class="turn ${cls}"><span class="who">${esc(who)}</span>${esc(x.content)}</div>`;
-      }).join("");
-      if(atBottom) t.scrollTop = t.scrollHeight;
-    }
+  const turns = s.transcript || [];
+  const sig = JSON.stringify(turns);
+  if(sig !== lastTranscriptSig){
+    lastTranscriptSig = sig;
+    lastTranscript = turns;
+    const atBottom = t.scrollHeight - t.scrollTop - t.clientHeight < 60;
+    t.innerHTML = turns.length ? turns.map(x=>{
+      const cls = x.speaker==="echo" ? "echo" : "you";
+      const who = x.speaker==="echo" ? "Echo" : (x.name || s.user_name || "You");
+      return `<div class="turn ${cls}"><span class="who">${esc(who)}</span>${esc(x.content)}</div>`;
+    }).join("") : `<div class="empty">Press &amp; hold Talk to speak…</div>`;
+    if(atBottom) t.scrollTop = t.scrollHeight;
   }
 }
 function esc(s){ return String(s??"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
@@ -340,8 +383,34 @@ function renderScores(list){
   }).join("");
 }
 
+// ── zoom ──
+// The 10" panel has no keyboard, so Ctrl +/− and dragging the window edge aren't options. `zoom`
+// on the root reflows the layout (unlike transform:scale, which would just shrink a fixed canvas
+// and leave the same overflow), and Chrome divides the viewport by it so height:100% still fills.
+const ZOOM_MIN = 0.5, ZOOM_MAX = 1.5, ZOOM_STEP = 0.05;
+let zoom = 1;
+function applyZoom(z, save=true){
+  zoom = Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 100) / 100;
+  document.documentElement.style.zoom = zoom;
+  $("zoom-val").textContent = Math.round(zoom*100) + "%";
+  $("zoom-out").disabled = zoom <= ZOOM_MIN;
+  $("zoom-in").disabled  = zoom >= ZOOM_MAX;
+  if(save){ try{ localStorage.setItem("echo.zoom", String(zoom)); }catch(e){} }
+}
+$("zoom-in").onclick    = ()=> applyZoom(zoom + ZOOM_STEP);
+$("zoom-out").onclick   = ()=> applyZoom(zoom - ZOOM_STEP);
+$("zoom-reset").onclick = ()=> applyZoom(1);
+applyZoom(parseFloat(localStorage.getItem("echo.zoom")) || 1, false);
+
 // ── polling ──
-async function loopState(){ renderState(await api("/api/state")); }
+// A dead Echo used to leave the kiosk frozen on its last good frame, looking live. Two misses
+// (~2s) flips an overlay; any success clears it, so a restart heals the panel on its own.
+let misses = 0;
+function mark(ok){
+  misses = ok ? 0 : misses + 1;
+  $("offline").classList.toggle("show", misses >= 2);
+}
+async function loopState(){ const s = await api("/api/state"); mark(!!s); renderState(s); }
 async function loopHealth(){ renderHealth(await api("/api/health")); }
 async function loopScores(){ renderScores(await api("/api/scores")); }
 loopState(); loopHealth(); loopScores();
