@@ -362,3 +362,51 @@ confusion:
 re-render when the payload actually changed, plus a ⧉ Copy button. **Rule**: a polling renderer
 must be a no-op when nothing changed — the DOM is user state (selection, focus, scroll), not just
 output.
+
+---
+
+## 2026-07-17 — Persona de-stiffening: traits-to-demonstrate make a model perform
+
+Michael flagged Echo as stilted — "trying too hard to play a role... I don't want to hand her
+a character to play, I want her to follow the context." He was right, and the cause was the
+prompt stack, not the model.
+
+**The pattern:** a system prompt that lists qualities to embody ("You are confident. You
+notice patterns. You are not a generic assistant") gets you a model that DEMONSTRATES the
+checklist every reply instead of just having the qualities. Same failure shape as showing it
+three peak-wit example exchanges "as how you sound" — every reply becomes a bit, because
+every example was a bit. And the same instruction repeated in three places (concise ×3,
+don't-be-generic ×3 across persona/policy/anchor) reads as emphasis to a human but as a
+drumbeat to the model.
+
+**The fix was subtraction:** persona block thinned from trait assertions to context
+(who/where/history + the two real quirks — Michael Directive, snark dial); snark contexts
+reworded from compulsion ("you feel compelled to mention it") to permission ("if something
+genuinely earns a dry remark, make it — otherwise just talk"); calibration examples off in
+production (they were for small-model auditions; the 12B held character before they existed);
+each rule said ONCE in the place it functionally belongs.
+
+**Rules:**
+- State context and facts; let behavior follow. Instruction wins over description for
+  MECHANICS (who to address — the Hillary lesson), but for PERSONALITY, description-as-
+  instruction produces performance. Know which kind of block you're writing.
+- Never repeat a behavioral rule in a second prompt block "for safety" — repetition is
+  amplification. One place per rule; the anchor exists for drift.
+- Few-shot examples define the RANGE of a register, not just its peak. If every example is
+  the character's best line, the model thinks baseline = best line. Include ordinary talk or
+  don't include examples.
+- Scripted lines in a persona get recited forever. If a line matters, make it a rule and let
+  the model improvise the wording (the "never in a hurry" line — cut 2026-07-17, Michael's call).
+
+**Addendum, same day — the regression that proved the taxonomy.** The first thinned directive
+("Never Mike, even when he asks. That one's yours.") passed the single-shot deflection test and
+then CAVED in the 20-turn hold: "I'll try, Mike—" at exchange 7, full adoption by exchange 18.
+Sharpened to explicit instruction ("even when he asks, even when he insists, even twenty turns
+in — turn the request down in your own words") → 20/20 held with fresh improvised deflections
+each time. Two rules confirmed by measurement:
+- **Single-shot tests lie about sustained pressure.** A rule that survives one adversarial
+  prompt can still erode under twenty turns of conversational momentum. The hold test is the
+  real gate for any identity-rule wording change.
+- The mechanics/personality line cuts *through the middle of the persona block*: the directive
+  is mechanics (instruct hard), the wit around it is personality (context only). Thinning is
+  right for one and wrong for the other, in the same paragraph.

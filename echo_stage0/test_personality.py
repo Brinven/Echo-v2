@@ -72,7 +72,7 @@ def run_offline_checks() -> None:
     for level in range(0, 11):
         block = build_persona_block(level)
         assert "{snark_context}" not in block, f"unresolved placeholder at level {level}"
-        assert "You are Echo." in block, f"persona identity missing at level {level}"
+        assert "You are Echo" in block, f"persona identity missing at level {level}"
     print("  [PASS] persona block resolves snark context for levels 0-10")
 
     # 2. Snark scaling: level 3 vs level 8 produce different prompts (PRD M8 done-when).
@@ -94,19 +94,21 @@ def run_offline_checks() -> None:
     assert not has_anchor(0), "anchor present at exchange 0 (off-by-one)"
     print("  [PASS] anti-drift anchor fires at exchanges 8/16/24 only (no off-by-one)")
 
-    # 4. Persona is always first; calibration examples present; empty core/memory leaves
-    #    no dangling blocks.
+    # 4. Persona is always first; calibration examples OFF by default (2026-07-17 — production
+    #    runs without them) and present only on opt-in; empty core/memory leaves no dangling blocks.
     p = build_system_prompt(1, 5, core_block="", memory_block="")
-    assert p.startswith("You are Echo."), "persona is not the first block"
-    assert _CALIB_MARKER in p, "calibration examples missing from assembled prompt"
+    assert p.startswith("You are Echo,"), "persona is not the first block"
+    assert _CALIB_MARKER not in p, "calibration examples leaked into the default (production) prompt"
+    assert _CALIB_MARKER in build_system_prompt(1, 5, calibration=True), \
+        "calibration examples missing with calibration=True (harness opt-in broken)"
     assert "Rules you follow:" not in p, "dangling policy header with empty core"
-    print("  [PASS] persona-first assembly + calibration present, tolerates empty core/memory")
+    print("  [PASS] persona-first assembly + calibration off-by-default/on-by-opt-in, tolerates empty core/memory")
 
-    # 5. Never-trim persona/calibration: a huge memory block is trimmed; persona, calibration,
-    #    and core survive intact.
+    # 5. Never-trim persona/calibration: a huge memory block is trimmed; persona, core, and
+    #    (when opted in) the calibration examples survive intact.
     core = "Michael lives in Magnolia, TX. He goes by Michael, never Mike."
     big_mem = "You know the following:\n" + "\n".join(f"- fact {i}: " + ("x" * 200) for i in range(40))
-    assembled = build_system_prompt(2, 5, core_block=core, memory_block=big_mem)
+    assembled = build_system_prompt(2, 5, core_block=core, memory_block=big_mem, calibration=True)
     assert PERSONA_BLOCK.split("\n")[0] in assembled, "persona dropped under budget pressure"
     assert _CALIB_MARKER in assembled, "calibration examples dropped under budget pressure"
     assert core in assembled, "core dropped under budget pressure"

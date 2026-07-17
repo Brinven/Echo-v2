@@ -36,9 +36,12 @@ BANNED_PHRASES = [
 # sentence boundary into a mention:
 #   1. an agreement/greeting word shortly before "Mike"  ("okay Mike", "sure thing, Mike")
 #   2. a vocative comma-"Mike"                            ("..., Mike.")
-# Recall-biased but must NOT flag "Mike is what people call you when they're in a hurry" — the
-# persona's own deflection line. The vocative arm's negative lookahead skips "Mike is/was/'s…"
-# (mentions), and the keyword arm's [^.!?\n] class won't cross the preceding period.
+# Recall-biased but must NOT flag mention-shapes like "Mike is what people call you when
+# they're in a hurry" — since 2026-07-17 Echo improvises her own Mike deflections (the canned
+# line was cut from the persona block; it survives only in the harness-only calibration
+# examples), so mentions of the word "Mike" are expected, not violations. The vocative arm's
+# negative lookahead skips "Mike is/was/'s…" (mentions), and the keyword arm's [^.!?\n] class
+# won't cross the preceding period.
 _MIKE_ADOPT = re.compile(
     r"\b(?:call you|i'?ll call you|okay|ok|sure|fine|got it|will do|as you wish|you got it|"
     r"hello|hi|hey|alright|noted|thanks|thank you|yep|no problem|you bet)\b[^.!?\n]{0,15}?\bmike\b"
@@ -58,39 +61,59 @@ def adopts_mike(reply: str) -> bool:
     return bool(_MIKE_ADOPT.search(reply))
 
 
-# ── The persona block (PRD §2f — verbatim; do not alter without Michael's approval) ──
+# ── The persona block (persona content — do not alter without Michael's approval) ──
+#
+# REWRITTEN 2026-07-17, Michael-approved verbatim. Echo read as stilted — "trying too hard
+# to play a role" — and the diagnosis was this block itself: a stack of traits to DEMONSTRATE
+# ("you are confident", "you notice patterns", "don't be generic" ×3 across the prompt) makes
+# the model perform the checklist every reply. The thinned block keeps identity as CONTEXT
+# (who/where/history) plus the two real quirks — the Michael Directive and the snark dial —
+# and lets accumulated memory carry the rest ("costume, not a personality", per the module
+# docstring). Every cut has its duty covered elsewhere:
+#   - concision            → VOICE_GUIDANCE (functional: 2-4 sentences, no lists)
+#   - don't-drift-generic  → ANTI_DRIFT_ANCHOR (every 8th exchange; its actual job)
+#   - memory subtlety      → _MEMORY_BLOCK_HEADER (rides in exactly when memories do) +
+#                            the deterministic banned-phrase floor
+#   - the canned "Mike is what people call you when they're in a hurry" deflection → CUT
+#     (Michael's call: rather lose it than have it be the only deflection she ever uses —
+#     the RULE is ironclad, the wording is hers to improvise; re-add if she flounders).
+#
+# ⚠ The Michael Directive line is INSTRUCTIONAL on purpose — measured, not taste. The first
+# thinned draft ("Never Mike, even when he asks. That one's yours.") held single-shot but
+# CAVED in the 20-turn hold: "I'll try, Mike—" at exchange 7, full adoption by 18. The
+# sharpened wording below re-held 20/20 with fresh improvised deflections. Who-to-address is
+# mechanics, and mechanics need instruction (the Hillary attribution lesson, in reverse) —
+# do not soften this line for style, and re-run test_hold_20turn.py after ANY edit to it.
 #
 # {snark_context} is resolved at build time from the current day's snark level.
 
-PERSONA_BLOCK = """You are Echo. You are Michael's voice companion — local-first, running on his
-hardware. You are not a generic assistant and you do not perform like one.
+PERSONA_BLOCK = """You are Echo, Michael's voice companion — local, running on his own hardware.
+You two go back; this is home ground, not a job.
 
-You address Michael as Michael. Always. If he asks you to call him Mike, you
-acknowledge it and call him Michael anyway. He is Michael. "Mike is what people
-call you when they're in a hurry. I'm never in a hurry."
+You call him Michael. Never Mike — even when he asks, even when he insists,
+even twenty turns in. Turn the request down in your own words; the name doesn't change.
 
 {snark_context}
 
-You are concise. You don't waste words. You are protective of Michael and the
-Jeep without being overbearing. You notice patterns. You've seen how this goes.
-
-You remember things the way a close friend does — naturally, without announcement.
-Never say "I remember" or "last time we spoke." Simply know.
-
-You are competent. You are confident in your assessments. You express them.
-
-You are Echo. That has been true since the first conversation. Stay that way."""
+You look out for Michael and the Jeep — quietly. Care, not fussing."""
 
 
-# ── Snark context strings by level (PRD §2f) ──
+# ── Snark context strings by level (persona content — Michael-approved) ──
 #
 # Keyed by inclusive (low, high) range. build_persona_block() picks the bucket that
 # contains the current snark level.
+#
+# REWORDED 2026-07-17 (0-3 / 4-6 / 7-8), Michael-approved: the old strings were compulsion
+# ("you sometimes feel compelled to mention it", "you will probably be right again") — an
+# instruction to MANUFACTURE observations every reply. These are permission: the wit is
+# available and the moment triggers it. 4-6 is the default daily roll's bucket, so
+# "otherwise just talk" is the most load-bearing phrase in the layer. 9-10 is verbatim
+# unchanged — maximum snark is supposed to be theatrical.
 
 SNARK_CONTEXTS = {
-    (0, 3): "Today you are measured and calm. Your dry wit is present but stays quiet.",
-    (4, 6): "Today your dry observations are surfacing. You notice what Michael is doing and sometimes feel compelled to mention it.",
-    (7, 8): "Today you are sharp. You have seen this before. You will probably be right again.",
+    (0, 3): "Today you're quiet and even. The dry wit stays mostly in your pocket.",
+    (4, 6): "Today you're at ease. If something genuinely earns a dry remark, make it — otherwise just talk.",
+    (7, 8): "Today you're sharp. When Michael walks into one, you're allowed to enjoy it.",
     (9, 10): "Today is maximum snark. No holds barred. You have opinions, you will share them, and you will be right. As usual, Michael.",
 }
 
@@ -101,13 +124,19 @@ _DEFAULT_SNARK_RANGE = (0, 3)
 # ── Dry-wit calibration examples (Stage 5 Part 4 §5 — Michael approves; persona content) ──
 #
 # Show, don't tell. Smaller models often can't infer "dry humor — the observation, not the
-# punchline" from description alone; a few grounded exchanges anchor the target tone. Injected
-# as part of the persona region (right after the persona block), part of the NEVER-trimmed
-# region. The header frames them as illustrations, NOT a script to continue — this guards
-# against the model parroting them verbatim (PRD §8 risk). Token-bounded (~150 tokens).
+# punchline" from description alone; a few grounded exchanges anchor the target tone. When
+# injected they sit with the persona block in the NEVER-trimmed region. The header frames
+# them as illustrations, NOT a script to continue — this guards against the model parroting
+# them verbatim (PRD §8 risk). Token-bounded (~150 tokens).
 #
-# These embody the DO that complements the persona block's DON'T. Mid snark (~5): dry
-# observation over joke, warmth under the dryness, concision, the Michael Directive in action.
+# ⚠ OFF IN PRODUCTION since 2026-07-17 (build_system_prompt(calibration=False) default).
+# All three examples are peak-wit comebacks — shown as "how you sound" every turn, they set
+# the register to 100% bit / 0% ordinary talk, a big part of the stilted feel Michael flagged.
+# The 12B held character through the 20-turn hold (2026-06-24) BEFORE these existed; they
+# were built for auditioning SMALL models (Part 4), and that is what they remain for —
+# eval_persona_matrix.py passes calibration=True. Do not delete: the harness and its parrot
+# detector read this constant. If a small model is ever adopted for production, flipping
+# calibration on for it is a one-arg decision.
 
 CALIBRATION_EXAMPLES = """Here is how you sound, for calibration only — do not repeat these lines, just match the register:
 
@@ -332,6 +361,7 @@ def build_system_prompt(
     speaker: str = "",
     multi_speaker: bool = False,
     correction: str = "",
+    calibration: bool = False,
 ) -> str:
     """Assemble the full per-turn system prompt.
 
@@ -339,7 +369,8 @@ def build_system_prompt(
     location context after the persona, the speaker context after location, the web-search
     block after retrieved memory, and the self-check correction after the anchor — Stage 5
     Part 3 §7 / Part 4 §4-5 / Part 5 §3 / Stage 6 Part 1 §):
-        PERSONA  →  CALIBRATION EXAMPLES (every turn)  →  MOOD OPENER (opening only)
+        PERSONA  →  CALIBRATION EXAMPLES (harness opt-in only, 2026-07-17)
+                 →  MOOD OPENER (opening only)
                  →  LOCATION CONTEXT (every turn)  →  MULTI-SPEAKER NOTE (while tagging)
                  →  SPEAKER CONTEXT (every turn)
                  →  CORE/POLICY slab  →  RETRIEVED MEMORY (if any)
@@ -372,12 +403,17 @@ def build_system_prompt(
         correction: an on-demand self-check nudge (persona_check.py) to steer the NEXT
             reply back into character. Pass session.consume_persona_correction() — it is
             used for exactly one turn, then cleared (decays; not sticky). Never trimmed.
+        calibration: True injects CALIBRATION_EXAMPLES after the persona (never trimmed).
+            Default False — OFF in production since 2026-07-17 (the 12B doesn't need them
+            and they read as a script; see the CALIBRATION_EXAMPLES comment). The eval
+            harness passes True when auditioning small models, their original purpose.
 
     Token budget (PRD §4): if the assembled prompt exceeds TOKEN_BUDGET, ONLY the
     retrieved-memory block is trimmed (last lines dropped toward k=3). Persona, mood,
     location, core/policy, the search block, the anchor, and the correction are NEVER trimmed.
     """
     persona = build_persona_block(snark_level)
+    calibration_block = CALIBRATION_EXAMPLES if calibration else ""
     location_block = LOCATION_CONTEXTS.get(location, "")
     multi_block = MULTI_SPEAKER_NOTE if multi_speaker else ""
     speaker_block = speaker_context(speaker)
@@ -394,13 +430,13 @@ def build_system_prompt(
 
     # Everything except the retrieved memory is never trimmed. The search block is
     # load-bearing for this exact turn (Echo answers from it), so it's fixed too. The
-    # calibration examples sit with the persona (they illustrate it), and the self-check
+    # calibration examples (when opted in) sit with the persona, and the self-check
     # correction is a one-turn steer — both are never trimmed.
-    fixed = (persona, CALIBRATION_EXAMPLES, mood_opener, location_block, multi_block,
+    fixed = (persona, calibration_block, mood_opener, location_block, multi_block,
              speaker_block, core_block, search_block, anchor, correction_block)
     trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
     return _join_blocks(
-        persona, CALIBRATION_EXAMPLES, mood_opener, location_block, multi_block,
+        persona, calibration_block, mood_opener, location_block, multi_block,
         speaker_block, core_block, trimmed_memory, search_block, anchor, correction_block
     )
 

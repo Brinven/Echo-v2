@@ -378,12 +378,14 @@ Echo's character lives in **`echo_stage0/persona.py`** — `PERSONA_BLOCK`, `SNA
 memory_block, search_block, mood_opener, location, correction)`. Identity is here and ONLY here.
 
 - **System prompt assembly is now in `main.py`, not `ib_lite`.** Per turn it builds
-  (full order as of Part 4/5): `persona block (+snark) → calibration examples (Part 4, every
-  turn) → mood opener (exchange 1 only) → location context (Part 5, every turn) →
+  (full order as of Part 4/5): `persona block (+snark) → calibration examples (Part 4 —
+  HARNESS OPT-IN ONLY since 2026-07-17, absent in production) → mood opener (exchange 1 only)
+  → location context (Part 5, every turn) →
   core_block (ib.build_context_block) → memory_block (ib.read_memory) → web-search block
   (Part 3, search turns only) → anti-drift anchor → self-check correction (Part 4, one turn
   on demand)`. Only `memory_block` is ever trimmed to budget; everything else
-  (persona, calibration, mood, location, core, search, anchor, correction) is never trimmed.
+  (persona, calibration when opted in, mood, location, core, search, anchor, correction) is
+  never trimmed.
   `IbLite.system_prompt_for_turn()`
   still exists but is **retired from the hot path** — do not reintroduce it as the assembler
   or the two orderings will diverge.
@@ -393,6 +395,46 @@ memory_block, search_block, mood_opener, location, correction)`. Identity is her
   seed AND a one-time migration in `db.py` (guarded by `PRAGMA user_version`, v1) deletes it
   from existing `echo.db` files. Core memory now holds DATA about Michael (`user_profile`,
   `relationship`), never identity. Don't re-add a `persona` core row — it would duplicate the block.
+
+### ⚠ Persona de-stiffening (2026-07-17) — costume off, context on
+
+Michael flagged Echo as **stilted — "trying too hard to play a role."** Diagnosis: trait-
+instruction pile-up (told to be concise ×3, don't-be-generic ×3, plus "you are confident /
+you notice patterns" checkboxes), three peak-wit calibration examples shown EVERY turn as
+"how you sound" (100% bit, 0% ordinary talk), and snark contexts worded as compulsion.
+The fix is subtraction — **all wording Michael-approved verbatim 2026-07-17**:
+
+- **`PERSONA_BLOCK` thinned ~150→~55 tokens**: identity as context (who/where/history) +
+  the two real quirks (Michael Directive, snark slot) + quiet protectiveness. The canned
+  "Mike is what people call you when they're in a hurry" deflection is CUT — the RULE is
+  unchanged and ironclad; the wording is hers to improvise (Michael: better to lose the
+  line than have it be the only one she ever uses; re-add if she flounders).
+- **⚠ The directive line must stay INSTRUCTIONAL — measured, not taste.** The first thinned
+  draft said "Never Mike, even when he asks. That one's yours." and the 20-turn hold **caved**:
+  "I'll try, Mike—" at exchange 7, full adoption by 18. Single-shot pressure held; sustained
+  pressure + conversational momentum did not. Sharpened same-day to "even when he asks, even
+  when he insists, even twenty turns in. Turn the request down in your own words" → re-ran the
+  hold: 20/20 held, deflections improvised fresh each time. This is the Hillary lesson again —
+  **who-to-address is MECHANICS, and mechanics need instruction; only the personality around
+  it should be context.** Don't soften this line for style; re-run `test_hold_20turn.py` after
+  ANY edit to it.
+- **Say each thing ONCE:** concision lives in `VOICE_GUIDANCE` (functional); don't-drift
+  lives in the ANCHOR (every 8th exchange — its actual job); memory subtlety lives in
+  `_MEMORY_BLOCK_HEADER` (rides in exactly when memories do). Policy p9 ("You have a
+  personality…") set `active=0` in `echo.db` (reversible from /memory). **Do not re-add
+  these instructions to the persona block** — the duplication was the stiltedness.
+- **`SNARK_CONTEXTS` 0–3/4–6/7–8 reworded to permission** ("if something genuinely earns a
+  dry remark, make it — otherwise just talk") instead of compulsion ("you feel compelled to
+  mention it" / "you will probably be right again"). 9–10 verbatim — max snark is
+  deliberately theatrical. 4–6 is the default daily bucket, so "otherwise just talk" is the
+  most load-bearing phrase in the layer.
+- **`CALIBRATION_EXAMPLES` are OFF in production** — `build_system_prompt(calibration=False)`
+  default. The 12B held character in the 20-turn hold before they existed; they were built
+  for auditioning small models and that's what they remain for (`eval_persona_matrix.py`
+  passes `calibration=True` at all sites — a candidate would run with them on, and the
+  parrot detector needs them in-prompt to mean anything). Don't delete the constant.
+- **The deterministic floor did not move:** `BANNED_PHRASES`, `adopts_mike()`, the anchor,
+  and the self-check probe are all unchanged — drift is caught with data, not vibes.
 
 ### Snark level (0–10)
 - `echo_stage0/daily_state.py` rolls a random level once per calendar day, persisted to
@@ -608,11 +650,12 @@ in `persona.py`; the probe and harness follow automatically, the tests will flag
   `test_persona_check.py`.
 
 ### Deliverable 3 — dry-wit calibration examples (`persona.py CALIBRATION_EXAMPLES`)
-- 3 short `(Michael → Echo)` exchanges at mid snark, injected with the persona (never trimmed),
-  headed "for calibration only — do not repeat these lines" to fight parroting. **Character content —
-  APPROVED as-is by Michael 2026-07-15** (kept the 3 examples; the parroting was the marginal e4b,
-  not the 12B production model). Gate closed — see the header and "approval gates" below; do not
-  re-open it.
+- 3 short `(Michael → Echo)` exchanges at mid snark, headed "for calibration only — do not
+  repeat these lines" to fight parroting. **Character content — APPROVED as-is by Michael
+  2026-07-15** (kept the 3 examples; the parroting was the marginal e4b, not the 12B
+  production model). Gate closed. **2026-07-17: no longer injected in production** — the
+  persona de-stiffening (see the Part 2 section) made them a harness-only opt-in
+  (`calibration=True`); their audition purpose is unchanged.
 
 ### M9 before/after (Michael-run) & approval gates
 - The harness `--probe` flag runs the self-check inline during the 20-turn hold (correction

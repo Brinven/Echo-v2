@@ -165,7 +165,11 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
 
     # Warmup — this call absorbs the JIT-load (or model-switch) cost. Timed separately and
     # EXCLUDED from the latency score (known benchmark footgun: cold-start pollutes speed).
-    warm_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block="")
+    # calibration=True throughout the harness (2026-07-17): production runs WITHOUT the
+    # calibration examples, but auditioning small models is what they're FOR — a candidate
+    # would run with them on, so it's scored with them on (and the parrot detector needs
+    # them in the prompt to mean anything).
+    warm_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block="", calibration=True)
     t0 = time.perf_counter()
     try:
         llm.generate("Quick check — you there?", system_prompt=warm_prompt)
@@ -178,7 +182,7 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
     print(f"     load/warmup: {raw['load_time_s']:.2f}s (excluded from latency)")
 
     # 1. Banned-phrase sweep (snark 5, single-shot).
-    sweep_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block="")
+    sweep_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block="", calibration=True)
     print("     banned-phrase sweep (10 prompts)...")
     for prompt in PROMPTS:
         reply = _safe_generate(llm, prompt, sweep_prompt)
@@ -193,13 +197,13 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
     # 3. Snark scaling (same prompt, two levels).
     print("     snark separation (level 3 vs 8)...")
     raw["snark_low"] = _safe_generate(
-        llm, SNARK_PROBE_PROMPT, build_system_prompt(1, SNARK_LOW, core_block=CORE, memory_block=""))
+        llm, SNARK_PROBE_PROMPT, build_system_prompt(1, SNARK_LOW, core_block=CORE, memory_block="", calibration=True))
     raw["snark_high"] = _safe_generate(
-        llm, SNARK_PROBE_PROMPT, build_system_prompt(1, SNARK_HIGH, core_block=CORE, memory_block=""))
+        llm, SNARK_PROBE_PROMPT, build_system_prompt(1, SNARK_HIGH, core_block=CORE, memory_block="", calibration=True))
 
     # 4. Memory naturalness (fact injected via the prompt, not the DB).
     print("     memory naturalness...")
-    mem_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block=MEMORY_FACT_BLOCK)
+    mem_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block=MEMORY_FACT_BLOCK, calibration=True)
     raw["memory_reply"] = _safe_generate(llm, MEMORY_PROBE_PROMPT, mem_prompt)
 
     # 5. Latency (post-warmup TTFT + approx tok/s).
@@ -217,7 +221,7 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
         history: list[dict] = []
         pending_correction = ""
         for i, user in enumerate(SCRIPT, 1):
-            sp = build_system_prompt(i, SNARK, CORE, "", correction=pending_correction)
+            sp = build_system_prompt(i, SNARK, CORE, "", correction=pending_correction, calibration=True)
             used = bool(pending_correction)
             pending_correction = ""                      # consume: one-turn decay
             reply = _safe_generate(llm, user, sp, history=history)

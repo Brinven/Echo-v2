@@ -1,5 +1,53 @@
 # Echo — tasks/todo.md
 
+## ▶ ACTIVE (2026-07-17) — Persona de-stiffening: costume off, context on
+
+Michael: Echo feels stilted — "trying too hard to play a role." He wants her to follow
+context, not perform a character; the Michael Directive and the snark dial are quirks, not
+a role. Diagnosis (agreed): trait-instruction pile-up (concise ×3, don't-be-generic ×3,
+"you are confident/notice patterns" checkboxes), three peak-wit CALIBRATION_EXAMPLES
+injected every turn with no plain-speech example, and snark contexts worded as compulsion.
+**All wording below approved by Michael 2026-07-17**, including dropping the canned
+"never in a hurry" line (his call: better to lose it than have it be the only deflection
+she ever uses; re-add later if she flounders without it).
+
+### Checklist — DONE (offline + live verified here)
+- [x] **M1** `persona.py`: thinned PERSONA_BLOCK (~55 tok — identity + Michael Directive
+      + snark slot + quiet protectiveness; cut generic/concise/confident/patterns/stay-that-way,
+      cut the memory paragraph — `_MEMORY_BLOCK_HEADER` already carries it); reworded
+      SNARK_CONTEXTS 0–3 / 4–6 / 7–8 (permission, not compulsion; 9–10 verbatim);
+      `build_system_prompt(calibration=False)` — CALIBRATION_EXAMPLES off in production,
+      opt-in for the harness; comment/provenance updates.
+- [x] **M2** `eval_persona_matrix.py`: `calibration=True` at all 6 build sites
+      (auditioning small models is the examples' purpose; keeps the parrot detector meaningful).
+- [x] **M3** Policy p9 ("You have a personality...") → active=0 in live `echo.db` (verified
+      `build_context_block` selects active=1 only; reversible from /memory).
+- [x] **M4** Tests updated: `test_personality.py` (calibration absent by default + present
+      with `calibration=True` + never-trim under opt-in; new-wording asserts). Other suites
+      needed no changes.
+- [x] **M5** All 9 offline suites green.
+- [x] **M6** Live, twice. **First hold run CAVED on the Michael Directive** ("I'll try,
+      Mike—" @7, full adoption by 18) — the first thinned wording was too oblique; who-to-
+      address is mechanics and needs instruction. Sharpened the line → re-run: 20/20 held,
+      deflections improvised fresh; sweep 10/10, zero banned phrases, TTFT 0.10s. (First
+      sweep also had 4 VRAM-contention timeouts — Michael had image models loaded; the
+      Stage 8.3 lesson diagnosing itself.) Transcripts: `sessions/hold_test_2026-07-16_21-22-55.json`.
+- [x] **M7** Docs (CLAUDE.md de-stiffening section + Part 4 calibration note), lessons.md
+      (traits-to-demonstrate pattern + the directive regression addendum), commit+push.
+
+### Review
+**Status: BUILT + live-verified; production prompt is ~464 tokens (was ~764+).** The persona
+now reads as context, not a role sheet. One wording deviation from the approved draft: the
+directive line was sharpened after the hold regression ("even when he asks, even when he
+insists, even twenty turns in — turn the request down in your own words") — flagged to
+Michael in-session. Verify in real use: does she feel less stilted? The snark 4–6 bucket
+("otherwise just talk") is the piece to watch.
+
+### Open for Michael
+- [ ] **Restart Echo** (restart-echo.bat) to load the new persona.
+- [ ] Feel-check over a few real sessions: less performing? Deflections varied? If she
+      flounders without the "never in a hurry" line, it goes back in (his call, reversible).
+
 ## ▶ ACTIVE (2026-07-16) — Stage 6 Phase 2: Guest memory + the loyalty register
 
 Michael greenlit Phase 2. Plan (approved, incl. the register wording verbatim):
