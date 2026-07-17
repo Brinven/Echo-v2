@@ -1,6 +1,6 @@
 # Echo — tasks/todo.md
 
-## ▶ PLANNED (2026-07-17) — Remote Voice, Level 2: talk to Echo from the phone
+## ▶ BUILT (2026-07-17) — Remote Voice, Level 2: talk to Echo from the phone
 
 Level 1 (below) put the dashboard on the phone; Level 2 makes Talk real remotely:
 phone mic → upload → the SAME pipeline → reply audio plays on the phone. Rides the
@@ -35,20 +35,43 @@ Level-1 HTTPS URL (secure context = phone-mic `getUserMedia` allowed; tailnet-on
 - JSONL gains `remote: true` on remote turns.
 
 ### Build checklist
-- [ ] **M1** Decode seam (pure, offline-testable): blob bytes → 16 kHz mono float32
-      ndarray via PyAV; fail-soft None on garbage; format-agnostic (wav/webm/mp4).
-- [ ] **M2** Park contract: `control` single-flight remote slot + busy refusal; main-loop
-      claim at LISTENING tick; remote pipeline mode (no local playback, collect WAV,
-      skip filler); result Event + payload.
-- [ ] **M3** `/api/remote/turn` route (wait/timeout/busy/error paths).
-- [ ] **M4** `/remote` page: press-hold recorder (pointer events, `touch-action`/
-      `user-select` CSS against iOS long-press), audio unlock on press, thinking state,
-      last exchange, links. Dark/touch style matching the panel.
-- [ ] **M5** Tests: decode seam, park/claim/busy/timeout, remote mode suppresses local
-      playback + collects WAV (stubbed TTS), route shapes. All suites green.
-- [ ] **M6** Michael live pass (phone): speaker-ID score through the phone mic FIRST
-      (different mic character — fold a phone sample into the print if scores sag), then
-      a real conversation, sign-off from the phone, guest/unknown behavior unchanged.
+- [x] **M1** Decode seam: `webui/remote_audio.py decode_to_pcm16k` — PyAV (already a
+      faster-whisper dep), format-agnostic, resampler flushed (else the last word's tail
+      drops), fail-soft None. Offline-tested incl. a REAL mp4/AAC round-trip.
+- [x] **M2** Park contract + remote mode. One design improvement over the plan: no
+      pipeline branch at all — `RemoteAudioSink` quacks like AudioQueue and COLLECTS
+      instead of playing, so `run_streaming_pipeline` runs byte-identically (the search
+      filler just rides at the front of the reply WAV instead of being skipped). The
+      single-flight slot carries the ONE deliberate lock in EchoControl (Flask is
+      threaded; two phone POSTs would race check-then-park). `finish_remote_turn` in a
+      `finally` so an exception can never orphan the waiting request. Serviced in
+      LISTENING **and MUTED** (mute is the room mic; a phone turn never touched it).
+      Sign-off from the phone: goodbye WAV → phone, summary at the desk, speakers silent.
+- [x] **M3** `POST /api/remote/turn`: decode → park → block on the event
+      (REMOTE_WAIT_S=120 — the first turn may JIT-load the 12B) → publish. 400 empty/
+      undecodable/too-short, 409 busy, 504 timeout. 32 MB upload guard.
+- [x] **M4** `/remote` page: press-hold (pointer events, touch-action:none, no iOS
+      callout), **AudioContext resumed during the press** (the iOS unlock that allows
+      playback after the async fetch), thinking/speaking states, live exchange bubbles,
+      `heard as <speaker> (score)` readout, change-only polling, secure-context warning
+      on plain http. 📱 Remote link in the panel header.
+- [x] **M5** Verified: `test_remote_voice.py` 15/15 (decode, sink, park contract, route
+      status codes) + ALL prior suites green + a real-browser smoke — headless Chromium
+      with a fake mic drove the actual page: recorded 1.74s of real webm/Opus, uploaded,
+      PyAV decoded, reply rendered + audio played. Both phone codecs proven (AAC offline,
+      Opus in-browser).
+- [ ] **M6** Michael live pass (phone): restart Echo, open
+      https://skorp99.tail5c0851.ts.net:7862/remote — speaker-ID score through the phone
+      mic FIRST (different mic character — fold a phone sample into the print if scores
+      sag), then a real conversation, sign-off from the phone, guest/unknown unchanged.
+
+### Review
+**Status: BUILT + verified offline/in-browser; pushed. M6 (live pass) is Michael's.**
+Key deviation from plan, for the better: remote mode is a sink substitution, not a
+pipeline flag — the only pipeline diff on a remote turn is `remote: true` in the JSONL.
+The filler-skip decision became moot (it rides in the WAV, in character, zero code).
+Latency expectation: desk pipeline time + upload/download + decode; the page shows a
+thinking state throughout; a 409 means she's mid-conversation at home.
 
 ## ✅ DONE (2026-07-17) — Remote dashboard access, Level 1 (phone via Tailscale)
 

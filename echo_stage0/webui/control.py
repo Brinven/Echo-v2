@@ -15,6 +15,7 @@ relies on for cross-thread flags (e.g. session.persona_correction). No new locks
 
 import json
 import time
+import threading
 from pathlib import Path
 
 import httpx
@@ -92,6 +93,14 @@ class EchoControl:
         self._muted = False
         self._health_cache: dict | None = None
         self._health_ts = 0.0
+
+        # Remote Voice (Level 2): a phone-recorded utterance parked for the main loop.
+        # This one gets a real lock — a deliberate exception to the no-locks house pattern —
+        # because Flask runs threaded and two simultaneous phone POSTs would otherwise race
+        # the check-then-park in submit_remote_turn. Everything else here stays GIL-atomic.
+        self._remote_lock = threading.Lock()
+        self.pending_remote: dict | None = None
+        self._remote_busy = False
 
     # ── mute (shared source of truth) ──
     @property
@@ -228,6 +237,38 @@ class EchoControl:
         self.pending_preview = None
         return name
 
+    # ── Remote Voice (Level 2): park-for-the-main-loop, like model/voice/preview ──
+    # The web thread decodes the phone's audio and parks it here with an Event; the MAIN
+    # LOOP claims it at the next idle tick, runs the standard pipeline with a collecting
+    # sink, publishes the result, and sets the Event the request thread is waiting on.
+    # Single-flight: one remote turn parked-or-processing at a time; a second POST is
+    # refused (409) rather than queued, so the phone always knows what it's waiting for.
+
+    def submit_remote_turn(self, pcm) -> dict | None:
+        """Web thread: park a decoded utterance. Returns the slot to wait on, or None if busy."""
+        with self._remote_lock:
+            if self.pending_remote is not None or self._remote_busy:
+                return None
+            slot = {"audio": pcm, "event": threading.Event(), "result": None}
+            self.pending_remote = slot
+            return slot
+
+    def take_pending_remote(self) -> dict | None:
+        """Main loop only: claim the parked remote turn (read + clear + mark in-flight)."""
+        with self._remote_lock:
+            slot = self.pending_remote
+            self.pending_remote = None
+            if slot is not None:
+                self._remote_busy = True
+            return slot
+
+    def finish_remote_turn(self, slot: dict, result: dict) -> None:
+        """Main loop only: publish the result, wake the waiting request, clear in-flight."""
+        slot["result"] = result
+        slot["event"].set()
+        with self._remote_lock:
+            self._remote_busy = False
+
     def set_web_search(self, off: bool) -> bool:
         self.session.web_search_off = bool(off)
         return self.session.web_search_off
@@ -300,6 +341,7 @@ class EchoControl:
             "enrolling_ignore": bool(s.enrolling_ignore),
             "turn_count": s.turn_count,
             "exchange_count": s.exchange_count,
+            "remote_busy": self._remote_busy,
             "transcript": turns,
             "speaker_active": self.speaker_active,
             # active_names, not names: the chips list PEOPLE. Ignored voices are reported

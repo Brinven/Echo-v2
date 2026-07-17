@@ -30,6 +30,11 @@ _DEFAULT_CONFIG = {
     "poll_ms": 1000,
 }
 
+# How long a phone turn may wait for the main loop before the request 504s. Generous on
+# purpose: the FIRST turn can JIT-load the 12B (30s+), and a search turn adds seconds more.
+# A timeout doesn't cancel the turn — the main loop may still finish it locally.
+REMOTE_WAIT_S = 120
+
 
 def load_webui_config() -> dict:
     """Load echo_webui.json, falling back to documented defaults on any error."""
@@ -54,8 +59,12 @@ def create_app(control):
     # Imported here, not at module top, so importing the webui package stays cheap and
     # flask-free (memory_admin pulls in ib_lite). Only paid when the dashboard is actually built.
     from . import memory_admin
+    from . import remote_audio
 
     app = Flask(__name__, static_folder=None)
+    # Remote Voice uploads: a minute of phone AAC is ~1 MB; 32 MB is a runaway guard,
+    # not a target. Flask returns 413 above this instead of buffering without bound.
+    app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
     @app.get("/")
     def index():
@@ -168,6 +177,37 @@ def create_app(control):
     def api_quit():
         control.request_quit()
         return jsonify(ok=True)
+
+    # ── Remote Voice (Level 2): talk to Echo from the phone ──
+    @app.get("/remote")
+    def remote_page():
+        return send_from_directory(_STATIC_DIR, "remote.html")
+
+    @app.post("/api/remote/turn")
+    def api_remote_turn():
+        """One phone utterance in, one Echo reply out.
+
+        Body = the raw recorded blob (whatever MediaRecorder produced). Decoded HERE on
+        the web thread (CPU, cheap, touches nothing shared), then parked for the main
+        loop via the same contract as model/voice/preview. This request BLOCKS until the
+        main loop publishes the result — that's the point: the phone wants the answer.
+        """
+        raw = request.get_data(cache=False)
+        if not raw:
+            return jsonify(ok=False, error="empty"), 400
+        pcm = remote_audio.decode_to_pcm16k(raw)
+        if pcm is None:
+            return jsonify(ok=False, error="undecodable"), 400
+        if len(pcm) < remote_audio.SAMPLE_RATE * 0.3:
+            # Mirrors the pipeline's own too-short floor so the phone gets a clean 400
+            # instead of burning a park/claim cycle on a reply that would be None anyway.
+            return jsonify(ok=False, error="too-short"), 400
+        slot = control.submit_remote_turn(pcm)
+        if slot is None:
+            return jsonify(ok=False, error="busy"), 409
+        if not slot["event"].wait(timeout=REMOTE_WAIT_S):
+            return jsonify(ok=False, error="timeout"), 504
+        return jsonify(slot["result"] or {"ok": False, "error": "no-result"})
 
     # ── History page (Phase 3): read-only view over logs/stage0_log.jsonl ──
     @app.get("/history")

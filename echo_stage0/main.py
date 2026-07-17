@@ -54,6 +54,7 @@ from search_decision import decide_search
 from location import resolve_location
 from speaker_id import SpeakerRegistry, build_embedder, voiced_only
 from webui import EchoControl, start_webui
+from webui.remote_audio import RemoteAudioSink, sink_to_b64
 import gpu
 
 
@@ -194,6 +195,7 @@ def run_streaming_pipeline(
     self_check: SelfCheckRunner | None = None,
     speaker_embedder=None,
     speaker_registry: SpeakerRegistry | None = None,
+    remote: bool = False,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
@@ -653,6 +655,8 @@ def run_streaming_pipeline(
         speaker=session.current_speaker,
         speaker_score=round(speaker_score, 4),
         speaker_known=speaker_known,
+        # Remote Voice (Level 2): this turn arrived from the phone, not the room mic.
+        remote=remote,
         # Search turns log passed_budget=None so they're excluded from the pass-rate.
         passed_budget=(None if search_meta["web_search_triggered"]
                        else (first_audio < 1.5 if t_first_audio else False)),
@@ -1034,6 +1038,79 @@ def main():
         control.set_voice_name(new_voice)
         print(f"  [Voice: {new_voice}]")
 
+    def handle_remote_turn(rt: dict) -> str | None:
+        """Run a phone-submitted utterance through the SAME pipeline. Main loop only.
+
+        Remote mode is one substitution: a RemoteAudioSink replaces the speaker queue, so
+        the pipeline runs byte-identically (speaker-ID, guardrails, commands, search — all
+        of it) while the PC speakers stay silent and the reply audio goes back to the
+        phone (Michael's call: phone-only playback). The room mic is stopped for the
+        duration, same as any PROCESSING turn, and the state walks PROCESSING→(SPEAKING)→
+        back to wherever it started so the dashboard shows the turn happening.
+
+        Returns "signoff" when the phone turn ended the session; the caller runs the
+        summary sequence (with a throwaway sink — the goodbye already went to the phone).
+        """
+        clear_status_line()
+        print(f"  [remote: {len(rt['audio']) / SAMPLE_RATE:.1f}s of phone audio]")
+        origin = sm.state
+        try:
+            audio_stream.stop()
+        except Exception:
+            pass
+        sink = RemoteAudioSink()
+        result: dict = {"ok": False, "error": "no-reply",
+                        "detail": "Echo couldn't use that — too short, no speech she could "
+                                  "make out, an ignored voice, or no model loaded."}
+        turns_before = len(session.turns)
+        sm.transition(State.PROCESSING)
+        signoff = False
+        try:
+            pipe = run_streaming_pipeline(
+                audio=rt["audio"], stt=stt, llm=llm, tts=tts, audio_q=sink,
+                logger=logger, history=history, sm=sm, session=session, vad_mode=vad_mode,
+                ib=ib, search_provider=search_provider, search_config=search_config,
+                self_check=self_check, speaker_embedder=speaker_embedder,
+                speaker_registry=speaker_registry, remote=True,
+            )
+            new_turns = session.turns[turns_before:]
+            user_text = next((t["content"] for t in new_turns if t["speaker"] == "user"), "")
+            echo_text = next((t["content"] for t in new_turns if t["speaker"] == "echo"), "")
+            if pipe and pipe.get("signoff"):
+                # Sign-off from the phone: the goodbye goes back to the phone like any
+                # remote reply; the caller then runs the summary sequence at the desk.
+                signoff = True
+                goodbye = f"Goodbye {session.user_name or 'friend'}, talk soon."
+                try:
+                    g_audio, g_sr = tts.synthesize(goodbye)
+                    sink.enqueue(g_audio, g_sr)
+                except Exception as e:
+                    print(f"  [TTS error on remote goodbye: {e}]")
+                echo_text = goodbye
+            if signoff or echo_text:
+                result = {"ok": True, "signoff": signoff,
+                          "transcript": user_text, "reply": echo_text,
+                          "speaker": session.current_speaker,
+                          "speaker_score": round(session.last_speaker_score, 3)}
+                wav = sink_to_b64(sink)
+                if wav:
+                    result["wav_b64"], result["sample_rate"] = wav
+        except Exception as e:
+            result = {"ok": False, "error": "pipeline", "detail": str(e)}
+        finally:
+            # Always wake the waiting phone request, even on an exception — an orphaned
+            # request would hold the single-flight slot busy until its timeout.
+            control.finish_remote_turn(rt, result)
+        if signoff:
+            return "signoff"
+        if sm.state in (State.PROCESSING, State.SPEAKING):
+            sm.transition(origin)   # SPEAKING here only means chunks were collected
+        try:
+            audio_stream.start()
+        except Exception:
+            pass
+        return None
+
     signoff_triggered = False
 
     try:
@@ -1067,6 +1144,16 @@ def main():
                     if control.pending_preview:
                         do_voice_preview(control.take_pending_preview())
                         break
+                    if control.pending_remote is not None:
+                        rt = control.take_pending_remote()
+                        if rt is not None and handle_remote_turn(rt) == "signoff":
+                            signoff_triggered = True
+                            # Goodbye already went to the phone; a throwaway sink keeps the
+                            # desk speakers silent while the summary/episodic writes run.
+                            run_signoff(llm=llm, tts=tts, audio_q=RemoteAudioSink(),
+                                        session=session, ib=ib)
+                            sm.transition(State.SHUTDOWN)
+                        break  # re-enter LISTENING cleanly (resets buffers, redraws status)
                     if mute_toggle_event.is_set():
                         mute_toggle_event.clear()
                         if control.muted:
@@ -1179,6 +1266,20 @@ def main():
                     # MIC, not the speaker. Without this the preview would queue and never play.
                     if control.pending_preview:
                         do_voice_preview(control.take_pending_preview())
+                        draw_status(
+                            status="MUTED", vad="paused", mute="ON",
+                            stt=last_stt, fa=last_fa, turn=session.turn_count,
+                        )
+                    # Same reasoning for a phone turn: mute silences the ROOM mic, and a remote
+                    # utterance never touched it. Serviced here or it would park until unmute.
+                    if control.pending_remote is not None:
+                        rt = control.take_pending_remote()
+                        if rt is not None and handle_remote_turn(rt) == "signoff":
+                            signoff_triggered = True
+                            run_signoff(llm=llm, tts=tts, audio_q=RemoteAudioSink(),
+                                        session=session, ib=ib)
+                            sm.transition(State.SHUTDOWN)
+                            break
                         draw_status(
                             status="MUTED", vad="paused", mute="ON",
                             stt=last_stt, fa=last_fa, turn=session.turn_count,

@@ -1202,3 +1202,60 @@ the approved register wording): `~/.claude/plans/squishy-stirring-bentley.md`.
   line ("Hillary told me…"), episodic `source_speaker` (summaries are multi-speaker by nature
   and already attributed by real names), auth.
 
+---
+
+## ⚠ Remote Voice (Level 2, 2026-07-17) — talk to Echo from the phone
+
+Michael can hold Talk on his phone and converse with Echo from anywhere on the tailnet:
+`/remote` (phone-first page) → `POST /api/remote/turn` (the recorded blob) → the FULL
+standard pipeline → the reply WAV returns in the response and plays on the phone ONLY
+(his call — PC speakers stay silent for remote turns). Rides the Level-1 `tailscale serve`
+HTTPS URL (`https://skorp99.tail5c0851.ts.net:7862/remote`) — **getUserMedia requires a
+secure context, so the plain-http LAN address cannot record**; the page says so. Level 1
+note: remote access is `tailscale serve --bg --https=7862`, NEVER `funnel` (this box
+funnels :443/:8443 publicly for claude.ai MCP — Echo must not share those listeners).
+
+- **`webui/remote_audio.py`** — the whole remote mode is ONE substitution:
+  `RemoteAudioSink` quacks like `audio_queue.AudioQueue` (start/enqueue/finish/wait_done,
+  all non-blocking) but COLLECTS synthesized chunks instead of playing them. Passing it as
+  `audio_q` runs `run_streaming_pipeline` byte-identically — speaker-ID (+`voiced_only`),
+  guardrails, commands, search — with silent PC speakers; `sink_to_b64()` hands back the
+  reply WAV. **Do not add a `remote` branch inside the pipeline** — the sink IS the branch
+  (the only pipeline change is the `remote=True` JSONL field). The search filler simply
+  rides at the front of the reply WAV (in-character, zero special-casing).
+- **`decode_to_pcm16k()`** — phone blob (iOS mp4/AAC, Android webm/Opus, anything) →
+  16 kHz mono float32 via **PyAV, already shipped by faster-whisper — no new dep**. The
+  resampler is FLUSHED (`resample(None)`) or the tail of the last word is silently dropped.
+  Fail-soft None → 400, never an exception into Flask.
+- **Park contract (single-flight):** `control.submit_remote_turn(pcm)` parks
+  `{audio, event, result}`; the request thread BLOCKS on the event
+  (`REMOTE_WAIT_S=120` — generous because the FIRST turn may JIT-load the 12B; timeout →
+  504, the turn may still finish at the desk). `take_pending_remote()` (main loop, next
+  idle tick) claims + marks busy; a second POST meanwhile → 409, never queued.
+  **This slot has a real `threading.Lock` — the one deliberate exception to the no-locks
+  house pattern** (Flask is threaded; two simultaneous phone POSTs would race the
+  check-then-park). `finish_remote_turn` publishes + wakes + re-arms in a `finally`, so a
+  pipeline exception can never orphan the waiting request.
+- **`main.handle_remote_turn`** (closure, main loop only): stops the room mic (like any
+  PROCESSING turn), walks state PROCESSING→(SPEAKING)→back to origin, and is serviced in
+  **LISTENING and MUTED** — mute silences the ROOM mic; a phone turn never touched it
+  (same reasoning as the voice preview). Response texts are read back from
+  `session.turns` (the pipeline already recorded them). **Sign-off works from the phone:**
+  the goodbye WAV goes back to the phone, then `run_signoff` runs at the desk with a
+  throwaway sink (summary/episodic write as normal, desk speakers silent).
+- **`remote.html`** — press-hold Talk (pointer events; `touch-action:none` +
+  `-webkit-touch-callout:none` against iOS long-press); **iOS unlock: the AudioContext is
+  created/resumed during the press gesture**, which is what allows playback after the
+  async fetch — don't "simplify" to a bare `<audio>` tag, autoplay policy will eat it.
+  Sub-350ms holds are discarded client-side. Poll re-renders only on change (the DOM
+  holds selection — house rule). Shows `heard as <speaker> (score)` per turn — that's the
+  phone-mic speaker-ID readout the live pass tunes against.
+- **Uploads capped** (`MAX_CONTENT_LENGTH` 32 MB — runaway guard; a minute of AAC ≈ 1 MB).
+- **Tests:** `test_remote_voice.py` (15 offline checks: decode incl. real AAC round-trip,
+  sink, park contract, route incl. 400/409/504) + a real-browser smoke (headless Chromium,
+  fake mic → real webm/Opus upload → PyAV decode → reply rendered + played). All prior
+  suites green.
+- **Open (Michael):** the live pass — FIRST check his speaker-ID score through the phone
+  mic (different mic character than the desk; fold a phone sample into his print if it
+  sags), then a real conversation, a guest/unknown check, sign-off from the phone.
+

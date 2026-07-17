@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Echo — Remote</title>
+<style>
+  /* Phone-first on purpose — this page IS the phone surface (Level 2 Remote Voice).
+     Same palette as the panel. No media queries needed: one column at every size. */
+  :root{
+    --bg:#0b0f14; --panel:#141b24; --panel2:#1b2430; --edge:#2a3644;
+    --ink:#eef4fb; --dim:#9fb0c3; --accent:#4aa3ff; --good:#3fb950; --bad:#f85149;
+    --warn:#f0a020; --echo:#7ee0c0; --you:#ffd479;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; min-height:100%;}
+  body{background:var(--bg); color:var(--ink); font-size:16px;
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+    padding:12px; display:flex; flex-direction:column; gap:12px;}
+  a{color:var(--accent); text-decoration:none;}
+  header{display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:4px 2px;}
+  .brand{font-size:24px; font-weight:800; letter-spacing:.04em;}
+  .sub{font-size:13px; color:var(--dim); text-transform:uppercase; letter-spacing:.12em;}
+  .pill{padding:6px 14px; border-radius:999px; font-weight:700; font-size:14px;
+    background:var(--panel2); border:1px solid var(--edge); margin-left:auto;}
+  .pill.LISTENING{color:#8ec6ff; border-color:#2f5f8f;}
+  .pill.RECORDING{color:#ffcf7a; border-color:#8a6a25;}
+  .pill.PROCESSING{color:#c9a6ff; border-color:#5b4a8a;}
+  .pill.SPEAKING{color:#8ff0cf; border-color:#2f7f66;}
+  .pill.MUTED{color:#9fb0c3;}
+  .navbtn{background:var(--panel2); border:1px solid var(--edge); border-radius:10px;
+    padding:8px 12px; font-weight:700; font-size:13px; color:var(--ink);
+    min-height:40px; display:flex; align-items:center;}
+  .navbtn:active{background:#26313f;}
+
+  .banner{background:#3a2f10; border:1px solid var(--warn); color:#ffdf9e;
+    border-radius:10px; padding:10px 12px; font-size:14px; line-height:1.45;}
+  .banner[hidden]{display:none;}
+
+  #exchange{flex:1; display:flex; flex-direction:column; gap:8px; min-height:160px;}
+  .turn{padding:10px 12px; border-radius:10px; background:var(--panel2); line-height:1.4;
+    user-select:text; -webkit-user-select:text;}
+  .turn .who{font-weight:700; font-size:12px; text-transform:uppercase;
+    letter-spacing:.05em; display:block; margin-bottom:2px;}
+  .turn.echo .who{color:var(--echo);}
+  .turn.you .who{color:var(--you);}
+  .turn.live{border:1px solid #2f5f8f;}
+  .empty{color:var(--dim); font-style:italic; padding:8px;}
+
+  /* The Talk button is the whole point of the page: huge, unmistakable, press-and-hold.
+     touch-action:none stops the hold from scrolling the page; the callout/user-select
+     bits stop iOS long-press from popping a text-selection menu mid-recording. */
+  #talk{width:100%; min-height:120px; font-size:26px; font-weight:800; color:var(--ink);
+    background:#16324a; border:1px solid #2f6fa0; border-radius:18px; cursor:pointer;
+    font-family:inherit; touch-action:none; user-select:none; -webkit-user-select:none;
+    -webkit-touch-callout:none; transition:background .1s,border-color .1s;}
+  #talk.holding{background:var(--accent); color:#04121f; border-color:var(--accent);}
+  #talk.busy{background:#241b38; border-color:#5b4a8a; color:#c9a6ff;}
+  #talk:disabled{opacity:.55; cursor:default;}
+  #status{min-height:22px; text-align:center; color:var(--dim); font-size:14px;}
+  .meta{text-align:center; color:var(--dim); font-size:12px;}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">ECHO</div>
+    <div class="sub">Remote</div>
+    <div id="state" class="pill">—</div>
+    <a class="navbtn" href="/">Full panel</a>
+  </header>
+
+  <div id="warn" class="banner" hidden></div>
+
+  <div id="exchange"><div class="empty">Hold Talk and say something…</div></div>
+
+  <button id="talk">🎤 Hold to Talk</button>
+  <div id="status"></div>
+  <div class="meta" id="meta"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s??"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const talk = $("talk");
+const MIN_HOLD_MS = 350;
+
+let ctx = null, micStream = null, rec = null, recChunks = [];
+let holding = false, busy = false, recStart = 0;
+
+function warn(msg){ const w = $("warn"); w.textContent = msg; w.hidden = !msg; }
+function setStatus(msg){ $("status").textContent = msg || ""; }
+
+// getUserMedia needs a secure context — the https:// tailnet URL provides one; a plain
+// http:// LAN address does not, and the mic call would just reject. Say so up front.
+if(!window.isSecureContext){
+  warn("This page can't use the microphone over plain http. Open the https:// tailnet " +
+       "address (https://skorp99.tail5c0851.ts.net:7862/remote).");
+}
+if(!window.MediaRecorder){
+  warn("This browser can't record audio (MediaRecorder missing).");
+}
+
+// iOS unlock: audio may only START from a user gesture. The AudioContext is created and
+// resumed during the press, so playing the reply later (after an async fetch) is allowed.
+function unlockAudio(){
+  if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if(ctx.state === "suspended") ctx.resume();
+}
+
+async function ensureMic(){
+  if(micStream) return true;
+  try{
+    micStream = await navigator.mediaDevices.getUserMedia({audio: true});
+    return true;
+  }catch(e){
+    warn("Microphone blocked — allow mic access for this site and try again.");
+    return false;
+  }
+}
+
+async function press(e){
+  e.preventDefault();
+  if(holding || busy) return;
+  unlockAudio();
+  if(!window.MediaRecorder || !(await ensureMic())) return;
+  recChunks = [];
+  try{ rec = new MediaRecorder(micStream); }
+  catch(err){ warn("Couldn't start the recorder: " + err); return; }
+  rec.ondataavailable = ev => { if(ev.data && ev.data.size) recChunks.push(ev.data); };
+  rec.start();
+  recStart = Date.now();
+  holding = true;
+  talk.classList.add("holding");
+  talk.textContent = "● Listening — release to send";
+  setStatus("");
+}
+
+async function release(e){
+  e.preventDefault();
+  if(!holding || !rec) return;
+  holding = false;
+  const heldMs = Date.now() - recStart;
+  const stopped = new Promise(res => { rec.onstop = res; });
+  try{ rec.stop(); }catch(err){}
+  await stopped;
+  talk.classList.remove("holding");
+  if(heldMs < MIN_HOLD_MS || !recChunks.length){
+    resetTalk(); setStatus("Hold the button down while you speak.");
+    return;
+  }
+  const blob = new Blob(recChunks, {type: rec.mimeType || "application/octet-stream"});
+  await sendTurn(blob);
+}
+
+function resetTalk(){
+  busy = false;
+  talk.disabled = false;
+  talk.classList.remove("busy", "holding");
+  talk.textContent = "🎤 Hold to Talk";
+}
+
+async function sendTurn(blob){
+  busy = true;
+  talk.disabled = true;
+  talk.classList.add("busy");
+  talk.textContent = "… thinking";
+  setStatus("Echo's working on it…");
+  try{
+    const r = await fetch("/api/remote/turn", {
+      method: "POST",
+      headers: {"Content-Type": blob.type || "application/octet-stream"},
+      body: blob,
+    });
+    const j = await r.json().catch(() => null);
+    if(r.status === 409){ setStatus("She's mid-conversation at home — try again in a moment."); }
+    else if(r.status === 504){ setStatus("That took too long — she may still be finishing at the desk."); }
+    else if(!r.ok || !j || !j.ok){
+      setStatus((j && j.detail) || "Echo didn't catch that — try again.");
+    }else{
+      renderLive(j);
+      // Speaker + score up front (not after playback) — it's the live-pass tuning readout.
+      if(j.speaker) $("meta").textContent = `heard as ${j.speaker} (${(j.speaker_score ?? 0).toFixed(2)})`;
+      if(j.wav_b64){
+        talk.textContent = "🔊 Echo";
+        setStatus("");
+        await playB64(j.wav_b64);
+      }
+      if(j.signoff) setStatus("Session ended — Echo said goodbye.");
+    }
+  }catch(err){
+    setStatus("Couldn't reach Echo — is she running?");
+  }
+  resetTalk();
+}
+
+// The reply plays through WebAudio (not an <audio> tag) because the context was resumed
+// during the press gesture — that's what satisfies iOS's play-from-a-gesture rule.
+function decodeAudio(buf){
+  return new Promise((res, rej) => {
+    const p = ctx.decodeAudioData(buf, res, rej);
+    if(p && p.then) p.then(res).catch(rej);
+  });
+}
+async function playB64(b64){
+  try{
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for(let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const audio = await decodeAudio(bytes.buffer);
+    const src = ctx.createBufferSource();
+    src.buffer = audio;
+    src.connect(ctx.destination);
+    await new Promise(res => { src.onended = res; src.start(); });
+  }catch(err){
+    setStatus("Reply arrived but couldn't play — check the phone isn't on silent.");
+  }
+}
+
+// This exchange, rendered immediately from the POST response (the poll catches up later).
+function renderLive(j){
+  const ex = $("exchange");
+  ex.innerHTML =
+    `<div class="turn you live"><span class="who">${esc(j.speaker || "You")}</span>${esc(j.transcript || "…")}</div>` +
+    `<div class="turn echo live"><span class="who">Echo</span>${esc(j.reply || "…")}</div>`;
+  lastSig = "";   // let the next poll re-render the full tail over this
+}
+
+talk.addEventListener("pointerdown", press);
+talk.addEventListener("pointerup", release);
+talk.addEventListener("pointercancel", release);
+talk.addEventListener("pointerleave", e => { if(holding) release(e); });
+talk.addEventListener("contextmenu", e => e.preventDefault());
+
+// Light state poll: status pill + the conversation tail. Re-render only on change —
+// the DOM holds user state (text selection), same rule as the panel transcript.
+let lastSig = null;
+async function poll(){
+  try{
+    const r = await fetch("/api/state");
+    const s = await r.json();
+    $("state").textContent = s.muted ? "MUTED" : s.state;
+    $("state").className = "pill " + (s.muted ? "MUTED" : s.state);
+    if(s.remote_busy && !busy) setStatus("Processing a phone turn…");
+    const turns = (s.transcript || []).slice(-6);
+    const sig = JSON.stringify(turns);
+    if(sig !== lastSig && !busy){
+      lastSig = sig;
+      $("exchange").innerHTML = turns.length ? turns.map(x => {
+        const cls = x.speaker === "echo" ? "echo" : "you";
+        const who = x.speaker === "echo" ? "Echo" : (x.name || s.user_name || "You");
+        return `<div class="turn ${cls}"><span class="who">${esc(who)}</span>${esc(x.content)}</div>`;
+      }).join("") : `<div class="empty">Hold Talk and say something…</div>`;
+    }
+  }catch(e){
+    $("state").textContent = "OFFLINE";
+    $("state").className = "pill";
+  }
+}
+poll();
+setInterval(poll, 2500);
+</script>
+</body>
+</html>
