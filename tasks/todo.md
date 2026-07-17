@@ -1,5 +1,30 @@
 # Echo — tasks/todo.md
 
+## 💡 FUTURE (pinned 2026-07-17) — Echo in Hillary's Colorado (phone-thin-client, zero-touch)
+
+Michael's idea after Remote Voice proved out ("this opens MANY possibilities"). An
+"Echo-style" assistant in **Hillary's 2018 Colorado** — WITHOUT bypassing her infotainment.
+The phone-thin-client pattern makes the truck's MyLink just a Bluetooth speaker:
+
+- Hillary's phone pairs to the truck as normal → opens `/remote` over Tailscale (LTE) →
+  talks into the mounted phone, Echo answers through the truck speakers. **No wiring, no
+  dash surgery, nothing to undo on a modern daily driver under warranty.** (A "real"
+  bypass wouldn't help anyway — CarPlay/Android Auto can't project a web page; in-dash
+  hardware would be the Jeep architecture, which is right for the Jeep, wrong here.)
+- Known constraints (accepted, not blockers): brain stays at the home PC (dead zone = no
+  Echo — unlike the eventual Mac-Mini-in-Jeep, which is self-contained); page must be
+  foreground with screen on (iOS mic rules — mounted-phone shape); the truck's cabin mic
+  can't be used (browsers get the phone mic only).
+- Already works in its favor: speaker-ID knows Hillary; guest memory + the loyalty
+  register behave exactly as at home. Check her speaker score through HER phone mic
+  (same first-step as Michael's live pass).
+
+**The one real build task: a location hint on remote turns.** Location currently resolves
+on the home PC's network, so a turn from the truck reads as "home" register. Let
+`/remote` send an optional location tag (e.g. "colorado") → carried on the parked slot →
+`session.location` for that turn → a matching entry in `persona.LOCATION_CONTEXTS`
+(persona content — Michael approves wording). Small, slots into existing mechanisms.
+
 ## ▶ BUILT (2026-07-17) — Remote Voice, Level 2: talk to Echo from the phone
 
 Level 1 (below) put the dashboard on the phone; Level 2 makes Talk real remotely:
