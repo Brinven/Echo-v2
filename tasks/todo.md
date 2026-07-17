@@ -1,5 +1,55 @@
 # Echo — tasks/todo.md
 
+## ▶ PLANNED (2026-07-17) — Remote Voice, Level 2: talk to Echo from the phone
+
+Level 1 (below) put the dashboard on the phone; Level 2 makes Talk real remotely:
+phone mic → upload → the SAME pipeline → reply audio plays on the phone. Rides the
+Level-1 HTTPS URL (secure context = phone-mic `getUserMedia` allowed; tailnet-only).
+
+### Decisions locked (Michael, 2026-07-17)
+- **Reply plays on the phone ONLY** — PC speakers stay silent for remote turns (no
+  empty-room announcements; no self-hearing problem at the desk).
+- **Separate phone-first `/remote` page** — big press-hold Talk, status, last exchange,
+  links to the full dashboard/History/Memory. The kiosk's `index.html` is untouched.
+- **Press-and-hold gesture** — matches the desk/kiosk Talk decision (2026-07-15).
+- Remote turns run the FULL standard pipeline: speaker-ID (+`voiced_only()`), memory
+  gate, search, LLM, TTS — so attribution/guardrails/ignored-voices apply unchanged and
+  it's one session, one transcript, one memory. Voice commands (sign-off, forget,
+  max-snark, location) therefore also work from the phone — consistent on purpose.
+- v1 skips the spoken search-filler on remote turns (the page's thinking state covers
+  that job); remote turns are exempt from the <3s budget like search turns.
+- No new deps: PyAV (already in `.venv` via faster-whisper) decodes whatever the phone
+  records (iPhone = mp4/AAC) → 16 kHz mono. No new character content → no approval gates.
+
+### Architecture (fits existing invariants)
+- **Park-for-the-main-loop, single-flight**: `POST /api/remote/turn` decodes, parks the
+  buffer + a result Event on `EchoControl`, and WAITS (timeout ~90s → clear error; a
+  second POST while one is parked → busy). The MAIN LOOP claims it at the next LISTENING
+  tick and runs the pipeline in remote mode: suppress `audio_q` playback, collect the
+  TTS audio into an in-memory WAV, set the Event. EchoControl still never touches the
+  pipeline; a remote turn can never land mid-generation or collide with a desk turn.
+- Response = JSON (user transcript + Echo's text + WAV base64 + speaker/score) so the
+  page can show the exchange while playing the audio.
+- **iOS autoplay gotcha**: playback must be unlocked during the touch gesture — prime an
+  Audio element on press, set its src when the reply arrives. Build deliberately.
+- JSONL gains `remote: true` on remote turns.
+
+### Build checklist
+- [ ] **M1** Decode seam (pure, offline-testable): blob bytes → 16 kHz mono float32
+      ndarray via PyAV; fail-soft None on garbage; format-agnostic (wav/webm/mp4).
+- [ ] **M2** Park contract: `control` single-flight remote slot + busy refusal; main-loop
+      claim at LISTENING tick; remote pipeline mode (no local playback, collect WAV,
+      skip filler); result Event + payload.
+- [ ] **M3** `/api/remote/turn` route (wait/timeout/busy/error paths).
+- [ ] **M4** `/remote` page: press-hold recorder (pointer events, `touch-action`/
+      `user-select` CSS against iOS long-press), audio unlock on press, thinking state,
+      last exchange, links. Dark/touch style matching the panel.
+- [ ] **M5** Tests: decode seam, park/claim/busy/timeout, remote mode suppresses local
+      playback + collects WAV (stubbed TTS), route shapes. All suites green.
+- [ ] **M6** Michael live pass (phone): speaker-ID score through the phone mic FIRST
+      (different mic character — fold a phone sample into the print if scores sag), then
+      a real conversation, sign-off from the phone, guest/unknown behavior unchanged.
+
 ## ✅ DONE (2026-07-17) — Remote dashboard access, Level 1 (phone via Tailscale)
 
 Michael's ask: open the dashboard on his phone — LAN at home, Tailscale when out. Level 1 =
