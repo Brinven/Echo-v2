@@ -835,6 +835,15 @@ by touch). Plan: `~/.claude/plans/lexical-baking-hippo.md`.
 - **Security:** default `host 127.0.0.1` (this PC only). For the touchscreen/another device set `host`
   to the LAN/Tailscale IP — **binding off-loopback lets anyone on that network control Echo** (talk,
   mute, quit); only do it on a trusted/Tailscale network (same caution as the SearXNG :26 note).
+- **⚠ Remote access (phone, 2026-07-17) is via `tailscale serve`, NOT a `host` change.**
+  `tailscale serve --bg --https=7862 http://127.0.0.1:7862` proxies
+  **`https://skorp99.tail5c0851.ts.net:7862`** → the loopback dashboard: Flask never leaves
+  127.0.0.1, only tailnet devices can reach it, and it's real HTTPS (a secure context — needed
+  later for phone-mic `getUserMedia`, and it makes `navigator.clipboard` work remotely). Config
+  persists across reboots in tailscaled; disable with `tailscale serve --https=7862 off`.
+  **Never `tailscale funnel` for Echo** — this machine funnels `/`, `/ib`, `/camofox` on :443 and
+  :8443 to the PUBLIC internet (claude.ai MCP access — deliberate, don't touch), which is exactly
+  why Echo sits on her own dedicated tailnet-only port instead of a path under :443.
 - **The offline overlay is a screensaver, not a static card (2026-07-17).** "ECHO IS OFFLINE"
   can sit on the 10" kiosk for hours, and a pixel-stationary white-on-black block will ghost
   into the panel. The message block wanders (driftX 53s / driftY 41s — out-of-sync periods,

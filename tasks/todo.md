@@ -1,5 +1,24 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-17) — Remote dashboard access, Level 1 (phone via Tailscale)
+
+Michael's ask: open the dashboard on his phone — LAN at home, Tailscale when out. Level 1 =
+view + control remotely (transcript, History, /memory, all toggles). Talk still drives the
+PC's mic/speakers — actually talking *from* the phone is Level 2 (planned separately).
+
+- [x] `tailscale serve --bg --https=7862 http://127.0.0.1:7862` on this PC —
+      **https://skorp99.tail5c0851.ts.net:7862** (one URL, works at home AND away; at home
+      Tailscale routes it over the LAN directly, no speed penalty).
+- [x] Deliberately `serve`, NEVER `funnel` — this machine already funnels /, /ib, /camofox
+      publicly for claude.ai MCP (untouched); Echo gets a dedicated tailnet-only port. Flask
+      stays on 127.0.0.1 (no `host` change; the off-loopback caveat never applies).
+- [x] Verified end-to-end with a stand-in server on 7862 through the HTTPS URL (Echo was not
+      running). Persists across reboots (tailscaled state). Disable:
+      `tailscale serve --https=7862 off`.
+- [x] Docs: CLAUDE.md GUI-Dashboard security bullet + echo_webui.json comment.
+- [ ] Michael: open the URL on the phone (Tailscale app on) while Echo runs; bookmark it.
+      Bonus: over HTTPS the ⧉ Copy button uses the modern clipboard path.
+
 ## ▶ ACTIVE (2026-07-17) — Persona de-stiffening: costume off, context on
 
 Michael: Echo feels stilted — "trying too hard to play a role." He wants her to follow
