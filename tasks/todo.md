@@ -43,10 +43,14 @@ insists, even twenty turns in — turn the request down in your own words") — 
 Michael in-session. Verify in real use: does she feel less stilted? The snark 4–6 bucket
 ("otherwise just talk") is the piece to watch.
 
-### Open for Michael
-- [ ] **Restart Echo** (restart-echo.bat) to load the new persona.
-- [ ] Feel-check over a few real sessions: less performing? Deflections varied? If she
-      flounders without the "never in a hurry" line, it goes back in (his call, reversible).
+### Open for Michael — ✅ CLOSED (2026-07-17, same night)
+- [x] **Restart Echo** — done.
+- [x] Feel-check — **confirmed live: "wow, what a difference. She sounds MILES better this
+      way. way more natural. I think we nailed it."** Also confirmed in the same pass:
+      memory recall is seamless (facts from a prior session surfaced instantly and naturally —
+      "I honestly couldn't tell it was a recall over just regular replies"), and web search
+      is near-instant (filler line → immediate results; SearXNG fast, handled in-voice well).
+      The "never in a hurry" line stays out.
 
 ## ▶ ACTIVE (2026-07-16) — Stage 6 Phase 2: Guest memory + the loyalty register
 
@@ -899,3 +903,5 @@ server is dead, so nothing may depend on a poll; the browser keeps the page aliv
   later shorthand REPLACED the earlier one, x drifted while y sat frozen. Now one
   comma-joined shorthand; measured 348px drift over 8s + opacity 0.95→0.74. test_webui green.
 - Reminder: kiosk browser caches the page; a hard refresh (or kiosk relaunch) picks it up.
+- **Live-confirmed (Michael, same night): kiosk refreshed, drift looks good.** Panel runs at
+  20% brightness in the house (still bright) — full brightness is headroom for Jeep daylight.
