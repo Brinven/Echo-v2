@@ -85,10 +85,13 @@ Level-1 HTTPS URL (secure context = phone-mic `getUserMedia` allowed; tailnet-on
       with a fake mic drove the actual page: recorded 1.74s of real webm/Opus, uploaded,
       PyAV decoded, reply rendered + audio played. Both phone codecs proven (AAC offline,
       Opus in-browser).
-- [ ] **M6** Michael live pass (phone): restart Echo, open
-      https://skorp99.tail5c0851.ts.net:7862/remote — speaker-ID score through the phone
-      mic FIRST (different mic character — fold a phone sample into the print if scores
-      sag), then a real conversation, sign-off from the phone, guest/unknown unchanged.
+- [x] **M6a** Michael live pass (2026-07-17): DONE — "it works great.. pretty much as
+      fast as just using the model on the desk", and speaker-ID **easily ID'd him through
+      the phone mic** (no print adjustment needed — the voiced-only trim carrying its
+      weight across mic characters). Talk button pinned to the bottom same session.
+- [ ] **M6b** Other voices through the phone (Hillary, guest/unknown behavior) — Michael
+      will test as opportunities come up; promising so far. Folds naturally into the
+      Phase 2 live pass with Hillary.
 
 ### Review
 **Status: BUILT + verified offline/in-browser; pushed. M6 (live pass) is Michael's.**
