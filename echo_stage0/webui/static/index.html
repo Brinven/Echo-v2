@@ -77,8 +77,27 @@
   #offline .big{font-size:34px; font-weight:800; letter-spacing:.04em;}
   #offline .sub{color:var(--dim); font-size:17px; max-width:34ch; line-height:1.45;}
   #offline .spin{width:30px; height:30px; border:3px solid var(--edge); border-top-color:var(--accent);
-    border-radius:50%; animation:sp 1s linear infinite;}
+    border-radius:50%; animation:sp 1s linear infinite; margin:0 auto;}
   @keyframes sp{to{transform:rotate(360deg);}}
+  /* Burn-in guard: Echo can sit offline for hours on the 10" kiosk, and a pixel-stationary
+     white-on-black block will eventually ghost into the panel. The whole message wanders the
+     screen (two out-of-sync periods trace a non-repeating path — the "DVD logo" principle,
+     minus the corner celebrations) and slowly breathes its brightness down. CSS-only on
+     purpose: when this overlay is up the server is DEAD — the page is running on browser
+     alone, so nothing here may depend on a poll. display:none resets the animations, so every
+     appearance starts dead-center and drifts out (no jump when the overlay first shows).
+     Keyframes are symmetric around center; amplitudes leave margin for the text block at any
+     dashboard zoom (50-150%). */
+  #offline .drift-x{animation:driftX 53s ease-in-out infinite;}
+  /* driftY and breathe share one element, so they MUST live in one comma-joined shorthand —
+     a second animation: rule on the same element replaces the first, it doesn't add. */
+  #offline .drift-y{animation:driftY 41s ease-in-out infinite, breathe 37s ease-in-out infinite;
+    display:flex; flex-direction:column; align-items:center; gap:14px;}
+  @keyframes driftX{0%{transform:translateX(0)} 25%{transform:translateX(-20vw)}
+    75%{transform:translateX(20vw)} 100%{transform:translateX(0)}}
+  @keyframes driftY{0%{transform:translateY(0)} 25%{transform:translateY(-22vh)}
+    75%{transform:translateY(22vh)} 100%{transform:translateY(0)}}
+  @keyframes breathe{0%,100%{opacity:.95} 50%{opacity:.45}}
 
   .card-head{display:flex; align-items:center; justify-content:space-between; gap:10px;}
   .card-head h2{margin-bottom:0;}
@@ -152,10 +171,12 @@
   </header>
 
   <div id="offline">
-    <div class="spin"></div>
-    <div class="big">ECHO IS OFFLINE</div>
-    <div class="sub">The control panel can't reach her. She's either stopped or restarting —
-      this will clear itself the moment she's back.</div>
+    <div class="drift-x"><div class="drift-y">
+      <div class="spin"></div>
+      <div class="big">ECHO IS OFFLINE</div>
+      <div class="sub">The control panel can't reach her. She's either stopped or restarting —
+        this will clear itself the moment she's back.</div>
+    </div></div>
   </div>
 
   <div class="health">

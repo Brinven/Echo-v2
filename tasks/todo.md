@@ -885,3 +885,17 @@ Remaining nice-to-haves (still deferred): persona self-check (silent mid-convers
 probe) and dry-wit calibration example exchanges in the persona block.
 
 Next: Stage 5 Part 3 (web search — where CoT isolation's "separate reasoning call" pattern lands).
+
+## ✅ DONE (2026-07-17) — Kiosk burn-in guard: the offline overlay drifts
+
+Michael: the static "ECHO IS OFFLINE" block on the 10" kiosk will burn into the panel over
+long off periods. Fix: the message block wanders the screen (driftX 53s / driftY 41s,
+out-of-sync center-symmetric keyframes → non-repeating path, starts dead-center on every
+appearance) and breathes opacity .95→.45 over 37s. CSS-only — when the overlay is up the
+server is dead, so nothing may depend on a poll; the browser keeps the page alive on its own.
+
+- Caught in verification (headless Playwright, real missed-poll trigger on file://): the
+  first cut put driftY and breathe in separate `animation:` rules on the same element — the
+  later shorthand REPLACED the earlier one, x drifted while y sat frozen. Now one
+  comma-joined shorthand; measured 348px drift over 8s + opacity 0.95→0.74. test_webui green.
+- Reminder: kiosk browser caches the page; a hard refresh (or kiosk relaunch) picks it up.

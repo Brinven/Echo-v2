@@ -835,6 +835,16 @@ by touch). Plan: `~/.claude/plans/lexical-baking-hippo.md`.
 - **Security:** default `host 127.0.0.1` (this PC only). For the touchscreen/another device set `host`
   to the LAN/Tailscale IP — **binding off-loopback lets anyone on that network control Echo** (talk,
   mute, quit); only do it on a trusted/Tailscale network (same caution as the SearXNG :26 note).
+- **The offline overlay is a screensaver, not a static card (2026-07-17).** "ECHO IS OFFLINE"
+  can sit on the 10" kiosk for hours, and a pixel-stationary white-on-black block will ghost
+  into the panel. The message block wanders (driftX 53s / driftY 41s — out-of-sync periods,
+  non-repeating path) and breathes its opacity (37s, .95→.45). **CSS-only on purpose: when the
+  overlay is up the server is DEAD** — nothing in it may depend on a poll. ⚠ driftY and breathe
+  share one element, so they live in ONE comma-joined `animation:` shorthand — a second
+  `animation:` rule on the same element REPLACES the first (caught by headless Playwright
+  measurement: x drifted, y sat frozen). Keyframes are center-symmetric, so every appearance
+  starts dead-center (display:none resets animations — no jump). Same burn-in thinking applies
+  to any future always-on kiosk state.
 - **Transcript rendering must be a no-op when nothing changed.** The `/api/state` poll runs ~1×/sec
   and used to rewrite `#transcript`'s `innerHTML` unconditionally, which destroyed any text
   selection mid-drag — Michael: "it wont let me copy (nothing stays selected)". It now diffs a
