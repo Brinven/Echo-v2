@@ -22,6 +22,7 @@ model; otherwise a filter-picker runs at startup (Enter reuses your last pick). 
 audition.md for the full model-testing workflow.
 """
 
+import os
 import sys
 import time
 import random
@@ -33,7 +34,7 @@ from audio import AudioRecorder, SAMPLE_RATE
 from audio_queue import AudioQueue
 from timer import PipelineTimer
 from logger import SessionLogger
-from stt import STTEngine
+from stt import STTEngine, DEFAULT_MODEL_SIZE as DEFAULT_STT_MODEL
 from llm import LLMClient, image_content, collapse_image_history
 from tts import TTSEngine
 from vad import VADDetector, FRAME_SIZE
@@ -676,6 +677,7 @@ def run_streaming_pipeline(
         session_id=session.session_id,   # exact History grouping; legacy rows fall back to a time-gap heuristic
         model=llm.model_name,
         stt_backend=stt.backend,
+        stt_model=stt.model_size,
         tts_backend=tts.backend,
         vad_mode=vad_mode,
         input_duration_s=input_duration,
@@ -795,8 +797,19 @@ def main():
         print(f"  User: {user_name}")
 
     # Initialize backends
-    stt = STTEngine()
-    # Model selection: --model/ECHO_MODEL pin, else filter-picker (Enter reuses last_model).
+    # STT size: ECHO_STT_MODEL env wins, else config.json stt_model, else large-v3-turbo.
+    # (base was too weak on proper nouns — Maat 2026-07 STT brief.) Rollback: set
+    # "stt_model": "base" in config.json or ECHO_STT_MODEL=base and restart.
+    stt_model = (
+        os.environ.get("ECHO_STT_MODEL", "").strip()
+        or (config.get("stt_model") or "").strip()
+        or DEFAULT_STT_MODEL
+    )
+    if "stt_model" not in config:
+        config["stt_model"] = stt_model
+        save_config(config)
+    stt = STTEngine(model_size=stt_model)
+    # Model selection: --model/ECHO_MODEL pin, else last_model / dashboard (no interactive picker).
     pinned_model = _parse_model_arg(sys.argv[1:])
     llm = LLMClient(pinned=pinned_model, last_model=config.get("last_model"))
     # Remember the picked model so Enter reuses it next launch.

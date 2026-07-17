@@ -1,5 +1,40 @@
 # Echo — tasks/todo.md
 
+## ▶ ACTIVE (2026-07-17) — STT upgrade: faster-whisper `large-v3-turbo`
+
+Fix Whisper-`base` proper-noun / casual-speech misses without changing architecture.
+Maat brief: `tasks/2026-07-17-19-55-48-maat-research-brief-best-local-stt-for-echo-2026-07.md`.
+Plan: session `plan.md` (turbo update). Same pipeline: mic → STT(text) → rest unchanged.
+
+### Decisions locked
+- Model: `large-v3-turbo` via existing faster-whisper / CTranslate2 (no new deps).
+- Config: `config.json` `stt_model` + env `ECHO_STT_MODEL` (env wins). Rollback = set `base`.
+- Keep float16 CUDA / int8 CPU device fallback; do NOT silently fall back to a smaller model id.
+- No hotword `initial_prompt`, Moonshine, NeMo, or Gemma audio in this pass.
+
+### Build checklist
+- [x] **M1** `stt.py`: default `large-v3-turbo`, `model_size` property, openai-whisper size map,
+      fail-loud on bad model id (device CUDA→CPU only).
+- [x] **M2** `main.py`: resolve env/config → `STTEngine(model_size=...)`; seed `stt_model` in
+      config if missing; log `stt_model` on every turn JSONL.
+- [x] **M3** `config.json` + `CLAUDE.md` STT note + this todo section.
+- [x] **M4a** Offline verify: py_compile OK; smoke load →
+      `STT: faster-whisper (large-v3-turbo) on cuda`; torch still `2.13.0+cpu`;
+      1s silence → empty transcript in 0.056s (first run downloaded
+      `mobiuslabsgmbh/faster-whisper-large-v3-turbo`).
+- [ ] **M4b** Live proper-noun A/B (Michael) — checklist below.
+
+### Open for Michael — live pass
+- [ ] Restart Echo; confirm startup: `STT: faster-whisper (large-v3-turbo) on cuda`
+      (first launch may download weights — one-time).
+- [ ] Speak: "We ate at a place called Sushi Hayo" — should not mangle the name like base did.
+- [ ] Speak: "Hillary is coming over later" / "We're in Magnolia, Texas" / one normal sentence.
+- [ ] Note STT ms on the status line — higher than base's ~0.2s is OK; multi-second is not.
+- [ ] If startup says `on cpu`: free VRAM (Invoke / extra LM Studio models) and restart — do not accept CPU turbo as "working."
+- [ ] Rollback if needed: `"stt_model": "base"` in `config.json` (or `$env:ECHO_STT_MODEL="base"`).
+
+---
+
 ## ▶ ACTIVE (2026-07-17) — Visual input Level 1: photo from the phone
 
 Michael's ask after Remote Voice: upload an image from the phone to Echo — images only;

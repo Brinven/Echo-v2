@@ -3,6 +3,9 @@ STT wrapper for Echo Stage 0.
 
 Auto-detects faster-whisper (preferred) or openai-whisper.
 CUDA-accelerated on RTX 5080.
+
+Production default: large-v3-turbo (CTranslate2 via faster-whisper). Override with
+STTEngine(model_size=...) or, from main, config.json `stt_model` / ECHO_STT_MODEL.
 """
 
 import sys
@@ -24,11 +27,22 @@ if _BACKEND is None:
     except ImportError:
         pass
 
+# Default for production Echo. base was too weak on proper nouns / casual speech
+# (Maat 2026-07 STT brief). Turbo keeps CTranslate2 / torch-independent CUDA.
+DEFAULT_MODEL_SIZE = "large-v3-turbo"
+
+# openai-whisper does not ship large-v3-turbo; map to the closest stock model.
+_OPENAI_SIZE_MAP = {
+    "large-v3-turbo": "large-v3",
+    "turbo": "large-v3",
+    "distil-large-v3": "large-v3",
+}
+
 
 class STTEngine:
     """Speech-to-text engine with auto-detection of available backends."""
 
-    def __init__(self, model_size: str = "base"):
+    def __init__(self, model_size: str = DEFAULT_MODEL_SIZE):
         if _BACKEND is None:
             print(
                 "\n ERROR: No STT engine found.\n"
@@ -39,12 +53,17 @@ class STTEngine:
             sys.exit(1)
 
         self._backend = _BACKEND
-        self._model_size = model_size
+        self._model_size = (model_size or DEFAULT_MODEL_SIZE).strip() or DEFAULT_MODEL_SIZE
         self._model = None
+        self._device = None
         self._load_model()
 
     def _load_model(self):
-        """Load the STT model with CUDA if available."""
+        """Load the STT model with CUDA if available.
+
+        Device fallback (CUDA → CPU) is intentional. Model-id fallback is NOT —
+        silently loading base after a turbo request would hide an accuracy regression.
+        """
         if self._backend == "faster-whisper":
             try:
                 self._model = _FasterWhisperModel(
@@ -53,19 +72,46 @@ class STTEngine:
                     compute_type="float16",
                 )
                 self._device = "cuda"
-            except Exception:
-                # Fall back to CPU if CUDA fails
-                self._model = _FasterWhisperModel(
-                    self._model_size,
-                    device="cpu",
-                    compute_type="int8",
+            except Exception as cuda_err:
+                # Fall back to CPU if CUDA fails (OOM, driver, etc.)
+                print(
+                    f"  [STT] CUDA load failed for '{self._model_size}' ({cuda_err}); "
+                    f"trying CPU int8 — latency will be much worse"
                 )
-                self._device = "cpu"
+                try:
+                    self._model = _FasterWhisperModel(
+                        self._model_size,
+                        device="cpu",
+                        compute_type="int8",
+                    )
+                    self._device = "cpu"
+                except Exception as cpu_err:
+                    print(
+                        f"\n ERROR: STT failed to load model '{self._model_size}'.\n"
+                        f"  CUDA error: {cuda_err}\n"
+                        f"  CPU error:  {cpu_err}\n"
+                        f"  Check the model id (faster-whisper sizes include "
+                        f"base, small, medium, large-v3, large-v3-turbo) or free VRAM.\n"
+                    )
+                    sys.exit(1)
 
         elif self._backend == "openai-whisper":
             import torch
+            load_size = _OPENAI_SIZE_MAP.get(self._model_size, self._model_size)
+            if load_size != self._model_size:
+                print(
+                    f"  [STT] openai-whisper has no '{self._model_size}'; "
+                    f"loading '{load_size}' instead"
+                )
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            self._model = _openai_whisper.load_model(self._model_size, device=device)
+            try:
+                self._model = _openai_whisper.load_model(load_size, device=device)
+            except Exception as e:
+                print(
+                    f"\n ERROR: STT failed to load openai-whisper model "
+                    f"'{load_size}' (requested '{self._model_size}'): {e}\n"
+                )
+                sys.exit(1)
             self._device = device
 
         print(f"  STT: {self._backend} ({self._model_size}) on {self._device}")
@@ -101,3 +147,7 @@ class STTEngine:
     @property
     def backend(self) -> str:
         return self._backend
+
+    @property
+    def model_size(self) -> str:
+        return self._model_size

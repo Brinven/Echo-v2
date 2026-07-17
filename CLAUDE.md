@@ -124,10 +124,13 @@ Do not architect for dual-GPU now.
 ## STT Stack
 
 - Auto-detect between `faster-whisper` (preferred) and `openai-whisper`
-- CUDA-accelerated on RTX 5080
+- CUDA-accelerated on RTX 5080 via **CTranslate2** (torch-independent — CPU torch in the venv is correct)
+- **Production model: `large-v3-turbo`** (2026-07-17; was `base` — too weak on proper nouns /
+  casual speech). Override: `config.json` → `stt_model`, or env `ECHO_STT_MODEL` (wins).
+  Rollback: `"stt_model": "base"` and restart. First launch downloads CTranslate2 weights once.
+  Startup line must say `on cuda` — if it falls to `cpu`, free VRAM (not a silent accuracy fix).
 - Sample rate: 16kHz mono (Whisper native — no resampling)
-- Input: PTT (push-to-talk) via SPACE key for PoC
-- VAD (voice activity detection): deferred to Stage 1, with PTT as permanent fallback
+- Input: dashboard Talk (press-and-hold) + location-aware hands-free VAD (Stage 8); no keyboard
 
 ---
 
