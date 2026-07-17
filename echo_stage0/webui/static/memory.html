@@ -67,10 +67,11 @@
   .flash{font-size:13px; color:var(--good); align-self:center;}
   .flash.bad{color:var(--bad);}
 
-  /* Phone / narrow screens — same reasoning as index.html: the kiosk (1280x800)
-     never matches; on a phone the inner scroller becomes the whole page and the
-     key column stops reserving width it doesn't have. */
-  @media (max-width: 700px){
+  /* Phone / narrow-or-short screens — same reasoning as index.html: the kiosk
+     (1280x800) never matches; on a phone (either orientation) the inner scroller
+     becomes the whole page and the key column stops reserving width it doesn't
+     have. */
+  @media (max-width: 700px), (max-height: 500px){
     html,body{height:auto;}
     body{overflow:auto; font-size:16px; padding:10px; gap:10px;}
     .tools{margin-left:0; width:100%;}

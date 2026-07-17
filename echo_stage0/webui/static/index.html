@@ -156,8 +156,10 @@
      shell is a keyhole — the whole control column lands in a tiny inner
      scroller. Below 700px the page becomes a normal single-column scrolling
      document: a bounded, self-scrolling transcript first, then every card
-     full-width down the page. */
-  @media (max-width: 700px){
+     full-width down the page. The max-height clause catches landscape phones
+     (~390-430px tall — wider than 700 but with no room for the fixed shell);
+     the kiosk is 800px tall and can't match that either. */
+  @media (max-width: 700px), (max-height: 500px){
     html,body{height:auto;}
     body{overflow:auto; font-size:16px; padding:10px; gap:10px;}
     header{flex-wrap:wrap; gap:8px;}
