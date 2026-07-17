@@ -66,8 +66,17 @@ PC's mic/speakers — actually talking *from* the phone is Level 2 (planned sepa
       running). Persists across reboots (tailscaled state). Disable:
       `tailscale serve --https=7862 off`.
 - [x] Docs: CLAUDE.md GUI-Dashboard security bullet + echo_webui.json comment.
-- [ ] Michael: open the URL on the phone (Tailscale app on) while Echo runs; bookmark it.
-      Bonus: over HTTPS the ⧉ Copy button uses the modern clipboard path.
+- [x] Michael: opened it on the phone — worked, but "like reading a newspaper through a
+      keyhole": the two-column no-scroll kiosk shell squeezed the whole control column into
+      a ~180px inner scroller on a portrait phone.
+- [x] **Phone layout fix (same day):** one additive `@media (max-width:700px)` block per
+      page (index/history/memory) — the page becomes a single-column scrolling document
+      (transcript bounded at 52vh + self-scrolling, controls full-width below; inner
+      scrollers off — the PAGE scrolls). The kiosk (1280x800) can never match the query;
+      measured with headless Playwright: 22/22 checks incl. kiosk-at-zoom-1.5 still
+      two-column, phone 390px stacks with zero horizontal overflow. `test_webui.py` 32/32.
+- [ ] Michael: re-check on the phone; bonus — over HTTPS the ⧉ Copy button uses the
+      modern clipboard path.
 
 ## ▶ ACTIVE (2026-07-17) — Persona de-stiffening: costume off, context on
 

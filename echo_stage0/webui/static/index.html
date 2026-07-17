@@ -149,6 +149,28 @@
   .placeholders{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
   .ph{padding:22px; text-align:center; color:var(--dim); background:repeating-linear-gradient(45deg,#121a24,#121a24 10px,#141d28 10px,#141d28 20px); border:1px dashed var(--edge); border-radius:12px; font-size:15px;}
   .muted-note{color:var(--dim); font-size:14px; margin-top:6px;}
+
+  /* ── phone / narrow screens (≤700px) ──────────────────────────────────
+     The kiosk (1280x800) and the desktop can never match this query, so the
+     fixed two-column app shell above is theirs, untouched. On a phone that
+     shell is a keyhole — the whole control column lands in a tiny inner
+     scroller. Below 700px the page becomes a normal single-column scrolling
+     document: a bounded, self-scrolling transcript first, then every card
+     full-width down the page. */
+  @media (max-width: 700px){
+    html,body{height:auto;}
+    body{overflow:auto; font-size:16px; padding:10px; gap:10px;}
+    header{flex-wrap:wrap; gap:8px;}
+    .brand{font-size:22px;}
+    .hdr-meta{margin-left:0;}
+    .health{grid-template-columns:1fr 1fr; gap:10px;}
+    main{display:flex; flex-direction:column; flex:none;}
+    /* the keyhole itself: the control column stops inner-scrolling — the PAGE scrolls */
+    .col.scrolls{overflow:visible; padding-right:0;}
+    /* transcript stays self-scrolling inside a bounded card, so Controls sit
+       one swipe below it instead of after the whole conversation */
+    main > .col:first-child{height:52vh; flex:none;}
+  }
 </style>
 </head>
 <body>
