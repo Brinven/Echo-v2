@@ -54,6 +54,10 @@ Guidance:
   as the entity — resolve "I", "my", "me" to the labelled speaker, never to Michael unless
   Michael is the one speaking.
 - Use the person's plain name as the entity — "Michael", never "Michael's location" or similar.
+- A fact about an animal, or a person other than Michael, should say WHAT they are — species,
+  or relation to Michael — whenever the turn makes that clear. Weave it into the value if the
+  attribute is something else: entity="Willie", attribute="personality",
+  value="a goat; likes to tip things over". A bare name with no anchor ages badly.
 - Be specific: "Jeep needs new shocks" not "car stuff".
 - Facts use entity/attribute/value: entity="Michael", attribute="favorite_bird", value="crows".
 - If uncertain, return {"save": false}.

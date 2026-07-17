@@ -15,7 +15,7 @@ try:
 except Exception:
     pass
 
-from ib_lite.significance import reject_reason, _build_user_content
+from ib_lite.significance import GATE_SYSTEM, reject_reason, _build_user_content
 
 
 def _fact(entity, attribute, value="x"):
@@ -102,7 +102,24 @@ def run() -> None:
     print("  OFFLINE: all significance-gate checks passed.")
 
 
+def run_anchor_guidance() -> None:
+    """The entity-anchoring guidance (2026-07-17) must stay in GATE_SYSTEM.
+
+    The Willie case: photo-turn facts saved a goat's personality with no record that he IS a
+    goat — a bare name that gets ambiguous as the cast of people/pets/things grows. The
+    guidance itself is prompt-only (behavior verified live); this pins its presence so a
+    future prompt edit can't silently drop it.
+    """
+    print("\n── Significance gate: entity-anchoring guidance present (offline) ──")
+
+    assert "say WHAT they are" in GATE_SYSTEM, "anchoring guidance dropped from GATE_SYSTEM"
+    assert "species" in GATE_SYSTEM and "relation to Michael" in GATE_SYSTEM
+    assert 'value="a goat; likes to tip things over"' in GATE_SYSTEM, "worked example dropped"
+    print("  [PASS] anchoring guidance + worked example present in GATE_SYSTEM")
+
+
 if __name__ == "__main__":
     run()
     run_user_content()
+    run_anchor_guidance()
     print()

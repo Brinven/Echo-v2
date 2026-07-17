@@ -1,5 +1,25 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-17) — Memory: anchor WHAT an entity is (the Willie-the-goat gap)
+
+Michael's flag after the photo session: the gate saved Willie's personality but never that he's
+a goat — a bare name that turns ambiguous as the cast of people/pets/things grows (and a future
+human Willie would collide). Camera pipeline won't cure the text side, so:
+
+- [x] Hand-backfilled `Willie/species/goat` into `echo.db` (mirrors `_insert`: embedded,
+      FTS-synced, FK session reused from the real Willie rows, told-by-Michael). Verified via
+      real hybrid retrieval: a "Willie" query surfaces species=goat at rank 2.
+- [x] `GATE_SYSTEM` guidance: a fact about an animal, or a person other than Michael, says WHAT
+      they are (species / relation to Michael) whenever the turn makes it clear — woven into
+      the value when the attribute is something else (single-payload contract unchanged).
+      Presence pinned by `test_significance.py run_anchor_guidance`; suite green.
+- [ ] Live gate smoke pending: the 12B wasn't resident (card ~8.7GB occupied by another app,
+      zero LM Studio models loaded — the Stage 8.3 pattern; didn't force a load). Verify on the
+      next new-critter conversation, or re-run the T1 "Petunia the rabbit" smoke when loaded.
+- Note: the gate spelled them "Willie"/"Lily" (Michael writes Willy/Lilly) — watch for entity
+  splits if a future session spells it his way; `/memory` is the eraser.
+- **Restart Echo to load the new gate prompt** (a running process keeps the old one).
+
 ## ✅ DONE (2026-07-17) — STT upgrade: faster-whisper `large-v3-turbo`
 
 Fix Whisper-`base` proper-noun / casual-speech misses without changing architecture.

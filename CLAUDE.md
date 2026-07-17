@@ -332,6 +332,13 @@ exactly the deferred Stage 5 Part 3 M9 "ephemeral web junk" item, now triggered)
 - Offline test `test_significance.py` pins the net against all 7 real accumulated-noise facts +
   durable-facts-pass. The one-time junk already in `echo.db` was cleared via the CLI / `/memory`
   editor (left 1 clean fact: `Michael/location/Magnolia, Texas`).
+- **Entity anchoring (2026-07-17):** `GATE_SYSTEM` guidance — a fact about an animal, or a person
+  other than Michael, says WHAT they are (species / relation to Michael) whenever the turn makes
+  it clear, woven into the value when the attribute is something else. Motivated by the Willie
+  case: photo-turn facts saved a goat's personality with no record he IS a goat — ambiguous once
+  the cast grows. Prompt-only (single-payload contract unchanged); presence pinned by
+  `test_significance.py run_anchor_guidance`. `Willie/species/goat` was backfilled by hand
+  (embedded + FTS-synced, mirroring `_insert`).
 - **Stage 6 Phase 2 (2026-07-16) widened the gate to guests** — it now resolves "I"/"my" to the
   labelled speaker and rows carry `source_speaker`. See ⚠ Stage 6 Phase 2 at the end of this file.
 
