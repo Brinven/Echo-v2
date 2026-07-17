@@ -14,6 +14,7 @@ Config: echo_webui.json (load_webui_config), mirroring search.load_search_config
 
 import json
 import socket
+import base64
 import logging
 import threading
 from pathlib import Path
@@ -185,14 +186,42 @@ def create_app(control):
 
     @app.post("/api/remote/turn")
     def api_remote_turn():
-        """One phone utterance in, one Echo reply out.
+        """One phone utterance in, one Echo reply out (optionally with a photo riding it).
 
-        Body = the raw recorded blob (whatever MediaRecorder produced). Decoded HERE on
-        the web thread (CPU, cheap, touches nothing shared), then parked for the main
-        loop via the same contract as model/voice/preview. This request BLOCKS until the
-        main loop publishes the result — that's the point: the phone wants the answer.
+        Two body shapes: the original raw recorded blob (voice-only — byte-identical to
+        Level 2), or multipart/form-data with an `audio` part and an optional `image` part
+        (attach-then-talk, vision Level 1). Decoded HERE on the web thread (CPU, cheap,
+        touches nothing shared), then parked for the main loop via the same contract as
+        model/voice/preview. This request BLOCKS until the main loop publishes the result —
+        that's the point: the phone wants the answer.
+
+        Image problems degrade to a voice-only turn (`image_dropped` says why) — a photo
+        must never cost Michael the sentence he just spoke.
         """
-        raw = request.get_data(cache=False)
+        image_b64 = image_mime = image_file = image_dropped = None
+        if (request.content_type or "").startswith("multipart/form-data"):
+            audio_part = request.files.get("audio")
+            raw = audio_part.read() if audio_part else b""
+            image_part = request.files.get("image")
+            img = image_part.read() if image_part else b""
+            if img:
+                mime = remote_audio.sniff_image_mime(img)
+                if mime is None:
+                    image_dropped = "not-an-image"
+                elif len(img) > remote_audio.IMAGE_MAX_BYTES:
+                    image_dropped = "too-large"
+                elif not control.vision_capable():
+                    # Server-side belt behind the client's greyed-out button: the model
+                    # can change between the page's polls.
+                    image_dropped = "model-not-vision"
+                else:
+                    image_mime = mime
+                    image_b64 = base64.b64encode(img).decode("ascii")
+                    # Fail-soft: None just means no pointer in the log; the turn proceeds.
+                    image_file = remote_audio.save_photo(img, mime,
+                                                         control.session.session_id)
+        else:
+            raw = request.get_data(cache=False)
         if not raw:
             return jsonify(ok=False, error="empty"), 400
         pcm = remote_audio.decode_to_pcm16k(raw)
@@ -202,12 +231,17 @@ def create_app(control):
             # Mirrors the pipeline's own too-short floor so the phone gets a clean 400
             # instead of burning a park/claim cycle on a reply that would be None anyway.
             return jsonify(ok=False, error="too-short"), 400
-        slot = control.submit_remote_turn(pcm)
+        slot = control.submit_remote_turn(pcm, image_b64=image_b64,
+                                          image_mime=image_mime, image_file=image_file)
         if slot is None:
             return jsonify(ok=False, error="busy"), 409
         if not slot["event"].wait(timeout=REMOTE_WAIT_S):
             return jsonify(ok=False, error="timeout"), 504
-        return jsonify(slot["result"] or {"ok": False, "error": "no-result"})
+        result = dict(slot["result"] or {"ok": False, "error": "no-result"})
+        result["image_attached"] = image_b64 is not None
+        if image_dropped:
+            result["image_dropped"] = image_dropped
+        return jsonify(result)
 
     # ── History page (Phase 3): read-only view over logs/stage0_log.jsonl ──
     @app.get("/history")

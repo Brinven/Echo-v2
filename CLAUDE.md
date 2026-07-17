@@ -1259,3 +1259,62 @@ funnels :443/:8443 publicly for claude.ai MCP — Echo must not share those list
   mic (different mic character than the desk; fold a phone sample into his print if it
   sags), then a real conversation, a guest/unknown check, sign-off from the phone.
 
+---
+
+## ⚠ Visual Input Level 1 (2026-07-17) — a photo rides a spoken turn
+
+Michael attaches a photo on `/remote`, then holds Talk and asks about it — the photo rides
+that spoken turn through the FULL standard pipeline. Groundwork for the camera pipeline
+(a separate later build). Plan: `~/.claude/plans/twinkling-dancing-quiche.md`.
+
+- **The production 12B IS the vision model.** LM Studio's native `/api/v0/models` reports
+  the Hauhaucs 12B quant as `type: "vlm"` (Gemma 4 12B is natively multimodal; the projector
+  is present). **Live-verified 2026-07-17**: an image via the OpenAI content-array form →
+  "Red" in 5.2s; a follow-up with the image riding in HISTORY → 0.2s. No second model, no
+  VRAM slot fight, persona intact — the "12B native vision inverts the shrink premise" note
+  proving out. `llm.supports_vision()` probes that endpoint (`type=="vlm"`, **own ~10s TTL
+  cache** — the dashboard snapshot polls ~1×/s; fail-soft True so LM Studio stays the
+  authority).
+- **The camera seam is `run_streaming_pipeline(image_b64=, image_mime=, image_file=)`** —
+  any producer (today the /remote upload, later a camera) attaches an image to a turn the
+  same way. `llm.image_content()` is the single source of the content-array wire format;
+  `_build_messages` puts it on the final user message only. Command turns, ignored voices,
+  and the enrollment capture return before the LLM call, so a photo there is ignored free.
+- **Attach-then-talk, no silent send (Michael's call):** every turn still has a voice, so
+  speaker-ID/attribution/guardrails keep working. The photo + audio go up in ONE multipart
+  POST to `/api/remote/turn`; the raw-body voice-only shape is unchanged (both branches
+  live in the route). **Image problems degrade to a voice-only turn** (`image_dropped:
+  not-an-image | too-large | model-not-vision`) — a photo must never cost the sentence
+  Michael just spoke. Audio missing → the same 400s as before.
+- **Keep-latest-photo (Michael's call):** the photo turn's history entry keeps its image
+  (follow-ups work — live-verified fast via prefix cache); when a NEW photo arrives,
+  `llm.collapse_image_history()` flattens older image entries to text + a mechanical
+  placeholder. At most one image in context. **`do_model_swap` also collapses when the new
+  model isn't vlm** — history survives swaps, and a text-only model would otherwise choke
+  on the image parts on EVERY later turn, not just once.
+- **Search is SKIPPED on photo turns** (`decide_search` never runs): the decider only sees
+  the transcript, so "what kind of snake is this?" + photo would fire a keywordless
+  nonsense web search. If she needs the web after seeing it, that's a follow-up turn.
+- **Photo turns are budget-exempt** like search turns (`passed_budget=None`, `[VISION
+  (exempt): ...]` print) — vision prefill blows TTFT by design. New JSONL fields:
+  `image_attached`, `image_file`.
+- **Photos save to `logs/photos/`** (gitignored via `logs/`; `remote_audio.save_photo`,
+  fail-soft — a failed save never blocks the turn). The client downscales on-canvas
+  (≤1600px JPEG .85) which also **strips EXIF/GPS** from what's saved; the browser applies
+  EXIF orientation while decoding, so pixels arrive upright. **No PIL / no new deps** —
+  the server sniffs magic bytes only (`sniff_image_mime`: JPEG/PNG/WebP).
+- **`remote.html`:** the attach row is a FIXED-height row that always exists — attaching/
+  clearing a photo must never move the Talk button (the thumb-target rule). The file input
+  is `accept="image/*"` **without `capture`** (capture forces the camera and blocks the
+  library picker — the epona lesson). The photo is cleared only on a successful turn;
+  409/504/network errors keep it so a retry still carries it. `vision_capable` in
+  `/api/state` greys the 📷 button out BEFORE recording when a non-vlm model is active.
+- **Tests:** `test_vision.py` (llm seam: content array, collapse, supports_vision TTL) +
+  `test_remote_voice.py` vision sections (sniff/save on temp dirs — never the repo's
+  logs/photos —, slot fields, multipart route incl. all three degrade paths) + a
+  headless-Chromium smoke (real page: file input → createImageBitmap → canvas JPEG →
+  multipart → park → 📷-marked reply, Talk button pinned).
+- **Out of scope (later):** the camera pipeline, dashboard/kiosk upload, photos on the
+  /history page, multi-image context, memory-gate awareness of images (her spoken
+  description flows through the existing text defenses).
+

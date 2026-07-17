@@ -26,13 +26,23 @@ except Exception:
 import numpy as np
 import soundfile as sf
 
+import tempfile
+from pathlib import Path
+
 import webui.server as server_mod
+import webui.remote_audio as remote_audio_mod
 from webui import EchoControl, create_app
 from webui.remote_audio import (
     SAMPLE_RATE, RemoteAudioSink, decode_to_pcm16k, sink_to_b64,
+    sniff_image_mime, save_photo,
 )
 from session import Session
 from state import StateMachine
+
+# Magic-byte stubs — sniff_image_mime only reads the header, never decodes.
+_JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+_WEBP = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 64
 
 
 def _wav(seconds=1.0, sr=16000, freq=440.0) -> bytes:
@@ -67,7 +77,7 @@ def _encoded(fmt="mp4", codec="aac", sr=44100, seconds=1.0) -> bytes | None:
         return None
 
 
-def _mk_control():
+def _mk_control(supports_vision=None):
     session = Session(model="m", stt_backend="b", tts_backend="t", user_name="Michael")
     sm = StateMachine()
     events = {k: threading.Event() for k in
@@ -78,6 +88,7 @@ def _mk_control():
         mute_toggle_event=events["mute_toggle_event"], quit_event=events["quit_event"],
         model_name="test/model-x", speaker_active=False, vad_available=False,
         list_models=lambda: [], list_voices=lambda: [], model_state=lambda: "loaded",
+        supports_vision=supports_vision,
     )
     return control, session, sm
 
@@ -226,6 +237,164 @@ def run() -> None:
         if slot is not None:
             control.finish_remote_turn(slot, {"ok": False})
     print("  [PASS] no main loop → 504 timeout after REMOTE_WAIT_S (request never hangs)")
+
+    print("\n── Visual input: sniff + save (offline) ──")
+
+    assert sniff_image_mime(_JPEG) == "image/jpeg"
+    assert sniff_image_mime(_PNG) == "image/png"
+    assert sniff_image_mime(_WEBP) == "image/webp"
+    assert sniff_image_mime(b"") is None and sniff_image_mime(b"GIF89a junk") is None
+    print("  [PASS] magic bytes identify jpeg/png/webp; anything else → None")
+
+    with tempfile.TemporaryDirectory() as td:
+        pdir = Path(td) / "photos"
+        ptr = save_photo(_JPEG, "image/jpeg", "session_2026-07-17_12-00-00", photo_dir=pdir)
+        assert ptr is not None and ptr.startswith("logs/photos/") and ptr.endswith(".jpg")
+        files = list(pdir.iterdir())
+        assert len(files) == 1 and files[0].read_bytes() == _JPEG
+        ptr2 = save_photo(_PNG, "image/png", "session_2026-07-17_12-00-00", photo_dir=pdir)
+        assert ptr2 != ptr and len(list(pdir.iterdir())) == 2
+        print("  [PASS] save_photo writes the bytes and returns a pointer; no collisions")
+
+        # A photos "dir" that is actually a file → mkdir/write raises OSError → None.
+        blocked = Path(td) / "blocked"
+        blocked.write_bytes(b"x")
+        assert save_photo(_JPEG, "image/jpeg", "s", photo_dir=blocked / "photos") is None
+        print("  [PASS] unwritable destination → None (fail-soft, turn proceeds)")
+
+    print("\n── Visual input: park slot carries the image ──")
+
+    control, session, sm = _mk_control()
+    slot = control.submit_remote_turn(np.zeros(SAMPLE_RATE, dtype=np.float32),
+                                      image_b64="QUJD", image_mime="image/jpeg",
+                                      image_file="logs/photos/x.jpg")
+    assert slot["image_b64"] == "QUJD" and slot["image_mime"] == "image/jpeg"
+    assert slot["image_file"] == "logs/photos/x.jpg"
+    control.take_pending_remote()
+    control.finish_remote_turn(slot, {"ok": True})
+    plain = control.submit_remote_turn(np.zeros(SAMPLE_RATE, dtype=np.float32))
+    assert plain["image_b64"] is None and plain["image_mime"] is None \
+        and plain["image_file"] is None
+    control.take_pending_remote()
+    control.finish_remote_turn(plain, {"ok": True})
+    print("  [PASS] slot carries image fields when given, Nones on a plain voice turn")
+
+    assert control.snapshot()["vision_capable"] is True, "no probe wired → True"
+    control_nv, _, _ = _mk_control(supports_vision=lambda: False)
+    assert control_nv.snapshot()["vision_capable"] is False
+    assert control_nv.vision_capable() is False
+    print("  [PASS] snapshot vision_capable: True with no probe, follows the probe when wired")
+
+    print("\n── Visual input: /api/remote/turn multipart route ──")
+
+    control, session, sm = _mk_control()
+    app = create_app(control)
+    client = app.test_client()
+
+    def _recording_loop():
+        seen = {}
+        def run_loop():
+            for _ in range(300):
+                s = control.take_pending_remote()
+                if s is not None:
+                    seen.update(s)
+                    control.finish_remote_turn(s, {
+                        "ok": True, "signoff": False, "transcript": "look at this",
+                        "reply": "Nice photo.", "speaker": "Michael",
+                        "speaker_score": 0.61,
+                    })
+                    return
+                time.sleep(0.01)
+        t = threading.Thread(target=run_loop, daemon=True)
+        t.start()
+        return seen, t
+
+    old_dir = remote_audio_mod._PHOTO_DIR
+    with tempfile.TemporaryDirectory() as td:
+        remote_audio_mod._PHOTO_DIR = Path(td)   # route saves land here, never the repo
+        try:
+            seen, t = _recording_loop()
+            r = client.post("/api/remote/turn",
+                            data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav"),
+                                  "image": (io.BytesIO(_JPEG), "photo.jpg")},
+                            content_type="multipart/form-data")
+            t.join(timeout=5)
+            j = r.get_json()
+            assert r.status_code == 200 and j["ok"] is True, (r.status_code, j)
+            assert j["image_attached"] is True and "image_dropped" not in j
+            assert seen.get("image_b64") == base64.b64encode(_JPEG).decode("ascii")
+            assert seen.get("image_mime") == "image/jpeg"
+            assert seen.get("image_file", "").startswith("logs/photos/")
+            assert len(list(Path(td).iterdir())) == 1
+            print("  [PASS] multipart audio+image parks the b64 photo and saves it to disk")
+
+            seen, t = _recording_loop()
+            r = client.post("/api/remote/turn",
+                            data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav"),
+                                  "image": (io.BytesIO(b"not an image at all"), "p.jpg")},
+                            content_type="multipart/form-data")
+            t.join(timeout=5)
+            j = r.get_json()
+            assert r.status_code == 200 and j["ok"] is True
+            assert j["image_attached"] is False and j["image_dropped"] == "not-an-image"
+            assert seen.get("image_b64") is None
+            print("  [PASS] a non-image degrades to a voice-only turn (audio never discarded)")
+
+            old_max = remote_audio_mod.IMAGE_MAX_BYTES
+            remote_audio_mod.IMAGE_MAX_BYTES = 16
+            try:
+                seen, t = _recording_loop()
+                r = client.post("/api/remote/turn",
+                                data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav"),
+                                      "image": (io.BytesIO(_JPEG), "photo.jpg")},
+                                content_type="multipart/form-data")
+                t.join(timeout=5)
+                j = r.get_json()
+                assert j["image_attached"] is False and j["image_dropped"] == "too-large"
+            finally:
+                remote_audio_mod.IMAGE_MAX_BYTES = old_max
+            print("  [PASS] an oversized image is dropped, the voice turn still runs")
+
+            seen, t = _recording_loop()
+            r = client.post("/api/remote/turn",
+                            data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav")},
+                            content_type="multipart/form-data")
+            t.join(timeout=5)
+            j = r.get_json()
+            assert r.status_code == 200 and j["ok"] is True
+            assert j["image_attached"] is False and "image_dropped" not in j
+            print("  [PASS] multipart with audio only behaves like a plain voice turn")
+
+            r = client.post("/api/remote/turn",
+                            data={"image": (io.BytesIO(_JPEG), "photo.jpg")},
+                            content_type="multipart/form-data")
+            assert r.status_code == 400 and r.get_json()["error"] == "empty"
+            print("  [PASS] multipart with no audio → 400 (a photo can't ride without a voice)")
+        finally:
+            remote_audio_mod._PHOTO_DIR = old_dir
+
+    control_nv, _, _ = _mk_control(supports_vision=lambda: False)
+    app_nv = create_app(control_nv)
+    client_nv = app_nv.test_client()
+    def _nv_loop():
+        def run_loop():
+            for _ in range(300):
+                s = control_nv.take_pending_remote()
+                if s is not None:
+                    control_nv.finish_remote_turn(s, {"ok": True, "reply": "heard you",
+                                                      "transcript": "hi"})
+                    return
+                time.sleep(0.01)
+        threading.Thread(target=run_loop, daemon=True).start()
+    _nv_loop()
+    r = client_nv.post("/api/remote/turn",
+                       data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav"),
+                             "image": (io.BytesIO(_JPEG), "photo.jpg")},
+                       content_type="multipart/form-data")
+    j = r.get_json()
+    assert r.status_code == 200 and j["ok"] is True
+    assert j["image_attached"] is False and j["image_dropped"] == "model-not-vision"
+    print("  [PASS] non-vision model → photo dropped server-side, voice turn unaffected")
 
     print("\n  All Remote Voice checks passed.\n")
 

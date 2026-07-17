@@ -34,7 +34,7 @@ from audio_queue import AudioQueue
 from timer import PipelineTimer
 from logger import SessionLogger
 from stt import STTEngine
-from llm import LLMClient
+from llm import LLMClient, image_content, collapse_image_history
 from tts import TTSEngine
 from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
@@ -196,10 +196,19 @@ def run_streaming_pipeline(
     speaker_embedder=None,
     speaker_registry: SpeakerRegistry | None = None,
     remote: bool = False,
+    image_b64: str | None = None,
+    image_mime: str = "image/jpeg",
+    image_file: str | None = None,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
     If sign-off is detected, returns {"signoff": True, "transcript": ...}.
+
+    image_b64/image_mime attach a photo to THIS turn (vision Level 1) — the camera-pipeline
+    seam: any producer (today the /remote upload, later a camera) rides the same arg.
+    image_file is the saved-to-disk pointer, logged only. Command turns, ignored voices,
+    and the enrollment capture return before the LLM call, so a photo on those turns is
+    ignored for free.
     """
     input_duration = len(audio) / SAMPLE_RATE
 
@@ -479,7 +488,11 @@ def run_streaming_pipeline(
         "search_latency_ms": 0.0, "results_count": 0, "search_engines_used": None,
     }
     audio_q.start()
-    if search_provider is not None and not session.web_search_off:
+    # Photo turns skip the search decision entirely: "what kind of snake is this?" with a
+    # photo attached is a question about the IMAGE — the decider only sees the transcript,
+    # so it would fire a nonsense keywordless web search. If she needs the web after seeing
+    # it, that's a follow-up turn.
+    if search_provider is not None and not session.web_search_off and image_b64 is None:
         decision = decide_search(transcript, llm.model_name)
         search_meta["search_prefilter_hit"] = decision["prefilter_hit"]
         search_meta["search_decision_ms"] = round(decision["decision_ms"], 1)
@@ -557,8 +570,17 @@ def run_streaming_pipeline(
     # the session log) keeps the raw transcript.
     user_msg = tag_utterance(transcript, session.current_speaker, multi_speaker)
 
+    # Keep-latest-photo (Michael, 2026-07-17): a NEW photo collapses any earlier photo turn
+    # in history to plain text, so at most one image is ever in context — bounded payload,
+    # bounded prefill. Non-photo turns never walk history (an earlier photo stays visible
+    # for follow-ups).
+    if image_b64:
+        collapse_image_history(history)
+
     try:
-        for sentence in llm.stream_sentences(user_msg, history, timing=llm_timing, system_prompt=system_prompt):
+        for sentence in llm.stream_sentences(user_msg, history, timing=llm_timing,
+                                             system_prompt=system_prompt,
+                                             image_b64=image_b64, image_mime=image_mime):
             full_response += sentence + " "
 
             try:
@@ -591,7 +613,13 @@ def run_streaming_pipeline(
         print_conversation("Echo", full_response)
         # The TAGGED text goes into history, so a turn keeps its attribution for the rest of the
         # conversation — that's what lets Echo track who "she" and "you" refer to later.
-        history.append({"role": "user", "content": user_msg})
+        # A photo turn keeps its image in history too (keep-latest-photo), so follow-up
+        # questions about the picture work until the next photo collapses it.
+        if image_b64:
+            history.append({"role": "user",
+                            "content": image_content(user_msg, image_b64, image_mime)})
+        else:
+            history.append({"role": "user", "content": user_msg})
         history.append({"role": "assistant", "content": full_response})
         session.add_echo_turn(full_response, (t_first_audio - t0) if t_first_audio else 0.0)
 
@@ -630,6 +658,14 @@ def run_streaming_pipeline(
             f"decision {search_meta['search_decision_ms']:.0f}ms | "
             f"search {search_meta['search_latency_ms']:.0f}ms | {chunk_count} chunks]"
         )
+    elif image_b64:
+        # Photo turns are exempt like search turns: vision prefill (and a possible one-time
+        # vision-tower load) blows TTFT through no fault of the pipeline.
+        passed = None
+        print(
+            f"  [VISION (exempt): 1st audio {first_audio:.2f}s | STT {stt_latency:.2f}s | "
+            f"TTFT {actual_ttft:.2f}s | {chunk_count} chunks]"
+        )
     else:
         passed = first_audio < 1.5 if t_first_audio else False
         status_str = "PASS" if passed else "FAIL"
@@ -657,8 +693,11 @@ def run_streaming_pipeline(
         speaker_known=speaker_known,
         # Remote Voice (Level 2): this turn arrived from the phone, not the room mic.
         remote=remote,
-        # Search turns log passed_budget=None so they're excluded from the pass-rate.
-        passed_budget=(None if search_meta["web_search_triggered"]
+        # Visual input (Level 1): a photo rode this turn; image_file points at logs/photos/.
+        image_attached=bool(image_b64),
+        image_file=image_file,
+        # Search and photo turns log passed_budget=None so they're excluded from the pass-rate.
+        passed_budget=(None if (search_meta["web_search_triggered"] or image_b64)
                        else (first_audio < 1.5 if t_first_audio else False)),
         **search_meta,
     )
@@ -903,7 +942,7 @@ def main():
         model_name=llm.model_name, speaker_active=speaker_embedder is not None,
         vad_available=vad.available, list_models=llm.list_models,
         list_voices=tts.list_voices, voice_name=tts.voice,
-        model_state=llm.model_state,
+        model_state=llm.model_state, supports_vision=llm.supports_vision,
     )
     _webui = start_webui(control)
     if _webui:
@@ -993,6 +1032,12 @@ def main():
         config["last_model"] = new_model
         save_config(config)
         control.set_model_name(new_model)
+        # History survives the swap — including a photo turn's image parts. A text-only
+        # model would choke on those on EVERY later turn, so collapse them to plain text
+        # the moment a non-vision model takes over (vision Level 1, keep-latest-photo).
+        if not llm.supports_vision():
+            if collapse_image_history(history):
+                print("  [photo context dropped — the new model can't see images]")
         print(f"  [Now using {new_model} — first reply may pause while LM Studio loads it]")
 
     def do_voice_preview(name: str):
@@ -1052,7 +1097,8 @@ def main():
         summary sequence (with a throwaway sink — the goodbye already went to the phone).
         """
         clear_status_line()
-        print(f"  [remote: {len(rt['audio']) / SAMPLE_RATE:.1f}s of phone audio]")
+        print(f"  [remote: {len(rt['audio']) / SAMPLE_RATE:.1f}s of phone audio"
+              f"{' + photo' if rt.get('image_b64') else ''}]")
         origin = sm.state
         try:
             audio_stream.stop()
@@ -1072,6 +1118,9 @@ def main():
                 ib=ib, search_provider=search_provider, search_config=search_config,
                 self_check=self_check, speaker_embedder=speaker_embedder,
                 speaker_registry=speaker_registry, remote=True,
+                image_b64=rt.get("image_b64"),
+                image_mime=rt.get("image_mime") or "image/jpeg",
+                image_file=rt.get("image_file"),
             )
             new_turns = session.turns[turns_before:]
             user_text = next((t["content"] for t in new_turns if t["speaker"] == "user"), "")

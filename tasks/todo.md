@@ -1,5 +1,70 @@
 # Echo — tasks/todo.md
 
+## ▶ ACTIVE (2026-07-17) — Visual input Level 1: photo from the phone
+
+Michael's ask after Remote Voice: upload an image from the phone to Echo — images only;
+the camera pipeline is a separate later build this lays groundwork for. Enabler (verified
+live): the production 12B (`hauhaucs/gemma4-12b-qat-...@q4_k_m`) reports `type: "vlm"` in
+LM Studio's native API — Gemma 4 12B is natively multimodal, so no second model, no VRAM
+slot fight, persona intact. Plan: `~/.claude/plans/twinkling-dancing-quiche.md`.
+
+### Decisions locked (Michael, 2026-07-17)
+- **Attach-then-talk** on /remote: 📷 attaches, hold Talk and speak, the photo rides that
+  spoken turn (voice keeps carrying speaker-ID/attribution). No silent-send in v1.
+- **Keep-latest-photo**: the newest photo stays in LLM history for the session; a new photo
+  collapses older image entries to a text placeholder. Max one image in context.
+- **Save locally**: `logs/photos/` (already gitignored via `logs/`), JSONL pointer field.
+- Camera-seam design center: `run_streaming_pipeline(image_b64=...)` — a future camera is
+  just another producer. Zero new deps (browser-side downscale, magic-byte sniff — no PIL).
+  Zero new persona content.
+
+### Build checklist — DONE (offline + browser smoke + LIVE vision verified here)
+- [x] **M1** `llm.py`: `image_content()` + `collapse_image_history()` (pure), additive
+      `image_b64`/`image_mime` kwargs on `_build_messages`/`generate`/`stream_sentences`,
+      `supports_vision()` (native `/api/v0/models` type=="vlm", ~10s TTL cache, fail-soft
+      True). New offline `test_vision.py` (13 checks, all green).
+- [x] **M2** Pipeline: slot fields on `submit_remote_turn`; `run_streaming_pipeline(
+      image_b64/image_mime/image_file)`; search skipped on photo turns; collapse-then-attach
+      before the LLM call; content-array history append; budget exemption + `image_attached`/
+      `image_file` JSONL; `handle_remote_turn` pass-through; `do_model_swap` collapses image
+      history when the new model isn't vlm; `vision_capable` in snapshot.
+- [x] **M3** Route: multipart branch on `/api/remote/turn` (raw-body path byte-identical —
+      prior tests untouched and green); `sniff_image_mime`/`save_photo`/`IMAGE_MAX_BYTES` in
+      `remote_audio.py`; all three image problems (`not-an-image`/`too-large`/
+      `model-not-vision`) degrade to a voice-only turn, never discard the audio.
+- [x] **M4** `remote.html`: fixed-height attach row (Talk never moves — asserted by pixel in
+      the browser smoke), `accept="image/*"` no capture, canvas downscale ≤1600px JPEG .85
+      (also strips EXIF/GPS from the saved file), FormData send (no manual Content-Type),
+      clear-on-ok-only, 📷 disabled with hint when `vision_capable` false.
+- [x] **M5** Verified: all 9 offline suites green (vision, remote-voice, webui, speaker,
+      audio, significance, guest-memory, persona-check, persona-matrix); headless-Chromium
+      smoke (real file input → createImageBitmap → canvas JPEG → multipart → park → 📷-marked
+      reply, Talk pinned, photo cleared); **LIVE against the real 12B**: red test image →
+      "Red" in 5.2s through the new seam, follow-up with the image riding in HISTORY →
+      "Warm" in 0.2s (keep-latest-photo shape proven, prefix cache makes it cheap).
+
+### Review
+**Status: BUILT + verified; the live pass is Michael's.** Key design calls: the image is a
+generic per-turn pipeline arg (the camera seam), not a remote-mode feature; attach-then-talk
+keeps every turn voice-attributed; image problems never cost the spoken sentence; search is
+skipped on photo turns; `do_model_swap` collapses photo history for non-vision models.
+Docs: CLAUDE.md ⚠ Visual Input Level 1.
+
+### Open for Michael — live pass (phone, https://skorp99.tail5c0851.ts.net:7862/remote)
+- [ ] Restart Echo (restart-echo.bat) to load the vision code; 📷 should be enabled with
+      the 12B active.
+- [ ] Tap 📷 → confirm the LIBRARY picker opens (not forced camera); thumbnail + ✕ work.
+- [ ] Photo + hold-talk "what is this?" → she describes it. (First photo turn may pause a
+      beat — vision prefill; photo turns are budget-exempt like search turns.)
+- [ ] Follow-up WITHOUT a photo ("what color is it?") → keep-latest works.
+- [ ] Second photo, then ask about the first → she only knows the latest (by design).
+- [ ] A PORTRAIT photo → not described sideways (EXIF orientation check).
+- [ ] Photo + "Echo, that's all for now" → clean sign-off, image ignored.
+- [ ] Optional: swap to a non-vlm model in the dashboard → 📷 greys out within ~15s with a
+      hint; swap back → re-enables.
+- [ ] Check `logs/photos/` (files land there, named by session) and that nothing photo-ish
+      appears in memory that shouldn't (the gate only ever sees text).
+
 ## 💡 FUTURE (pinned 2026-07-17) — Echo in Hillary's Colorado (phone-thin-client, zero-touch)
 
 Michael's idea after Remote Voice proved out ("this opens MANY possibilities"). An

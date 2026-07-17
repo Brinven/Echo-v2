@@ -15,12 +15,72 @@ Two pieces, both pure and offline-testable:
 """
 
 import io
+import time
 import base64
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 
 SAMPLE_RATE = 16000  # what the pipeline (Whisper/ECAPA) expects; matches audio.SAMPLE_RATE
+
+# ── Visual input (Level 1): photo sniff + save ───────────────────────────
+# The client already downscaled to a ~1600px JPEG (a few hundred KB); 10 MB is a runaway
+# guard against an un-downscaled original, not a target. Module const so tests can patch it.
+IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+# logs/photos/ at the repo root (logs/ is already gitignored wholesale).
+_PHOTO_DIR = Path(__file__).resolve().parent.parent.parent / "logs" / "photos"
+
+_IMAGE_MAGIC = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+)
+
+
+def sniff_image_mime(data: bytes) -> str | None:
+    """Identify an image by magic bytes alone — JPEG/PNG/WebP, no PIL, no new dep.
+
+    None = not an image we accept. Deliberately narrow: these are the three formats a
+    phone's canvas/library hand over; anything else is a mis-upload, not a use case.
+    """
+    if not data:
+        return None
+    for magic, mime in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return mime
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
+def save_photo(data: bytes, mime: str, session_id: str,
+               photo_dir: Path | None = None) -> str | None:
+    """Write an uploaded photo to logs/photos/ and return its repo-relative pointer.
+
+    Fail-soft: any OSError → None — a failed save must never block the turn (the photo
+    still rides to the model from memory). session_id already carries the date, so the
+    filename only adds a time-of-day; a same-second collision gets a numeric suffix.
+    photo_dir=None → _PHOTO_DIR, resolved at CALL time so tests can patch the module
+    attribute and never write into the real logs/photos/.
+    """
+    try:
+        photo_dir = photo_dir or _PHOTO_DIR
+        photo_dir.mkdir(parents=True, exist_ok=True)
+        stem = f"{session_id}_{time.strftime('%H-%M-%S')}"
+        ext = _EXT.get(mime, ".bin")
+        path = photo_dir / f"{stem}{ext}"
+        n = 1
+        while path.exists():
+            path = photo_dir / f"{stem}_{n}{ext}"
+            n += 1
+        path.write_bytes(data)
+        return f"logs/photos/{path.name}"
+    except OSError:
+        return None
 
 
 def decode_to_pcm16k(data: bytes) -> np.ndarray | None:

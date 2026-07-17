@@ -9,6 +9,7 @@ import os
 import sys
 import re
 import json
+import time
 import logging
 from pathlib import Path
 from collections.abc import Generator
@@ -35,6 +36,45 @@ def _resolve_pin(pin: str, available: list[str]) -> tuple[str | None, list[str]]
     if len(matches) == 1:
         return matches[0], matches
     return None, matches
+
+
+# ── Vision (visual input Level 1) ────────────────────────────────────────
+# The single source of the OpenAI content-array wire format for an image turn, plus the
+# keep-latest-photo collapse. Pure module-level functions so main.py and the tests share
+# them without an LLMClient.
+
+# Mechanical placeholder, not persona content: it replaces an image part in HISTORY once a
+# newer photo (or a non-vision model swap) makes the old image unavailable to the model.
+IMAGE_COLLAPSED_NOTE = "[a photo was attached here — no longer shown]"
+
+
+def image_content(text: str, image_b64: str, mime: str = "image/jpeg") -> list[dict]:
+    """Content-array form for a user message carrying an image (LM Studio accepts data URIs)."""
+    return [
+        {"type": "text", "text": text},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+    ]
+
+
+def collapse_image_history(history: list[dict]) -> int:
+    """Flatten any prior photo turn in history to plain text (keep-latest-photo).
+
+    Called when a NEW photo arrives (at most one image stays in context — bounded payload,
+    bounded prefill) and after a model swap to a non-vision model (a text-only model must
+    never receive image parts from an earlier photo turn). Only USER entries with
+    list-content are touched; assistant entries pass through. Idempotent; returns the
+    number of entries collapsed.
+    """
+    collapsed = 0
+    for entry in history:
+        if entry.get("role") == "user" and isinstance(entry.get("content"), list):
+            text = " ".join(
+                part.get("text", "") for part in entry["content"]
+                if isinstance(part, dict) and part.get("type") == "text"
+            ).strip()
+            entry["content"] = f"{text} {IMAGE_COLLAPSED_NOTE}".strip()
+            collapsed += 1
+    return collapsed
 
 
 # Last-resort fallback only. From Stage 5 Part 2, the per-turn system prompt is
@@ -100,6 +140,9 @@ class LLMClient:
         )
         self._model = None
         self._sampler = _load_sampler()
+        # supports_vision cache: (model_id, value, monotonic_ts). Needed because the
+        # dashboard snapshot is polled ~1×/s — an uncached probe would hammer LM Studio.
+        self._vision_cache: tuple[str, bool, float] | None = None
         self._detect_model(pinned=pinned, last_model=last_model)
         print(
             f"  Sampler: temp {self._sampler['temperature']}, top_p {self._sampler['top_p']}, "
@@ -229,11 +272,40 @@ class LLMClient:
             pass
         return "unknown"
 
+    _VISION_TTL_S = 10.0
 
+    def supports_vision(self) -> bool:
+        """Can the ACTIVE model accept image parts? True for `type: "vlm"` in LM Studio's
+        native /api/v0/models (the same endpoint model_state uses — /v1/models carries no type).
+
+        Cached ~10s per model id, errors included, so the ~1×/s dashboard poll costs at most
+        one probe per TTL. Fail-soft: no model selected or any probe error → True — a wrong
+        False would grey out the photo button while LM Studio might have served the turn fine;
+        a wrong True just means LM Studio itself refuses the image, which it reports clearly.
+        """
+        model = self._model
+        if not model:
+            return True
+        cached = self._vision_cache
+        if cached and cached[0] == model and (time.monotonic() - cached[2]) < self._VISION_TTL_S:
+            return cached[1]
+        value = True
+        try:
+            resp = httpx.get("http://127.0.0.1:1234/api/v0/models", timeout=1.5)
+            resp.raise_for_status()
+            for entry in resp.json().get("data", []):
+                if entry.get("id") == model:
+                    value = entry.get("type") == "vlm"
+                    break
+        except (httpx.HTTPError, ValueError, KeyError):
+            value = True
+        self._vision_cache = (model, value, time.monotonic())
+        return value
 
     def generate(
         self, user_text: str, history: list[dict] | None = None,
         system_prompt: str | None = None,
+        image_b64: str | None = None, image_mime: str = "image/jpeg",
     ) -> str:
         """
         Send user text to LLM and return the full response (blocking).
@@ -242,11 +314,13 @@ class LLMClient:
             user_text: The user's transcribed speech
             history: Optional conversation history (list of role/content dicts)
             system_prompt: Optional system prompt override (default: DEFAULT_SYSTEM_PROMPT)
+            image_b64/image_mime: Optional image attached to THIS turn (vision Level 1)
 
         Returns:
             LLM response text
         """
-        messages = self._build_messages(user_text, history, system_prompt)
+        messages = self._build_messages(user_text, history, system_prompt,
+                                        image_b64=image_b64, image_mime=image_mime)
         try:
             response = self._client.chat.completions.create(
                 **self._completion_kwargs(messages, stream=False)
@@ -272,6 +346,7 @@ class LLMClient:
     def stream_sentences(
         self, user_text: str, history: list[dict] | None = None,
         timing: dict | None = None, system_prompt: str | None = None,
+        image_b64: str | None = None, image_mime: str = "image/jpeg",
     ) -> Generator[str, None, None]:
         """
         Stream LLM response and yield complete sentences.
@@ -285,13 +360,13 @@ class LLMClient:
             history: Optional conversation history
             timing: Optional dict — will be populated with 'ttft' (time to first token)
             system_prompt: Optional system prompt override (default: DEFAULT_SYSTEM_PROMPT)
+            image_b64/image_mime: Optional image attached to THIS turn (vision Level 1)
 
         Yields:
             Sentence-sized text chunks
         """
-        import time
-
-        messages = self._build_messages(user_text, history, system_prompt)
+        messages = self._build_messages(user_text, history, system_prompt,
+                                        image_b64=image_b64, image_mime=image_mime)
         t_start = time.perf_counter()
 
         try:
@@ -355,12 +430,23 @@ class LLMClient:
     def _build_messages(
         self, user_text: str, history: list[dict] | None = None,
         system_prompt: str | None = None,
+        image_b64: str | None = None, image_mime: str = "image/jpeg",
     ) -> list[dict]:
-        """Build the messages list for a chat completion."""
+        """Build the messages list for a chat completion.
+
+        With image_b64 the final user message becomes the content-array form (text part +
+        data-URI image part); otherwise byte-identical to the text-only path. History entries
+        pass through untouched — an earlier photo turn may legitimately carry list content
+        (keep-latest-photo), and the openai SDK accepts mixed string/list content.
+        """
         messages = [{"role": "system", "content": system_prompt or DEFAULT_SYSTEM_PROMPT}]
         if history:
             messages.extend(history)
-        messages.append({"role": "user", "content": user_text})
+        if image_b64:
+            messages.append({"role": "user",
+                             "content": image_content(user_text, image_b64, image_mime)})
+        else:
+            messages.append({"role": "user", "content": user_text})
         return messages
 
     @property

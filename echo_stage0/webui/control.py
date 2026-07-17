@@ -52,6 +52,7 @@ class EchoControl:
         list_models=None,
         list_voices=None,
         model_state=None,
+        supports_vision=None,
         voice_name: str = "",
         memory_db_path=None,
         lm_studio_url: str = _DEFAULT_LM_URL,
@@ -78,6 +79,9 @@ class EchoControl:
         self._list_models = list_models
         self._list_voices = list_voices
         self._model_state = model_state      # read-only probe, like the listers
+        # Read-only probe: can the active model accept image parts? (vision Level 1).
+        # llm.supports_vision carries its own TTL cache, so calling it per snapshot is cheap.
+        self._supports_vision = supports_vision
         self.pending_model: str | None = None
         self.pending_voice: str | None = None
         self.pending_preview: str | None = None
@@ -101,6 +105,11 @@ class EchoControl:
         self._remote_lock = threading.Lock()
         self.pending_remote: dict | None = None
         self._remote_busy = False
+
+    def vision_capable(self) -> bool:
+        """Can the active model take image parts? Fail-soft True (no probe / probe error) —
+        mirrors llm.supports_vision, which carries its own TTL cache."""
+        return bool(self._supports_vision()) if self._supports_vision else True
 
     # ── mute (shared source of truth) ──
     @property
@@ -244,12 +253,20 @@ class EchoControl:
     # Single-flight: one remote turn parked-or-processing at a time; a second POST is
     # refused (409) rather than queued, so the phone always knows what it's waiting for.
 
-    def submit_remote_turn(self, pcm) -> dict | None:
-        """Web thread: park a decoded utterance. Returns the slot to wait on, or None if busy."""
+    def submit_remote_turn(self, pcm, image_b64: str | None = None,
+                           image_mime: str | None = None,
+                           image_file: str | None = None) -> dict | None:
+        """Web thread: park a decoded utterance (optionally with a photo riding the turn).
+
+        Returns the slot to wait on, or None if busy. The image fields default to None so a
+        plain voice turn parks exactly what it always did (vision Level 1 is additive).
+        """
         with self._remote_lock:
             if self.pending_remote is not None or self._remote_busy:
                 return None
-            slot = {"audio": pcm, "event": threading.Event(), "result": None}
+            slot = {"audio": pcm, "event": threading.Event(), "result": None,
+                    "image_b64": image_b64, "image_mime": image_mime,
+                    "image_file": image_file}
             self.pending_remote = slot
             return slot
 
@@ -334,6 +351,9 @@ class EchoControl:
             "web_search_off": s.web_search_off,
             "vad_available": self.vad_available,
             "vad_enabled": bool(self.vad_available and s.vad_enabled),
+            # True unless the ACTIVE model provably can't take image parts — the /remote
+            # page greys out the photo button on False.
+            "vision_capable": self.vision_capable(),
             "pending_model": self.pending_model,
             "voice": self._voice_name,
             "pending_voice": self.pending_voice,
