@@ -106,6 +106,11 @@
   </header>
 
   <div id="warn" class="banner" hidden></div>
+  <!-- iOS forgets the mic grant per page load (unless the site is set to Allow) — prime it
+       with a deliberate tap up front, never mid-hold. Hidden the moment the mic is live. -->
+  <div id="micprime" class="banner" style="cursor:pointer;" hidden>
+    🎙 Tap here to enable the microphone, then hold Talk.
+  </div>
 
   <div id="exchange"><div class="empty">Hold Talk and say something…</div></div>
 
@@ -233,6 +238,7 @@ async function ensureMic(){
   if(micStream) return true;
   try{
     micStream = await navigator.mediaDevices.getUserMedia({audio: true});
+    $("micprime").hidden = true;
     return true;
   }catch(e){
     warn("Microphone blocked — allow mic access for this site and try again.");
@@ -240,11 +246,39 @@ async function ensureMic(){
   }
 }
 
+// iOS (WebKit) forgets the mic grant on every page load unless the site is set to
+// Allow (aA menu → Website Settings → Microphone). Ask UP FRONT with a visible tap
+// target instead of mid-hold: the permission dialog used to appear while the finger
+// was already on Talk, the release landed on the dialog, and press() then started a
+// recording nobody was holding — "it just sat there" (2026-07-18).
+async function micPrimeCheck(){
+  if(!window.isSecureContext || !window.MediaRecorder || micStream) return;
+  let state = "prompt";
+  try{
+    const st = await navigator.permissions.query({name: "microphone"});
+    state = st.state;
+  }catch(e){ /* WebKit may not support the query — assume the tap is needed */ }
+  if(state !== "granted") $("micprime").hidden = false;
+}
+$("micprime").addEventListener("click", () => { unlockAudio(); ensureMic(); });
+micPrimeCheck();
+
+// A release during an await (the permission dialog, a slow getUserMedia) must CANCEL
+// the press — otherwise the recorder starts after the finger is long gone and the
+// button sticks on "Listening" with no release ever coming.
+let pressSeq = 0;
+
 async function press(e){
   e.preventDefault();
   if(holding || busy) return;
+  const seq = ++pressSeq;
   unlockAudio();
   if(!window.MediaRecorder || !(await ensureMic())) return;
+  if(seq !== pressSeq){
+    resetTalk();
+    setStatus("Mic is ready — hold Talk and speak.");
+    return;
+  }
   recChunks = [];
   try{ rec = new MediaRecorder(micStream); }
   catch(err){ warn("Couldn't start the recorder: " + err); return; }
@@ -259,6 +293,7 @@ async function press(e){
 
 async function release(e){
   e.preventDefault();
+  pressSeq++;   // cancels any press still waiting on the permission dialog
   if(!holding || !rec) return;
   holding = false;
   const heldMs = Date.now() - recStart;

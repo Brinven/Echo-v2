@@ -24,13 +24,17 @@
   .navbtn:active{background:#26313f;}
   .tools{margin-left:auto; display:flex; gap:10px; align-items:center;}
 
-  #scroll{flex:1; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:12px; padding-right:4px;}
+  /* min-height:0 is load-bearing — same flexbox trap as history's #sessions (2026-07-18):
+     without it the scroller grows to content and the page clips instead of scrolling. */
+  #scroll{flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:12px; padding-right:4px;}
   #scroll::-webkit-scrollbar{width:14px;}
   #scroll::-webkit-scrollbar-thumb{background:var(--edge); border-radius:8px; border:3px solid var(--bg);}
 
   .note{background:#12202b; border:1px solid var(--edge); color:var(--dim); border-radius:12px; padding:10px 14px; font-size:14px; line-height:1.5;}
   .note b{color:var(--ink);}
-  .card{background:var(--panel); border:1px solid var(--edge); border-radius:14px; padding:14px;}
+  /* flex:none — same shrink trap as history's .session (2026-07-18): flex children of the
+     scroll column must never compress to fit the viewport. */
+  .card{flex:none; background:var(--panel); border:1px solid var(--edge); border-radius:14px; padding:14px;}
   h2{margin:0 0 12px; font-size:14px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); display:flex; gap:8px; align-items:center;}
   h2 .n{color:var(--ink); background:var(--panel2); border:1px solid var(--edge); border-radius:999px; padding:1px 9px; font-size:12px;}
 

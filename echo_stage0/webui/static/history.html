@@ -31,11 +31,18 @@
     min-height:44px; padding:9px 14px; cursor:pointer; touch-action:manipulation;}
   button:active{background:#26313f;}
 
-  #sessions{flex:1; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:12px; padding-right:4px;}
+  /* min-height:0 is load-bearing: without it a flex child's minimum is its CONTENT, so an
+     expanded session stretches this past the viewport and body{overflow:hidden} clips the
+     rest — the scroller never engages ("you can't scroll down", 2026-07-18). */
+  #sessions{flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:12px; padding-right:4px;}
   #sessions::-webkit-scrollbar{width:14px;}
   #sessions::-webkit-scrollbar-thumb{background:var(--edge); border-radius:8px; border:3px solid var(--bg);}
 
-  .session{background:var(--panel); border:1px solid var(--edge); border-radius:14px; overflow:hidden;}
+  /* flex:none is load-bearing: .session is a flex child of #sessions, and flex children
+     SHRINK by default — an expanded card was compressed to its share of the viewport and
+     its own overflow:hidden (there for the corner rounding) clipped the transcript to
+     ~3 lines with no way to scroll (Michael, 2026-07-18). */
+  .session{flex:none; background:var(--panel); border:1px solid var(--edge); border-radius:14px; overflow:hidden;}
   .s-head{display:flex; align-items:center; gap:12px; padding:14px 16px; cursor:pointer; user-select:none; flex-wrap:wrap;}
   .s-head:active{background:var(--panel2);}
   .s-date{font-weight:700; font-size:17px;}

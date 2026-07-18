@@ -410,3 +410,31 @@ each time. Two rules confirmed by measurement:
 - The mechanics/personality line cuts *through the middle of the persona block*: the directive
   is mechanics (instruct hard), the wit around it is personality (context only). Thinning is
   right for one and wrong for the other, in the same paragraph.
+
+## 2026-07-18: "It shows 3 lines and won't scroll" — flex children SHRINK, and overflow:hidden finishes the job
+
+History's expanded session card showed ~3 lines of transcript with no way to reach the rest.
+Two stacked flexbox defaults, neither visible in the CSS you wrote:
+
+1. **A flex child's min-size is its CONTENT** (`min-height:auto`) — so a `flex:1;
+   overflow-y:auto` scroller without `min-height:0` grows past its container instead of
+   scrolling, and the body's `overflow:hidden` clips the excess.
+2. **Flex children shrink by default** (`flex-shrink:1`) — the session cards inside the
+   scroll column compressed to their "fair share" of the viewport, and the card's own
+   `overflow:hidden` (there only to round corners) silently ate the transcript. That's
+   where "exactly ~3 lines" came from.
+
+The measurement told the story the code review missed: scrollHeight == clientHeight
+(nothing to scroll!) while 54 bubbles existed — the content wasn't overflowing, it was
+being CRUSHED. Rule for every scroll column in these pages: the scroller gets
+`min-height:0`, its children get `flex:none`. index.html's transcript had both (by
+osmosis from earlier fixes); history/memory had neither. Same class as the 2026-07-16
+"right column had no scroller" bug — this file now names the pattern so it stops
+being rediscovered card by card.
+
+Also fixed in the same pass: the /remote Talk button wedged if iOS's per-page-load mic
+permission dialog appeared MID-HOLD (the release landed on the dialog; the recorder then
+started with no finger down and no release ever coming). A press sequence counter cancels
+any press that a release overtakes during an await, and a tappable "enable the microphone"
+banner primes the permission up front. iOS re-asks per page load BY DESIGN unless the site
+is set to Allow (aA menu → Website Settings → Microphone).
