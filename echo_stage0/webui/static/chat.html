@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Echo — Chat</title>
+<style>
+  /* Phone-first, same palette as the panel. Fixed app shell like /remote: the input row
+     is the thumb target and must never move — the conversation scrolls above it. */
+  :root{
+    --bg:#0b0f14; --panel:#141b24; --panel2:#1b2430; --edge:#2a3644;
+    --ink:#eef4fb; --dim:#9fb0c3; --accent:#4aa3ff; --good:#3fb950; --bad:#f85149;
+    --warn:#f0a020; --echo:#7ee0c0; --you:#ffd479;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{background:var(--bg); color:var(--ink); font-size:16px;
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;
+    padding:12px; display:flex; flex-direction:column; gap:10px;
+    height:100vh; height:100dvh; overflow:hidden;}
+  a{color:var(--accent); text-decoration:none;}
+  header{display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:4px 2px;}
+  .brand{font-size:24px; font-weight:800; letter-spacing:.04em;}
+  .sub{font-size:13px; color:var(--dim); text-transform:uppercase; letter-spacing:.12em;}
+  .navbtn{background:var(--panel2); border:1px solid var(--edge); border-radius:10px;
+    padding:8px 12px; font-weight:700; font-size:13px; color:var(--ink);
+    min-height:40px; display:flex; align-items:center;}
+  .navbtn:active{background:#26313f;}
+  header .navbtn:first-of-type{margin-left:auto;}
+
+  #exchange{flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+    display:flex; flex-direction:column; gap:8px;}
+  #exchange > :first-child{margin-top:auto;}
+  .turn{padding:10px 12px; border-radius:10px; background:var(--panel2); line-height:1.4;
+    user-select:text; -webkit-user-select:text; white-space:pre-wrap;}
+  .turn .who{font-weight:700; font-size:12px; text-transform:uppercase;
+    letter-spacing:.05em; display:block; margin-bottom:2px;}
+  .turn.echo .who{color:var(--echo);}
+  .turn.you .who{color:var(--you);}
+  .turn.thinking{color:var(--dim); font-style:italic;}
+  .empty{color:var(--dim); font-style:italic; padding:8px;}
+
+  /* Location hint row — fixed height, always present (the thumb-target rule: rows under
+     the exchange never appear/disappear). Auto = no hint sent; Echo uses her own resolve. */
+  #locrow{flex:none; height:46px; display:flex; gap:8px; align-items:center;}
+  #locrow .lbl{color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.08em;}
+  .locbtn{flex:1; min-height:40px; font-family:inherit; font-size:14px; font-weight:700;
+    color:var(--dim); background:var(--panel2); border:1px solid var(--edge);
+    border-radius:10px; cursor:pointer;}
+  .locbtn.on{color:#cfe6ff; background:#123; border-color:var(--accent);}
+
+  /* Photo attach row — same fixed-height contract as /remote. */
+  #attachrow{flex:none; height:60px; display:flex; align-items:center; gap:10px;}
+  #photo{min-width:56px; height:52px; font-size:24px; background:var(--panel2);
+    border:1px solid var(--edge); border-radius:12px; color:var(--ink); cursor:pointer;}
+  #photo:disabled{opacity:.45; cursor:default;}
+  #thumb{height:52px; width:52px; object-fit:cover; border-radius:10px;
+    border:1px solid #2f6fa0;}
+  #clearphoto{min-width:44px; height:44px; font-size:18px; background:var(--panel2);
+    border:1px solid var(--edge); border-radius:10px; color:var(--bad); cursor:pointer;}
+  #photohint{color:var(--dim); font-size:13px; line-height:1.3; flex:1; min-width:0;}
+
+  #inputrow{flex:none; display:flex; gap:10px; align-items:stretch;}
+  #msg{flex:1; min-height:56px; max-height:120px; resize:none; font-family:inherit;
+    font-size:16px; line-height:1.35; padding:14px 12px; border-radius:14px;
+    background:#0a1017; color:var(--ink); border:1px solid var(--edge);}
+  #send{min-width:88px; font-family:inherit; font-size:18px; font-weight:800;
+    color:var(--ink); background:#16324a; border:1px solid #2f6fa0; border-radius:14px;
+    cursor:pointer;}
+  #send:disabled{opacity:.55; cursor:default;}
+  #status{flex:none; min-height:20px; text-align:center; color:var(--dim); font-size:13px;}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">ECHO</div>
+    <div class="sub">Chat</div>
+    <a class="navbtn" href="/">Full panel</a>
+    <a class="navbtn" href="/remote">🎤 Remote</a>
+  </header>
+
+  <div id="exchange"><div class="empty">Type something — every typed message is Michael, and she answers in text only.</div></div>
+
+  <div id="locrow">
+    <span class="lbl">Where</span>
+    <button class="locbtn on" data-loc="">Auto</button>
+    <button class="locbtn" data-loc="home">Home</button>
+    <button class="locbtn" data-loc="jeep">Jeep</button>
+    <button class="locbtn" data-loc="away">Away</button>
+  </div>
+
+  <!-- accept="image/*" WITHOUT capture — capture forces the camera and blocks the library
+       picker (the same hard-learned lesson as /remote). -->
+  <div id="attachrow">
+    <button id="photo" title="Attach a photo">📷</button>
+    <img id="thumb" alt="" hidden>
+    <button id="clearphoto" title="Remove the photo" hidden>✕</button>
+    <span id="photohint">Attach a photo, then ask about it.</span>
+    <input type="file" id="file" accept="image/*" hidden>
+  </div>
+
+  <div id="inputrow">
+    <textarea id="msg" placeholder="Message Echo…" autocomplete="off"></textarea>
+    <button id="send">Send</button>
+  </div>
+  <div id="status"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s??"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+let busy = false, photoBlob = null, thumbUrl = null, locHint = "";
+
+function setStatus(msg){ $("status").textContent = msg || ""; }
+
+// ── Location hint (rides each turn; Auto sends nothing → Echo's own resolve) ──
+try{ locHint = localStorage.getItem("echo_loc_hint") || ""; }catch(e){}
+document.querySelectorAll(".locbtn").forEach(b => {
+  if(b.dataset.loc === locHint) {
+    document.querySelectorAll(".locbtn").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+  }
+  b.addEventListener("click", () => {
+    locHint = b.dataset.loc;
+    try{ localStorage.setItem("echo_loc_hint", locHint); }catch(e){}
+    document.querySelectorAll(".locbtn").forEach(x => x.classList.toggle("on", x === b));
+  });
+});
+
+// ── Photo attach — same downscale as /remote (≤1600px JPEG .85, strips EXIF/GPS) ──
+async function downscalePhoto(file){
+  let src = null, w = 0, h = 0, objUrl = null;
+  try{ src = await createImageBitmap(file); w = src.width; h = src.height; }
+  catch(e){
+    objUrl = URL.createObjectURL(file);
+    src = await new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => res(img); img.onerror = rej; img.src = objUrl;
+    });
+    w = src.naturalWidth; h = src.naturalHeight;
+  }
+  const scale = Math.min(1, 1600 / Math.max(w, h));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
+  canvas.getContext("2d").drawImage(src, 0, 0, canvas.width, canvas.height);
+  if(src.close) src.close();
+  if(objUrl) URL.revokeObjectURL(objUrl);
+  return await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.85));
+}
+
+function setPhoto(blob){
+  if(thumbUrl) URL.revokeObjectURL(thumbUrl);
+  photoBlob = blob;
+  thumbUrl = blob ? URL.createObjectURL(blob) : null;
+  $("thumb").src = thumbUrl || "";
+  $("thumb").hidden = !blob;
+  $("clearphoto").hidden = !blob;
+  $("photohint").textContent = blob
+    ? "Photo attached — ask about it."
+    : "Attach a photo, then ask about it.";
+}
+
+$("photo").addEventListener("click", () => { if(!$("photo").disabled) $("file").click(); });
+$("clearphoto").addEventListener("click", () => setPhoto(null));
+$("file").addEventListener("change", async () => {
+  const f = $("file").files && $("file").files[0];
+  $("file").value = "";
+  if(!f) return;
+  try{
+    const small = await downscalePhoto(f);
+    if(small) setPhoto(small);
+    else setStatus("Couldn't read that photo — try another.");
+  }catch(e){ setStatus("Couldn't read that photo — try another."); }
+});
+
+function addTurn(cls, who, text, extra){
+  const first = $("exchange").querySelector(".empty");
+  if(first) first.remove();
+  const div = document.createElement("div");
+  div.className = "turn " + cls;
+  div.innerHTML = `<span class="who">${esc(who)}</span>${extra || ""}${esc(text)}`;
+  $("exchange").appendChild(div);
+  $("exchange").scrollTop = $("exchange").scrollHeight;
+  return div;
+}
+
+async function blobToB64(blob){
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  for(let i = 0; i < buf.length; i += 0x8000)
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+const DROP_HINTS = {
+  "not-an-image": "That file wasn't an image, so she answered without it.",
+  "too-large": "The photo was too big to send, so she answered without it.",
+  "model-not-vision": "This model can't see photos — she answered without it.",
+};
+
+async function sendTurn(){
+  const text = $("msg").value.trim();
+  if(!text || busy) return;
+  busy = true;
+  $("send").disabled = true;
+  $("msg").value = "";
+  addTurn("you", "Michael", text, photoBlob ? "📷 " : "");
+  const think = addTurn("echo thinking", "Echo", "…");
+  setStatus("");
+  try{
+    const body = {text};
+    if(locHint) body.location = locHint;
+    if(photoBlob) body.image_b64 = await blobToB64(photoBlob);
+    const r = await fetch("/api/chat/turn", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => null);
+    think.remove();
+    if(r.status === 409){ setStatus("She's mid-conversation — try again in a moment."); $("msg").value = text; }
+    else if(r.status === 504){ setStatus("That took too long — she may still be finishing it."); }
+    else if(!r.ok || !j || !j.ok){
+      setStatus((j && j.detail) || "Echo didn't catch that — try again.");
+      $("msg").value = text;
+    }else{
+      setPhoto(null);   // spent on success (attached or dropped); errors keep it for retry
+      addTurn("echo", "Echo", j.reply || "…");
+      if(j.image_dropped) setStatus(DROP_HINTS[j.image_dropped] || "The photo didn't attach.");
+      if(j.signoff) setStatus("Session ended — Echo said goodbye.");
+    }
+  }catch(err){
+    think.remove();
+    setStatus("Couldn't reach Echo — is she running?");
+    $("msg").value = text;
+  }
+  busy = false;
+  $("send").disabled = false;
+  $("msg").focus();
+}
+
+$("send").addEventListener("click", sendTurn);
+// Enter sends on a hardware keyboard; Shift+Enter makes a newline. Phone keyboards
+// use the Send button — their Enter inserts a newline as typed.
+$("msg").addEventListener("keydown", e => {
+  if(e.key === "Enter" && !e.shiftKey && !e.isComposing){
+    e.preventDefault();
+    sendTurn();
+  }
+});
+</script>
+</body>
+</html>

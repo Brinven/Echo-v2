@@ -39,6 +39,16 @@ VOICE_GUIDANCE = (
     "sentences unless Michael explicitly asks for more detail."
 )
 
+# Typed-register counterpart (chat lane, 2026-07-18 — wording Michael-approved with the
+# plan). Same operational role as VOICE_GUIDANCE: register mechanics, not personality.
+TEXT_GUIDANCE = (
+    "You are typing in a chat window, not speaking aloud. Still yourself — "
+    "conversational, concise, no assistant-speak. Skip headers and bullet lists "
+    "unless Michael asks for something that genuinely needs them. A reply can run "
+    "longer than a spoken one when the content earns it — a draft he asked for, "
+    "steps he'll follow — never just to fill space."
+)
+
 # The subtlety instruction is functional, not stylistic. Do not reword.
 # ("with Michael" dropped in Stage 6 Phase 2 — facts can now come from any known speaker.)
 _MEMORY_BLOCK_HEADER = (
@@ -114,16 +124,20 @@ class IbLite:
 
     # ── reads ────────────────────────────────────────────────────────────
 
-    def build_context_block(self, include_profile: bool = True) -> str:
-        """Always-injected base prompt: voice guidance + Core + Policy + Preferences.
+    def build_context_block(self, include_profile: bool = True, typed: bool = False) -> str:
+        """Always-injected base prompt: voice/text guidance + Core + Policy + Preferences.
 
         include_profile=False (Stage 6 Phase 2, unknown speaker on the mic): voice guidance
         and behavior policies ONLY — no core rows (Michael's profile/relationship) and no
         preferences. "Don't volunteer details about Michael to a stranger" is structural:
         the knowledge is simply not in the prompt, rather than an instruction not to share
         it (prompts lose under pressure — the Hillary attribution lesson).
+
+        typed=True (chat lane, 2026-07-18): swap VOICE_GUIDANCE for TEXT_GUIDANCE — the
+        turn arrived from a keyboard and the reply renders as text, so "you are speaking
+        aloud" would be a lie the model has to route around. Everything else identical.
         """
-        parts = [VOICE_GUIDANCE]
+        parts = [TEXT_GUIDANCE if typed else VOICE_GUIDANCE]
 
         if include_profile:
             core = self._conn.execute(

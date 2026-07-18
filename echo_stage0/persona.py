@@ -222,6 +222,14 @@ LOCATION_CONTEXTS = {
         "Jeep is warranted here. Read the drive."
     ),
     "unknown": "",   # neutral — no location nudge; relaxed, home-style conversation
+    # Remote/chat turns can carry a per-turn location hint (2026-07-18, wording
+    # Michael-approved with the plan). "away" = out in the world on the phone —
+    # neither the desk nor the Jeep. A named place (Colorado) is a later entry.
+    "away": (
+        "Michael is out and about — away from home, not in the Jeep, reaching you "
+        "from his phone. Keep replies portable: he may be walking, waiting, in a "
+        "store. Don't assume the desk."
+    ),
 }
 
 

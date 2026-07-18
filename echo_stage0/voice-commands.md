@@ -20,6 +20,10 @@ nothing, and unknown voices can't sign off or forget.
 
 Notes:
 
+- **Every command also works TYPED** from the `/chat` page (2026-07-18) — they're text
+  guards, so the transport doesn't matter. A typed sign-off gets a text goodbye; a typed
+  enroll command arms the capture and the NEXT spoken voice becomes the print.
+
 - **Only sign-off and enroll require the word "Echo".** The rest match on the phrase alone —
   a stray "scratch that" mid-story can fire the forget path (low-stakes: it removes at most
   the one most-recent saved fact).

@@ -255,18 +255,24 @@ class EchoControl:
 
     def submit_remote_turn(self, pcm, image_b64: str | None = None,
                            image_mime: str | None = None,
-                           image_file: str | None = None) -> dict | None:
-        """Web thread: park a decoded utterance (optionally with a photo riding the turn).
+                           image_file: str | None = None,
+                           typed_text: str | None = None,
+                           location_hint: str | None = None) -> dict | None:
+        """Web thread: park a decoded utterance OR a typed turn (photo optional on either).
 
         Returns the slot to wait on, or None if busy. The image fields default to None so a
         plain voice turn parks exactly what it always did (vision Level 1 is additive).
+        Chat lane (2026-07-18): `typed_text` set + pcm None parks a text turn through the
+        SAME single-flight slot — a phone voice turn and a typed turn can never interleave.
+        `location_hint` is the per-turn register override (remote or chat).
         """
         with self._remote_lock:
             if self.pending_remote is not None or self._remote_busy:
                 return None
             slot = {"audio": pcm, "event": threading.Event(), "result": None,
                     "image_b64": image_b64, "image_mime": image_mime,
-                    "image_file": image_file}
+                    "image_file": image_file, "typed_text": typed_text,
+                    "location_hint": location_hint}
             self.pending_remote = slot
             return slot
 

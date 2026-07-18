@@ -184,6 +184,12 @@ def create_app(control):
     def remote_page():
         return send_from_directory(_STATIC_DIR, "remote.html")
 
+    def _clean_location(value) -> str | None:
+        """Validate a per-turn location hint; anything unrecognized degrades to None
+        (auto) rather than erroring — a bad hint must never cost the turn."""
+        v = (value or "").strip().lower()
+        return v if v in ("home", "jeep", "away") else None
+
     @app.post("/api/remote/turn")
     def api_remote_turn():
         """One phone utterance in, one Echo reply out (optionally with a photo riding it).
@@ -199,7 +205,11 @@ def create_app(control):
         must never cost Michael the sentence he just spoke.
         """
         image_b64 = image_mime = image_file = image_dropped = None
+        # Per-turn location hint (2026-07-18): form field on multipart, query param on the
+        # raw-body shape (which has no fields). Missing/invalid → None → session location.
+        location_hint = _clean_location(request.args.get("location"))
         if (request.content_type or "").startswith("multipart/form-data"):
+            location_hint = _clean_location(request.form.get("location")) or location_hint
             audio_part = request.files.get("audio")
             raw = audio_part.read() if audio_part else b""
             image_part = request.files.get("image")
@@ -232,7 +242,8 @@ def create_app(control):
             # instead of burning a park/claim cycle on a reply that would be None anyway.
             return jsonify(ok=False, error="too-short"), 400
         slot = control.submit_remote_turn(pcm, image_b64=image_b64,
-                                          image_mime=image_mime, image_file=image_file)
+                                          image_mime=image_mime, image_file=image_file,
+                                          location_hint=location_hint)
         if slot is None:
             return jsonify(ok=False, error="busy"), 409
         if not slot["event"].wait(timeout=REMOTE_WAIT_S):
@@ -241,6 +252,57 @@ def create_app(control):
         result["image_attached"] = image_b64 is not None
         if image_dropped:
             result["image_dropped"] = image_dropped
+        return jsonify(result)
+
+    # ── Chat lane (2026-07-18): typed turns through the same pipeline ──
+    @app.get("/chat")
+    def chat_page():
+        return send_from_directory(_STATIC_DIR, "chat.html")
+
+    @app.post("/api/chat/turn")
+    def api_chat_turn():
+        """One typed turn in, one TEXT reply out. Same park contract + status codes as
+        /api/remote/turn, minus audio in both directions: the text runs the FULL pipeline
+        (commands, search, memory gate, persona) with TTS skipped entirely. All typed text
+        is Michael by policy (his call — no guest picker). An optional photo rides the turn
+        exactly like attach-then-talk, with the same degrade-to-text-only rules.
+        """
+        data = request.get_json(silent=True) or {}
+        text = (data.get("text") or "").strip()
+        if not text:
+            return jsonify(ok=False, error="empty"), 400
+        location_hint = _clean_location(data.get("location"))
+        image_b64 = image_mime = image_file = image_dropped = None
+        if data.get("image_b64"):
+            try:
+                img = base64.b64decode(data["image_b64"])
+            except Exception:
+                img = b""
+            mime = remote_audio.sniff_image_mime(img) if img else None
+            if mime is None:
+                image_dropped = "not-an-image"
+            elif len(img) > remote_audio.IMAGE_MAX_BYTES:
+                image_dropped = "too-large"
+            elif not control.vision_capable():
+                image_dropped = "model-not-vision"
+            else:
+                image_mime = mime
+                image_b64 = base64.b64encode(img).decode("ascii")
+                image_file = remote_audio.save_photo(img, mime,
+                                                     control.session.session_id)
+        slot = control.submit_remote_turn(None, image_b64=image_b64,
+                                          image_mime=image_mime, image_file=image_file,
+                                          typed_text=text, location_hint=location_hint)
+        if slot is None:
+            return jsonify(ok=False, error="busy"), 409
+        if not slot["event"].wait(timeout=REMOTE_WAIT_S):
+            return jsonify(ok=False, error="timeout"), 504
+        result = dict(slot["result"] or {"ok": False, "error": "no-result"})
+        result["image_attached"] = image_b64 is not None
+        if image_dropped:
+            result["image_dropped"] = image_dropped
+        result.pop("wav_b64", None)   # belt: a typed reply is text-only by contract
+        result.pop("sample_rate", None)
         return jsonify(result)
 
     # ── History page (Phase 3): read-only view over logs/stage0_log.jsonl ──

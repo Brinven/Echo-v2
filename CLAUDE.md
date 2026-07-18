@@ -1345,3 +1345,58 @@ that spoken turn through the FULL standard pipeline. Groundwork for the camera p
   /history page, multi-image context, memory-gate awareness of images (her spoken
   description flows through the existing text defenses).
 
+---
+
+## ⚠ Chat Interface (typed turns) + Location Hint (2026-07-18)
+
+Echo has a **text lane**: a phone-first **`/chat` page** (header-linked everywhere) where a
+typed message runs the FULL standard pipeline — commands, search, memory gate, speaker-aware
+retrieval, persona — and the reply comes back as **text only** (Kokoro never runs). Plan:
+`~/.claude/plans/ticklish-cuddling-sifakis.md`. The voice layer was always a *transducer*
+(STT produces a transcript, TTS reads the reply); this is the input-side counterpart of the
+Remote Voice sink substitution.
+
+- **`run_streaming_pipeline(typed_text=...)`** is the whole entry: skips the length guard +
+  STT (the text IS the transcript), skips speaker-ID, and sets `no_tts` guards on every
+  synthesize site (command replies, search filler, streaming chunks, the remote goodbye).
+  The reply text lands in `session.turns` as usual — that's what the route reads back.
+  `audio` is None on typed turns. `session.last_speaker_score` is NOT updated (the dashboard
+  meter keeps showing the last real voice match).
+- **All typed text IS Michael — by policy, not verification** (his call 2026-07-18; Hillary
+  prefers voice and would never type). Declared identity under the same trust model as the
+  rest of the dashboard (device custody = authority). So typed turns read AND write memory
+  as Michael turns; there is no guest picker.
+- **Typed commands work** (they're text guards): typed sign-off returns a text goodbye and
+  runs the summary at the desk; typed "Echo, this is John" ARMS enrollment — but a typed
+  turn can never CONSUME an armed capture (no voice to fingerprint; arming survives it, so
+  type-the-command-then-John-speaks composes).
+- **`TEXT_GUIDANCE`** (ib_lite.py, next to VOICE_GUIDANCE — wording Michael-approved with
+  the plan) replaces "you are speaking aloud" via `build_context_block(typed=True)`. Note
+  the guidance block rides inside `core_block`, so it (like VOICE_GUIDANCE) is absent when
+  Ib-Lite is unavailable.
+- **Same single-flight slot as Remote Voice**: `submit_remote_turn(typed_text=, location_hint=)`
+  (audio None) → `handle_remote_turn` branches — a phone voice turn and a typed turn can
+  never interleave (409). `POST /api/chat/turn` (JSON `{text, location?, image_b64?}`)
+  mirrors the remote route's 400/409/504; the response strips any audio fields by contract.
+  A photo rides a typed turn through the same sniff/save/degrade rules as attach-then-talk.
+- **Location hint (the Colorado enabler)**: `location` on BOTH `/api/chat/turn` (JSON) and
+  `/api/remote/turn` (multipart form field; query param on the raw-body shape) →
+  slot → `run_streaming_pipeline(location_hint=)` → a **per-turn override** of the register
+  location. **Deliberately never touches `session.location`** — no VAD side-effects at the
+  desk, nothing sticky. Unrecognized values degrade to auto (`_clean_location`). UI: an
+  Auto|Home|Jeep|Away segmented row on `/remote` and `/chat` (shared localStorage key
+  `echo_loc_hint`). `LOCATION_CONTEXTS["away"]` is Michael-approved persona content;
+  Colorado later = one named entry + one button.
+- **Typed turns are budget-exempt** (`passed_budget=None`, `[TYPED (exempt)]` print — the
+  <3s budget measures speech-to-speech). New JSONL: `typed`, `location_hint`;
+  `speaker_score` is null on typed turns.
+- **Tests:** `test_chat.py` — the TTS stub RAISES if called on a typed turn (silence proven
+  structurally), STT booby-trapped the same way, solo/voice path asserted byte-consistent
+  (VOICE_GUIDANCE + typed=False), armed-enrollment-survives, hint-doesn't-stick, route
+  400/409 + case-normalized hint + garbage-hint degrade. Headless-Chromium smoke drove the
+  real page (send → bubble, Enter sends, hint rides the POST, Auto clears, localStorage
+  persists). All 10 offline suites green.
+- **Out of scope (later):** agentic abilities (chat is the substrate, not the feature),
+  guest identity picker, a speak-typed-replies toggle, the Colorado named location, chat on
+  the kiosk, auth.
+

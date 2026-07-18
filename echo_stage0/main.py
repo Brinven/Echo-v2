@@ -180,7 +180,7 @@ def can_forget(speaker: str, is_michael: bool, last_fact: dict | None) -> bool:
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 def run_streaming_pipeline(
-    audio: np.ndarray,
+    audio: np.ndarray | None,
     stt: STTEngine,
     llm: LLMClient,
     tts: TTSEngine,
@@ -200,6 +200,8 @@ def run_streaming_pipeline(
     image_b64: str | None = None,
     image_mime: str = "image/jpeg",
     image_file: str | None = None,
+    typed_text: str | None = None,
+    location_hint: str | None = None,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
@@ -210,33 +212,59 @@ def run_streaming_pipeline(
     image_file is the saved-to-disk pointer, logged only. Command turns, ignored voices,
     and the enrollment capture return before the LLM call, so a photo on those turns is
     ignored for free.
+
+    typed_text (chat lane, 2026-07-18): the turn arrived as TEXT — it IS the transcript, so
+    STT is skipped, speaker-ID is skipped (typed turns are Michael by policy — a keyboard
+    has no voiceprint, and the chat surfaces share the dashboard's trust model), and NO TTS
+    runs anywhere (typed in → typed out; the reply text lands in session.turns for the
+    route to read back). `audio` is None on typed turns. Voice commands typed still work —
+    they're text guards; a typed enroll command ARMS enrollment, but a typed turn can never
+    CONSUME one (no voice to fingerprint — the armed capture waits for the next utterance).
+
+    location_hint (rides remote/chat turns): a per-turn override of the register location
+    passed to build_system_prompt. Deliberately does NOT touch session.location — no VAD
+    side-effects at the desk, nothing sticky. The Colorado enabler.
     """
-    input_duration = len(audio) / SAMPLE_RATE
+    no_tts = typed_text is not None
 
-    if len(audio) < SAMPLE_RATE * 0.3:
-        print("  [Too short -- speak longer]")
-        return None
+    if typed_text is not None:
+        transcript = typed_text.strip()
+        if not transcript:
+            print("  [Empty typed turn]")
+            return None
+        input_duration = 0.0
+        stt_latency = 0.0
+        t0 = time.perf_counter()
+    else:
+        input_duration = len(audio) / SAMPLE_RATE
 
-    t0 = time.perf_counter()
+        if len(audio) < SAMPLE_RATE * 0.3:
+            print("  [Too short -- speak longer]")
+            return None
 
-    # ── STT ──
-    t_stt_start = time.perf_counter()
-    try:
-        transcript = stt.transcribe(audio)
-    except Exception as e:
-        print(f"  [STT error: {e}]")
-        return None
-    t_stt_end = time.perf_counter()
-    stt_latency = t_stt_end - t_stt_start
+        t0 = time.perf_counter()
 
-    if not transcript.strip():
-        print("  [No speech detected]")
-        return None
+        # ── STT ──
+        t_stt_start = time.perf_counter()
+        try:
+            transcript = stt.transcribe(audio)
+        except Exception as e:
+            print(f"  [STT error: {e}]")
+            return None
+        t_stt_end = time.perf_counter()
+        stt_latency = t_stt_end - t_stt_start
+
+        if not transcript.strip():
+            print("  [No speech detected]")
+            return None
 
     # ── In-conversation enrollment capture (Stage 6 Part 1) ──
     # If a prior turn armed enrollment ("Echo, this is Jon"), THIS utterance's audio is the
     # voiceprint sample. Not a real exchange — no counter advance, never gated to memory.
-    if session.enrolling and speaker_embedder is not None and speaker_registry is not None:
+    # A TYPED turn never consumes the capture (no voice to fingerprint) — arming survives it,
+    # so "type the command, John speaks next" composes.
+    if (session.enrolling and typed_text is None
+            and speaker_embedder is not None and speaker_registry is not None):
         pending = session.enrolling
         print_conversation("You", transcript)
         session.add_user_turn(transcript, stt_latency)
@@ -293,7 +321,11 @@ def run_streaming_pipeline(
     # whole point. active_count is for "how many PEOPLE do I know" (tagging, chips, the startup
     # line). Swapping this one to active_count would make a roster of just Kairos skip
     # identification entirely and answer the clock as Michael.
-    if speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 0:
+    if typed_text is not None:
+        # Typed = Michael by policy (his call, 2026-07-18). Declared, not verified — same
+        # trust model as the rest of the dashboard (device custody = authority).
+        session.current_speaker = session.user_name or "Michael"
+    elif speaker_embedder is not None and speaker_registry is not None and speaker_registry.count > 0:
         try:
             # voiced_only, not the raw buffer: the capture runs from the pre-roll to the VAD
             # hangover, and the dead air at each end drags the embedding off the speaker hard
@@ -308,7 +340,10 @@ def run_streaming_pipeline(
         print(f"  [speaker: {session.current_speaker} ({speaker_score:.2f})]")
     else:
         session.current_speaker = session.user_name or "Michael"
-    session.last_speaker_score = speaker_score
+    if typed_text is None:
+        # A typed turn has no voice — leave the dashboard's live score meter showing
+        # the last actual voice match instead of a misleading 0.0.
+        session.last_speaker_score = speaker_score
 
     # ── Not a person: say nothing ──
     # Michael's Kokoro clock app announces the time over the Mac speakers; Echo's mic hears it
@@ -355,12 +390,13 @@ def run_streaming_pipeline(
                 reply = "There's nothing recent for me to forget."
         print_conversation("Echo", reply)
         audio_q.start()
-        try:
-            tts_audio, tts_sr = tts.synthesize(reply)
-            audio_q.enqueue(tts_audio, tts_sr)
-            sm.transition(State.SPEAKING)
-        except Exception as e:
-            print(f"  [TTS error on forget: {e}]")
+        if not no_tts:
+            try:
+                tts_audio, tts_sr = tts.synthesize(reply)
+                audio_q.enqueue(tts_audio, tts_sr)
+                sm.transition(State.SPEAKING)
+            except Exception as e:
+                print(f"  [TTS error on forget: {e}]")
         audio_q.finish()
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
@@ -375,12 +411,13 @@ def run_streaming_pipeline(
         reply = "Maximum snark it is, Michael. You asked for it."
         print_conversation("Echo", reply)
         audio_q.start()
-        try:
-            tts_audio, tts_sr = tts.synthesize(reply)
-            audio_q.enqueue(tts_audio, tts_sr)
-            sm.transition(State.SPEAKING)
-        except Exception as e:
-            print(f"  [TTS error on max-snark: {e}]")
+        if not no_tts:
+            try:
+                tts_audio, tts_sr = tts.synthesize(reply)
+                audio_q.enqueue(tts_audio, tts_sr)
+                sm.transition(State.SPEAKING)
+            except Exception as e:
+                print(f"  [TTS error on max-snark: {e}]")
         audio_q.finish()
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
@@ -400,12 +437,13 @@ def run_streaming_pipeline(
         )
         print_conversation("Echo", reply)
         audio_q.start()
-        try:
-            tts_audio, tts_sr = tts.synthesize(reply)
-            audio_q.enqueue(tts_audio, tts_sr)
-            sm.transition(State.SPEAKING)
-        except Exception as e:
-            print(f"  [TTS error on search-toggle: {e}]")
+        if not no_tts:
+            try:
+                tts_audio, tts_sr = tts.synthesize(reply)
+                audio_q.enqueue(tts_audio, tts_sr)
+                sm.transition(State.SPEAKING)
+            except Exception as e:
+                print(f"  [TTS error on search-toggle: {e}]")
         audio_q.finish()
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
@@ -421,12 +459,13 @@ def run_streaming_pipeline(
         reply = "Buckle up, Michael." if loc_override == "jeep" else "Home it is, Michael."
         print_conversation("Echo", reply)
         audio_q.start()
-        try:
-            tts_audio, tts_sr = tts.synthesize(reply)
-            audio_q.enqueue(tts_audio, tts_sr)
-            sm.transition(State.SPEAKING)
-        except Exception as e:
-            print(f"  [TTS error on location-override: {e}]")
+        if not no_tts:
+            try:
+                tts_audio, tts_sr = tts.synthesize(reply)
+                audio_q.enqueue(tts_audio, tts_sr)
+                sm.transition(State.SPEAKING)
+            except Exception as e:
+                print(f"  [TTS error on location-override: {e}]")
         audio_q.finish()
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
@@ -442,12 +481,13 @@ def run_streaming_pipeline(
         reply = f"Say a few words so I can learn your voice, {enroll_name} — a full sentence is plenty."
         print_conversation("Echo", reply)
         audio_q.start()
-        try:
-            tts_audio, tts_sr = tts.synthesize(reply)
-            audio_q.enqueue(tts_audio, tts_sr)
-            sm.transition(State.SPEAKING)
-        except Exception as e:
-            print(f"  [TTS error on enroll-start: {e}]")
+        if not no_tts:
+            try:
+                tts_audio, tts_sr = tts.synthesize(reply)
+                audio_q.enqueue(tts_audio, tts_sr)
+                sm.transition(State.SPEAKING)
+            except Exception as e:
+                print(f"  [TTS error on enroll-start: {e}]")
         audio_q.finish()
         session.add_echo_turn(reply, 0.0)
         return {"stt": stt_latency, "first_audio": 0.0, "passed": True}
@@ -503,14 +543,16 @@ def run_streaming_pipeline(
             search_meta["search_query"] = query
 
             # Filler first (latency cover + transparency). Not logged as a turn.
+            # Typed turns skip the audio — the chat page's thinking state covers the wait.
             filler = _pick_filler(search_config)
             print_conversation("Echo", filler)
-            try:
-                f_audio, f_sr = tts.synthesize(filler)
-                audio_q.enqueue(f_audio, f_sr)
-                sm.transition(State.SPEAKING)
-            except Exception as e:
-                print(f"  [TTS error on filler: {e}]")
+            if not no_tts:
+                try:
+                    f_audio, f_sr = tts.synthesize(filler)
+                    audio_q.enqueue(f_audio, f_sr)
+                    sm.transition(State.SPEAKING)
+                except Exception as e:
+                    print(f"  [TTS error on filler: {e}]")
 
             # Search runs behind the filler. Provider never raises → [] on any failure,
             # and format_search_block([]) yields a graceful in-character 'came up empty'.
@@ -543,7 +585,7 @@ def run_streaming_pipeline(
         # guidance survive (include_profile=False). Structural, not a prompt instruction: the
         # knowledge simply isn't in the prompt, so it can't lose under pressure.
         known = session.current_speaker_known
-        core_block = ib.build_context_block(include_profile=known)
+        core_block = ib.build_context_block(include_profile=known, typed=no_tts)
         if known:
             # speaker= makes facts ABOUT the person on the mic ride the block even when
             # the transcript never names them (speaker-aware retrieval, 2026-07-18).
@@ -556,9 +598,12 @@ def run_streaming_pipeline(
     # cleared — it steers exactly this one turn back into character, then decays.
     opener = session.mood_opener if exchange_n == 1 else ""
     correction = session.consume_persona_correction()
+    # location_hint is a PER-TURN override (remote/chat turns carry it) — session.location
+    # is deliberately untouched: no VAD side-effects at the desk, nothing sticky.
+    turn_location = location_hint or session.location
     system_prompt = build_system_prompt(
         exchange_n, snark_level, core_block, memory_block,
-        search_block=search_block, mood_opener=opener, location=session.location,
+        search_block=search_block, mood_opener=opener, location=turn_location,
         speaker=session.current_speaker, multi_speaker=multi_speaker, correction=correction,
     )
     if correction:
@@ -587,6 +632,13 @@ def run_streaming_pipeline(
                                              system_prompt=system_prompt,
                                              image_b64=image_b64, image_mime=image_mime):
             full_response += sentence + " "
+
+            if no_tts:
+                # Typed turn: no synthesis at all. The first sentence stands in for
+                # "first output reached the user" in the timing fields.
+                if t_first_audio is None:
+                    t_first_audio = time.perf_counter()
+                continue
 
             try:
                 tts_audio, tts_sr = tts.synthesize(sentence)
@@ -654,7 +706,13 @@ def run_streaming_pipeline(
     # ── Timing ──
     actual_ttft = llm_timing.get("ttft", 0.0)
     first_audio = (t_first_audio - t0) if t_first_audio else 0.0
-    if search_meta["web_search_triggered"]:
+    if no_tts:
+        # Typed turns are budget-exempt: the <3s budget measures speech-to-speech,
+        # which doesn't exist here. first_audio = time to the first reply sentence.
+        passed = None
+        print(f"  [TYPED (exempt): first text {first_audio:.2f}s | TTFT {actual_ttft:.2f}s"
+              f"{' | searched' if search_meta['web_search_triggered'] else ''}]")
+    elif search_meta["web_search_triggered"]:
         # Search turns are exempt from the <3s budget (decision + round-trip + answer).
         # first_audio here is time to the ANSWER audio, after the filler already played.
         passed = None
@@ -693,17 +751,21 @@ def run_streaming_pipeline(
         response_full=full_response,
         memory_retrieval_ms=round(memory_retrieval_ms, 1),
         memories_injected=memories_injected,
-        location=session.location,
+        location=turn_location,
         speaker=session.current_speaker,
-        speaker_score=round(speaker_score, 4),
+        # Typed turns have no voiceprint — score is null, not a fake 0.0.
+        speaker_score=(None if no_tts else round(speaker_score, 4)),
         speaker_known=speaker_known,
         # Remote Voice (Level 2): this turn arrived from the phone, not the room mic.
         remote=remote,
+        # Chat lane (2026-07-18): this turn arrived as TEXT — Michael by policy, no TTS.
+        typed=no_tts,
+        location_hint=location_hint,
         # Visual input (Level 1): a photo rode this turn; image_file points at logs/photos/.
         image_attached=bool(image_b64),
         image_file=image_file,
-        # Search and photo turns log passed_budget=None so they're excluded from the pass-rate.
-        passed_budget=(None if (search_meta["web_search_triggered"] or image_b64)
+        # Search, photo, and typed turns log passed_budget=None — excluded from the pass-rate.
+        passed_budget=(None if (search_meta["web_search_triggered"] or image_b64 or no_tts)
                        else (first_audio < 1.5 if t_first_audio else False)),
         **search_meta,
     )
@@ -1114,8 +1176,13 @@ def main():
         summary sequence (with a throwaway sink — the goodbye already went to the phone).
         """
         clear_status_line()
-        print(f"  [remote: {len(rt['audio']) / SAMPLE_RATE:.1f}s of phone audio"
-              f"{' + photo' if rt.get('image_b64') else ''}]")
+        typed = rt.get("typed_text") is not None
+        if typed:
+            print(f"  [chat: typed turn ({len(rt['typed_text'])} chars)"
+                  f"{' + photo' if rt.get('image_b64') else ''}]")
+        else:
+            print(f"  [remote: {len(rt['audio']) / SAMPLE_RATE:.1f}s of phone audio"
+                  f"{' + photo' if rt.get('image_b64') else ''}]")
         origin = sm.state
         try:
             audio_stream.stop()
@@ -1138,6 +1205,8 @@ def main():
                 image_b64=rt.get("image_b64"),
                 image_mime=rt.get("image_mime") or "image/jpeg",
                 image_file=rt.get("image_file"),
+                typed_text=rt.get("typed_text"),
+                location_hint=rt.get("location_hint"),
             )
             new_turns = session.turns[turns_before:]
             user_text = next((t["content"] for t in new_turns if t["speaker"] == "user"), "")
@@ -1145,19 +1214,24 @@ def main():
             if pipe and pipe.get("signoff"):
                 # Sign-off from the phone: the goodbye goes back to the phone like any
                 # remote reply; the caller then runs the summary sequence at the desk.
+                # A TYPED sign-off gets a text goodbye — no synthesis (chat is silent).
                 signoff = True
                 goodbye = f"Goodbye {session.user_name or 'friend'}, talk soon."
-                try:
-                    g_audio, g_sr = tts.synthesize(goodbye)
-                    sink.enqueue(g_audio, g_sr)
-                except Exception as e:
-                    print(f"  [TTS error on remote goodbye: {e}]")
+                if not typed:
+                    try:
+                        g_audio, g_sr = tts.synthesize(goodbye)
+                        sink.enqueue(g_audio, g_sr)
+                    except Exception as e:
+                        print(f"  [TTS error on remote goodbye: {e}]")
                 echo_text = goodbye
             if signoff or echo_text:
                 result = {"ok": True, "signoff": signoff,
                           "transcript": user_text, "reply": echo_text,
                           "speaker": session.current_speaker,
-                          "speaker_score": round(session.last_speaker_score, 3)}
+                          # A typed turn has no voice match — last_speaker_score would be
+                          # a stale reading from the previous VOICE turn.
+                          "speaker_score": (None if typed
+                                            else round(session.last_speaker_score, 3))}
                 wav = sink_to_b64(sink)
                 if wav:
                     result["wav_b64"], result["sample_rate"] = wav

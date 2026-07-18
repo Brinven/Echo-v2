@@ -1,5 +1,40 @@
 # Echo — tasks/todo.md
 
+## ✅ BUILT (2026-07-18) — Chat interface (text turns) + location hint on remote turns
+
+Plan (approved): `~/.claude/plans/ticklish-cuddling-sifakis.md`. Michael's decisions: all
+typed text IS Michael (no guest picker); replies text-only (Kokoro skipped); separate
+`/chat` page; location hint rides along (per-turn override, Auto|Home|Jeep|Away).
+
+- [x] **M1** Pipeline: `typed_text` kwarg (skip STT/speaker-ID/enroll-capture-consume),
+      `no_tts` guards on ALL synthesize sites (5 command replies, filler, chunks, remote
+      goodbye), `typed`/`location_hint` JSONL, budget exemption, speaker_score null,
+      last_speaker_score untouched (dashboard meter keeps the last real voice match).
+- [x] **M2** Slot + routes: slot gains `typed_text`/`location_hint` (same single-flight —
+      voice + typed can never interleave); `POST /api/chat/turn` (400/409/504 mirror,
+      audio fields stripped by contract, photo rides with the same degrade rules);
+      `location` on `/api/remote/turn` (form field multipart, query param raw-body).
+- [x] **M3** Persona: `TEXT_GUIDANCE` + `LOCATION_CONTEXTS["away"]` (approved wording) +
+      `build_context_block(typed=)`. Note: guidance rides in core_block (needs Ib-Lite up).
+- [x] **M4** UI: `webui/static/chat.html` (phone-first fixed shell, bubbles, Enter-sends,
+      📷 attach with the same downscale, thinking state, retry keeps the text) + 💬 header
+      links on all pages + Auto|Home|Jeep|Away row on `/remote` AND `/chat` (shared
+      localStorage key `echo_loc_hint`).
+- [x] **M5** Verified: NEW `test_chat.py` (TTS stub RAISES on a typed turn — silence proven
+      structurally; voice control-run pins the spoken path) + all 9 prior suites green +
+      headless-Chromium smoke 5/5 on the real page (send → bubble, hint rides the POST,
+      Auto clears, localStorage persists, phone viewport intact).
+- [x] **M6** Docs: CLAUDE.md ⚠ Chat Interface section, voice-commands.md typed note, this.
+
+### Open for Michael — live pass
+- [ ] Restart Echo, open `/chat` (PC or https://skorp99.tail5c0851.ts.net:7862/chat).
+- [ ] Type a few turns — replies must be text-only, PC speakers silent; then a VOICE turn
+      right after — she should remember the typed context (one session, one history).
+- [ ] Typed weather question → search fires, results in text, no filler audio.
+- [ ] Location row: set Away on the phone → her register should stop assuming the desk.
+- [ ] Typed "Echo, that's all for now" → text goodbye, summary runs at the desk.
+- [ ] Optional: photo + typed question; typed "Echo, this is John" then John SPEAKS.
+
 ## ✅ DONE (2026-07-18) — Speaker-aware retrieval + gate anchoring hardened live
 
 Follow-on from the Willie/John session (Michael: "bump up speaker-aware retrieval").

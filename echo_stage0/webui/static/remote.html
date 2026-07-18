@@ -74,6 +74,15 @@
   #status{flex:none; min-height:22px; text-align:center; color:var(--dim); font-size:14px;}
   .meta{flex:none; min-height:16px; text-align:center; color:var(--dim); font-size:12px;}
 
+  /* Location hint row (2026-07-18) — fixed height, always present (thumb-target rule).
+     Auto sends nothing: Echo uses her own network resolve. Away is the phone's usual truth. */
+  #locrow{flex:none; height:46px; display:flex; gap:8px; align-items:center;}
+  #locrow .lbl{color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.08em;}
+  .locbtn{flex:1; min-height:40px; font-family:inherit; font-size:14px; font-weight:700;
+    color:var(--dim); background:var(--panel2); border:1px solid var(--edge);
+    border-radius:10px; cursor:pointer;}
+  .locbtn.on{color:#cfe6ff; background:#123; border-color:var(--accent);}
+
   /* Photo attach row (vision Level 1). ALWAYS present at a fixed height — attaching or
      clearing a photo must never move the Talk button below it (the thumb-target rule). */
   #attachrow{flex:none; height:60px; display:flex; align-items:center; gap:10px;}
@@ -93,11 +102,20 @@
     <div class="sub">Remote</div>
     <div id="state" class="pill">—</div>
     <a class="navbtn" href="/">Full panel</a>
+    <a class="navbtn" href="/chat">💬 Chat</a>
   </header>
 
   <div id="warn" class="banner" hidden></div>
 
   <div id="exchange"><div class="empty">Hold Talk and say something…</div></div>
+
+  <div id="locrow">
+    <span class="lbl">Where</span>
+    <button class="locbtn on" data-loc="">Auto</button>
+    <button class="locbtn" data-loc="home">Home</button>
+    <button class="locbtn" data-loc="jeep">Jeep</button>
+    <button class="locbtn" data-loc="away">Away</button>
+  </div>
 
   <!-- accept="image/*" WITHOUT capture: with capture the picker jumps straight to the
        camera and blocks choosing from the photo library (a hard-learned lesson). -->
@@ -122,6 +140,21 @@ const MIN_HOLD_MS = 350;
 let ctx = null, micStream = null, rec = null, recChunks = [];
 let holding = false, busy = false, recStart = 0;
 let photoBlob = null, thumbUrl = null, visionCapable = true;
+let locHint = "";
+
+// ── Location hint: rides each turn; shared key with /chat so the phone remembers once ──
+try{ locHint = localStorage.getItem("echo_loc_hint") || ""; }catch(e){}
+document.querySelectorAll(".locbtn").forEach(b => {
+  if(b.dataset.loc === locHint){
+    document.querySelectorAll(".locbtn").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+  }
+  b.addEventListener("click", () => {
+    locHint = b.dataset.loc;
+    try{ localStorage.setItem("echo_loc_hint", locHint); }catch(e){}
+    document.querySelectorAll(".locbtn").forEach(x => x.classList.toggle("on", x === b));
+  });
+});
 
 function warn(msg){ const w = $("warn"); w.textContent = msg; w.hidden = !msg; }
 function setStatus(msg){ $("status").textContent = msg || ""; }
@@ -268,13 +301,16 @@ async function sendTurn(blob){
       const form = new FormData();
       form.append("audio", blob, "turn.audio");
       form.append("image", photoBlob, "photo.jpg");
+      if(locHint) form.append("location", locHint);
       opts = {method: "POST", body: form};
     }else{
       opts = {method: "POST",
               headers: {"Content-Type": blob.type || "application/octet-stream"},
               body: blob};
     }
-    const r = await fetch("/api/remote/turn", opts);
+    // The raw-body shape has no form fields — the hint rides the query string there.
+    const url = "/api/remote/turn" + (!photoBlob && locHint ? "?location=" + locHint : "");
+    const r = await fetch(url, opts);
     const j = await r.json().catch(() => null);
     if(r.status === 409){ setStatus("She's mid-conversation at home — try again in a moment."); }
     else if(r.status === 413){ setStatus("That photo is too big to upload — remove it and retry."); }
