@@ -1423,8 +1423,10 @@ Remote Voice sink substitution.
   entries collapse to header + question when a NEW doc arrives; idempotent). Search is
   skipped on doc turns like photo turns (the decider only sees the transcript). New JSONL:
   `doc_attached`, `doc_name`.
+- **Docs ride SPOKEN turns too (2026-07-18, same night):** 📎 on `/remote` — attach-then-talk
+  like a photo (`doc` multipart part → same extraction/degrade path → the slot). Ask about
+  the file aloud; she answers aloud.
 - **Out of scope (later):** agentic abilities (chat is the substrate, not the feature),
   guest identity picker, a speak-typed-replies toggle, the Colorado named location, chat on
-  the kiosk, auth, docs on voice/remote turns (the pipeline seam is already generic),
-  OCR for scanned PDFs.
+  the kiosk, auth, OCR for scanned PDFs.
 

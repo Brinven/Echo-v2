@@ -44,6 +44,19 @@ interfaces". Both BUILT:
       minimal PDF and a real docx round-trip) — 10/10 suites green; Chromium smoke 6/6
       (live partial render proven with a 0.8s server gap; doc chip rides + clears).
 
+### Also same night — scroll/mic fixes + docs on /remote
+- [x] **History/memory couldn't scroll** ("3 lines max"): the double flexbox trap —
+      scroller missing `min-height:0` AND cards missing `flex:none` (they were being
+      CRUSHED, not clipped: scrollHeight == clientHeight with 54 bubbles). Both pages
+      fixed + measured (8192px scrolls in a 707px viewport). Lesson in lessons.md.
+- [x] **iOS mic wedge**: the per-page-load permission dialog mid-hold orphaned the press
+      (recorder started with no finger down). Press-seq cancel + a tappable 🎙 prime
+      banner. Michael's fix on his end: Safari bookmark (aA → Allow persists the grant);
+      Chrome-on-iOS is WebKit and forgets more.
+- [x] **📎 docs on `/remote`** (Michael: "might as well") — attach-then-talk like photos;
+      `doc` multipart part → same extract/degrade path; DOC_DROP hints; Talk label shows
+      🎤📷📎. Tested in test_remote_voice (+2 checks).
+
 ### Open for Michael — live pass
 - [ ] Restart Echo, open `/chat` (PC or https://skorp99.tail5c0851.ts.net:7862/chat).
 - [ ] Type a few turns — replies must be text-only, PC speakers silent; then a VOICE turn

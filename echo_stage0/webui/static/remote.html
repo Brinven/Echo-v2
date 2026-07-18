@@ -86,9 +86,14 @@
   /* Photo attach row (vision Level 1). ALWAYS present at a fixed height — attaching or
      clearing a photo must never move the Talk button below it (the thumb-target rule). */
   #attachrow{flex:none; height:60px; display:flex; align-items:center; gap:10px;}
-  #photo{min-width:56px; height:52px; font-size:24px; background:var(--panel2);
+  #photo,#doc{min-width:56px; height:52px; font-size:24px; background:var(--panel2);
     border:1px solid var(--edge); border-radius:12px; color:var(--ink); cursor:pointer;}
   #photo:disabled{opacity:.45; cursor:default;}
+  #docchip{max-width:30vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    color:#cfe6ff; font-size:13px; padding:6px 10px; background:#123;
+    border:1px solid var(--accent); border-radius:999px;}
+  #cleardoc{min-width:44px; height:44px; font-size:18px; background:var(--panel2);
+    border:1px solid var(--edge); border-radius:10px; color:var(--bad); cursor:pointer;}
   #thumb{height:52px; width:52px; object-fit:cover; border-radius:10px;
     border:1px solid #2f6fa0;}
   #clearphoto{min-width:44px; height:44px; font-size:18px; background:var(--panel2);
@@ -128,8 +133,13 @@
     <button id="photo" title="Attach a photo">📷</button>
     <img id="thumb" alt="" hidden>
     <button id="clearphoto" title="Remove the photo" hidden>✕</button>
-    <span id="photohint">Attach a photo, then hold Talk and ask about it.</span>
+    <button id="doc" title="Attach a document">📎</button>
+    <span id="docchip" hidden></span>
+    <button id="cleardoc" title="Remove the document" hidden>✕</button>
+    <span id="photohint">Attach a photo or document, then hold Talk and ask about it.</span>
     <input type="file" id="file" accept="image/*" hidden>
+    <input type="file" id="docfile" hidden
+      accept=".txt,.md,.markdown,.csv,.tsv,.log,.json,.yaml,.yml,.ini,.cfg,.toml,.xml,.html,.htm,.py,.js,.ts,.sh,.bat,.ps1,.sql,.pdf,.docx">
   </div>
 
   <button id="talk">🎤 Hold to Talk</button>
@@ -196,11 +206,38 @@ function setPhoto(blob){
   $("thumb").src = thumbUrl || "";
   $("thumb").hidden = !blob;
   $("clearphoto").hidden = !blob;
-  $("photohint").textContent = blob
-    ? "Photo attached — hold Talk and ask about it."
-    : "Attach a photo, then hold Talk and ask about it.";
+  updateHint();
   if(!holding && !busy) resetTalk();
 }
+
+// ── Document attach (2026-07-18): rides the SPOKEN turn like a photo ──
+let docFile = null;
+const DOC_MAX_BYTES = 8 * 1024 * 1024;
+
+function updateHint(){
+  $("photohint").textContent = (photoBlob || docFile)
+    ? "Attached — hold Talk and ask about it."
+    : "Attach a photo or document, then hold Talk and ask about it.";
+}
+
+function setDoc(f){
+  docFile = f;
+  $("docchip").textContent = f ? "📎 " + f.name : "";
+  $("docchip").hidden = !f;
+  $("cleardoc").hidden = !f;
+  updateHint();
+  if(!holding && !busy) resetTalk();
+}
+
+$("doc").addEventListener("click", () => $("docfile").click());
+$("cleardoc").addEventListener("click", () => setDoc(null));
+$("docfile").addEventListener("change", () => {
+  const f = $("docfile").files && $("docfile").files[0];
+  $("docfile").value = "";
+  if(!f) return;
+  if(f.size > DOC_MAX_BYTES){ setStatus("That document is too big (8 MB max)."); return; }
+  setDoc(f);
+});
 
 $("photo").addEventListener("click", () => { if(!$("photo").disabled) $("file").click(); });
 $("clearphoto").addEventListener("click", () => setPhoto(null));
@@ -313,13 +350,17 @@ function resetTalk(){
   busy = false;
   talk.disabled = false;
   talk.classList.remove("busy", "holding");
-  talk.textContent = photoBlob ? "🎤📷 Hold to Talk" : "🎤 Hold to Talk";
+  talk.textContent = "🎤" + (photoBlob ? "📷" : "") + (docFile ? "📎" : "") + " Hold to Talk";
 }
 
 const DROP_HINTS = {
   "not-an-image": "That file wasn't an image, so she answered without it.",
   "too-large": "The photo was too big to send, so she answered without it.",
   "model-not-vision": "This model can't see photos — she answered without it.",
+};
+const DOC_DROP_HINTS = {
+  "too-large": "The document was too big to send, so she answered without it.",
+  "unreadable": "Couldn't read that document (scanned or encrypted?) — she answered without it.",
 };
 
 async function sendTurn(blob){
@@ -330,12 +371,14 @@ async function sendTurn(blob){
   setStatus("Echo's working on it…");
   try{
     let opts;
-    if(photoBlob){
-      // Multipart carries the audio + photo in one POST. No manual Content-Type header:
-      // the browser must set the multipart boundary itself.
+    const multipart = photoBlob || docFile;
+    if(multipart){
+      // Multipart carries the audio + photo/doc in one POST. No manual Content-Type
+      // header: the browser must set the multipart boundary itself.
       const form = new FormData();
       form.append("audio", blob, "turn.audio");
-      form.append("image", photoBlob, "photo.jpg");
+      if(photoBlob) form.append("image", photoBlob, "photo.jpg");
+      if(docFile) form.append("doc", docFile, docFile.name);
       if(locHint) form.append("location", locHint);
       opts = {method: "POST", body: form};
     }else{
@@ -344,7 +387,7 @@ async function sendTurn(blob){
               body: blob};
     }
     // The raw-body shape has no form fields — the hint rides the query string there.
-    const url = "/api/remote/turn" + (!photoBlob && locHint ? "?location=" + locHint : "");
+    const url = "/api/remote/turn" + (!multipart && locHint ? "?location=" + locHint : "");
     const r = await fetch(url, opts);
     const j = await r.json().catch(() => null);
     if(r.status === 409){ setStatus("She's mid-conversation at home — try again in a moment."); }
@@ -353,9 +396,10 @@ async function sendTurn(blob){
     else if(!r.ok || !j || !j.ok){
       setStatus((j && j.detail) || "Echo didn't catch that — try again.");
     }else{
-      // The photo is spent once a turn succeeds (attached or dropped); errors above keep
-      // it so a retry still carries it.
+      // Attachments are spent once a turn succeeds (attached or dropped); errors above
+      // keep them so a retry still carries them.
       setPhoto(null);
+      setDoc(null);
       renderLive(j);
       // Speaker + score up front (not after playback) — it's the live-pass tuning readout.
       if(j.speaker) $("meta").textContent = `heard as ${j.speaker} (${(j.speaker_score ?? 0).toFixed(2)})`;
@@ -366,6 +410,7 @@ async function sendTurn(blob){
       }
       // After playback, so the playback branch's setStatus("") can't wipe the hint.
       if(j.image_dropped) setStatus(DROP_HINTS[j.image_dropped] || "The photo didn't attach.");
+      if(j.doc_dropped) setStatus(DOC_DROP_HINTS[j.doc_dropped] || "The document didn't attach.");
       if(j.signoff) setStatus("Session ended — Echo said goodbye.");
     }
   }catch(err){

@@ -355,6 +355,32 @@ def run() -> None:
                 remote_audio_mod.IMAGE_MAX_BYTES = old_max
             print("  [PASS] an oversized image is dropped, the voice turn still runs")
 
+            # Documents ride SPOKEN turns too (2026-07-18): extracted on the web thread,
+            # parked on the slot; garbage degrades without costing the audio.
+            seen, t = _recording_loop()
+            r = client.post("/api/remote/turn",
+                            data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav"),
+                                  "doc": (io.BytesIO(b"chores: feed the goats"), "chores.txt")},
+                            content_type="multipart/form-data")
+            t.join(timeout=5)
+            j = r.get_json()
+            assert r.status_code == 200 and j["ok"] is True
+            assert j["doc_attached"] is True and "doc_dropped" not in j
+            assert seen.get("doc_text") == "chores: feed the goats"
+            assert seen.get("doc_name") == "chores.txt"
+            print("  [PASS] multipart audio+doc parks the extracted text on the slot")
+
+            seen, t = _recording_loop()
+            r = client.post("/api/remote/turn",
+                            data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav"),
+                                  "doc": (io.BytesIO(b"\x00\x01\x02junk"), "mystery.bin")},
+                            content_type="multipart/form-data")
+            t.join(timeout=5)
+            j = r.get_json()
+            assert j["ok"] is True and j["doc_attached"] is False
+            assert j["doc_dropped"] == "unreadable" and seen.get("doc_text") is None
+            print("  [PASS] an unreadable doc degrades to a plain voice turn")
+
             seen, t = _recording_loop()
             r = client.post("/api/remote/turn",
                             data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav")},

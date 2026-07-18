@@ -208,6 +208,7 @@ def create_app(control):
         must never cost Michael the sentence he just spoke.
         """
         image_b64 = image_mime = image_file = image_dropped = None
+        doc_text = doc_name = doc_dropped = None
         # Per-turn location hint (2026-07-18): form field on multipart, query param on the
         # raw-body shape (which has no fields). Missing/invalid → None → session location.
         location_hint = _clean_location(request.args.get("location"))
@@ -215,6 +216,20 @@ def create_app(control):
             location_hint = _clean_location(request.form.get("location")) or location_hint
             audio_part = request.files.get("audio")
             raw = audio_part.read() if audio_part else b""
+            # Document on a VOICE turn (2026-07-18, Michael: "might as well") — attach-then-
+            # talk like a photo, same degrade rules, extracted here on the web thread.
+            doc_part = request.files.get("doc")
+            docb = doc_part.read() if doc_part else b""
+            if docb:
+                doc_name = (doc_part.filename or "attachment").strip()[:120]
+                if len(docb) > doc_extract.DOC_MAX_BYTES:
+                    doc_dropped = "too-large"
+                else:
+                    doc_text = doc_extract.extract_doc(docb, doc_name)
+                    if doc_text is None:
+                        doc_dropped = "unreadable"
+                if doc_text is None:
+                    doc_name = None
             image_part = request.files.get("image")
             img = image_part.read() if image_part else b""
             if img:
@@ -246,7 +261,8 @@ def create_app(control):
             return jsonify(ok=False, error="too-short"), 400
         slot = control.submit_remote_turn(pcm, image_b64=image_b64,
                                           image_mime=image_mime, image_file=image_file,
-                                          location_hint=location_hint)
+                                          location_hint=location_hint,
+                                          doc_text=doc_text, doc_name=doc_name)
         if slot is None:
             return jsonify(ok=False, error="busy"), 409
         if not slot["event"].wait(timeout=REMOTE_WAIT_S):
@@ -255,6 +271,9 @@ def create_app(control):
         result["image_attached"] = image_b64 is not None
         if image_dropped:
             result["image_dropped"] = image_dropped
+        result["doc_attached"] = doc_text is not None
+        if doc_dropped:
+            result["doc_dropped"] = doc_dropped
         return jsonify(result)
 
     # ── Chat lane (2026-07-18): typed turns through the same pipeline ──
