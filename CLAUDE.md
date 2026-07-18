@@ -1396,7 +1396,35 @@ Remote Voice sink substitution.
   400/409 + case-normalized hint + garbage-hint degrade. Headless-Chromium smoke drove the
   real page (send → bubble, Enter sends, hint rides the POST, Auto clears, localStorage
   persists). All 10 offline suites green.
+### Chat streaming + document attach (same day)
+
+- **Replies stream** (Michael: the block "arrives all at once" — fixed): the pipeline gains
+  `on_sentence` — the text counterpart of sentence-by-sentence TTS, called per reply
+  sentence on typed turns, never raises into the loop. The park slot
+  (`submit_remote_turn(stream=True)`) carries a `queue.Queue`; **`finish_remote_turn`
+  pushes the ("done", result) sentinel** — it runs in the handler's `finally`, so a
+  pipeline exception can never hang the drain. `/api/chat/turn` with `stream:true` returns
+  **NDJSON** (one `{"sentence":…}` line each, then a `done:true` trailer with the
+  authoritative result; audio fields stripped); non-stream JSON shape unchanged (tests use
+  it). The page renders sentences live into the thinking bubble, then the trailer replaces
+  the assembled text. Timeout is in-stream (`{"done":true,"ok":false,"error":"timeout"}`),
+  not a 504.
+- **Documents attach like photos** (📎 on /chat): extracted to PLAIN TEXT on the web thread
+  by **`webui/doc_extract.py`** — txt/md/csv/log/json/code, **PDF (pypdf)**, **Word
+  (python-docx)**; fail-soft None; `DOC_MAX_BYTES` 8 MB upload guard, `DOC_MAX_CHARS`
+  24k extraction cap with a truncation marker. **NEW DEPS `pypdf==6.14.2` +
+  `python-docx==1.2.0`** (both pure-Python installs; torch verified untouched). Degrade
+  rule as with images: `doc_dropped: not-a-doc | too-large | unreadable` — never costs the
+  typed question.
+- **The doc rides the LLM message only** (`llm.doc_content` — deterministic fences that
+  `collapse_doc_history` parses back apart): transcript/log/**gate** see just the typed
+  question — a 20k-char document must not flood the memory gate, same reasoning as the
+  gate never seeing a photo's pixels. **Keep-latest-doc** in history (marker-prefixed user
+  entries collapse to header + question when a NEW doc arrives; idempotent). Search is
+  skipped on doc turns like photo turns (the decider only sees the transcript). New JSONL:
+  `doc_attached`, `doc_name`.
 - **Out of scope (later):** agentic abilities (chat is the substrate, not the feature),
   guest identity picker, a speak-typed-replies toggle, the Colorado named location, chat on
-  the kiosk, auth.
+  the kiosk, auth, docs on voice/remote turns (the pipeline seam is already generic),
+  OCR for scanned PDFs.
 

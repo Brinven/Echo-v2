@@ -49,11 +49,16 @@
     border-radius:10px; cursor:pointer;}
   .locbtn.on{color:#cfe6ff; background:#123; border-color:var(--accent);}
 
-  /* Photo attach row — same fixed-height contract as /remote. */
+  /* Photo + document attach row — same fixed-height contract as /remote. */
   #attachrow{flex:none; height:60px; display:flex; align-items:center; gap:10px;}
-  #photo{min-width:56px; height:52px; font-size:24px; background:var(--panel2);
+  #photo,#doc{min-width:56px; height:52px; font-size:24px; background:var(--panel2);
     border:1px solid var(--edge); border-radius:12px; color:var(--ink); cursor:pointer;}
   #photo:disabled{opacity:.45; cursor:default;}
+  #docchip{max-width:34vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    color:#cfe6ff; font-size:13px; padding:6px 10px; background:#123;
+    border:1px solid var(--accent); border-radius:999px;}
+  #cleardoc{min-width:44px; height:44px; font-size:18px; background:var(--panel2);
+    border:1px solid var(--edge); border-radius:10px; color:var(--bad); cursor:pointer;}
   #thumb{height:52px; width:52px; object-fit:cover; border-radius:10px;
     border:1px solid #2f6fa0;}
   #clearphoto{min-width:44px; height:44px; font-size:18px; background:var(--panel2);
@@ -95,8 +100,13 @@
     <button id="photo" title="Attach a photo">📷</button>
     <img id="thumb" alt="" hidden>
     <button id="clearphoto" title="Remove the photo" hidden>✕</button>
-    <span id="photohint">Attach a photo, then ask about it.</span>
+    <button id="doc" title="Attach a document">📎</button>
+    <span id="docchip" hidden></span>
+    <button id="cleardoc" title="Remove the document" hidden>✕</button>
+    <span id="photohint">Attach a photo or document, then ask about it.</span>
     <input type="file" id="file" accept="image/*" hidden>
+    <input type="file" id="docfile" hidden
+      accept=".txt,.md,.markdown,.csv,.tsv,.log,.json,.yaml,.yml,.ini,.cfg,.toml,.xml,.html,.htm,.py,.js,.ts,.sh,.bat,.ps1,.sql,.pdf,.docx">
   </div>
 
   <div id="inputrow">
@@ -155,9 +165,9 @@ function setPhoto(blob){
   $("thumb").src = thumbUrl || "";
   $("thumb").hidden = !blob;
   $("clearphoto").hidden = !blob;
-  $("photohint").textContent = blob
-    ? "Photo attached — ask about it."
-    : "Attach a photo, then ask about it.";
+  $("photohint").textContent = (blob || docFile)
+    ? "Attached — ask about it."
+    : "Attach a photo or document, then ask about it.";
 }
 
 $("photo").addEventListener("click", () => { if(!$("photo").disabled) $("file").click(); });
@@ -171,6 +181,30 @@ $("file").addEventListener("change", async () => {
     if(small) setPhoto(small);
     else setStatus("Couldn't read that photo — try another.");
   }catch(e){ setStatus("Couldn't read that photo — try another."); }
+});
+
+// ── Document attach (txt/md/csv/pdf/docx/…): extracted to text server-side ──
+let docFile = null;
+const DOC_MAX_BYTES = 8 * 1024 * 1024;
+
+function setDoc(f){
+  docFile = f;
+  $("docchip").textContent = f ? "📎 " + f.name : "";
+  $("docchip").hidden = !f;
+  $("cleardoc").hidden = !f;
+  $("photohint").textContent = (f || photoBlob)
+    ? "Attached — ask about it."
+    : "Attach a photo or document, then ask about it.";
+}
+
+$("doc").addEventListener("click", () => $("docfile").click());
+$("cleardoc").addEventListener("click", () => setDoc(null));
+$("docfile").addEventListener("change", () => {
+  const f = $("docfile").files && $("docfile").files[0];
+  $("docfile").value = "";
+  if(!f) return;
+  if(f.size > DOC_MAX_BYTES){ setStatus("That document is too big (8 MB max)."); return; }
+  setDoc(f);
 });
 
 function addTurn(cls, who, text, extra){
@@ -197,6 +231,16 @@ const DROP_HINTS = {
   "too-large": "The photo was too big to send, so she answered without it.",
   "model-not-vision": "This model can't see photos — she answered without it.",
 };
+const DOC_DROP_HINTS = {
+  "not-a-doc": "That file wasn't a document she can read, so she answered without it.",
+  "too-large": "The document was too big to send, so she answered without it.",
+  "unreadable": "Couldn't read that document (scanned or encrypted?) — she answered without it.",
+};
+
+function setBubble(div, text){
+  div.innerHTML = `<span class="who">Echo</span>${esc(text)}`;
+  $("exchange").scrollTop = $("exchange").scrollHeight;
+}
 
 async function sendTurn(){
   const text = $("msg").value.trim();
@@ -204,29 +248,70 @@ async function sendTurn(){
   busy = true;
   $("send").disabled = true;
   $("msg").value = "";
-  addTurn("you", "Michael", text, photoBlob ? "📷 " : "");
+  addTurn("you", "Michael", text, (photoBlob ? "📷 " : "") + (docFile ? "📎 " : ""));
   const think = addTurn("echo thinking", "Echo", "…");
   setStatus("");
   try{
-    const body = {text};
+    const body = {text, stream: true};
     if(locHint) body.location = locHint;
     if(photoBlob) body.image_b64 = await blobToB64(photoBlob);
+    if(docFile){ body.doc_b64 = await blobToB64(docFile); body.doc_name = docFile.name; }
     const r = await fetch("/api/chat/turn", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body),
     });
-    const j = await r.json().catch(() => null);
-    think.remove();
-    if(r.status === 409){ setStatus("She's mid-conversation — try again in a moment."); $("msg").value = text; }
-    else if(r.status === 504){ setStatus("That took too long — she may still be finishing it."); }
-    else if(!r.ok || !j || !j.ok){
+    if(r.status === 409){
+      think.remove();
+      setStatus("She's mid-conversation — try again in a moment.");
+      $("msg").value = text;
+    }else if(!r.ok){
+      const j = await r.json().catch(() => null);
+      think.remove();
       setStatus((j && j.detail) || "Echo didn't catch that — try again.");
       $("msg").value = text;
     }else{
-      setPhoto(null);   // spent on success (attached or dropped); errors keep it for retry
-      addTurn("echo", "Echo", j.reply || "…");
-      if(j.image_dropped) setStatus(DROP_HINTS[j.image_dropped] || "The photo didn't attach.");
-      if(j.signoff) setStatus("Session ended — Echo said goodbye.");
+      // NDJSON stream: sentence lines render live into the thinking bubble; the trailer
+      // (done:true) carries the authoritative result and replaces the assembled text.
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "", got = "", trailer = null;
+      while(true){
+        const {value, done} = await reader.read();
+        if(done) break;
+        buf += dec.decode(value, {stream: true});
+        let i;
+        while((i = buf.indexOf("\n")) >= 0){
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if(!line) continue;
+          let j; try{ j = JSON.parse(line); }catch(e){ continue; }
+          if(j.sentence !== undefined){
+            got += (got ? " " : "") + j.sentence;
+            think.classList.remove("thinking");
+            setBubble(think, got);
+          }
+          if(j.done) trailer = j;
+        }
+      }
+      if(!trailer){
+        think.remove();
+        setStatus("The reply stream broke off — try again.");
+        $("msg").value = text;
+      }else if(!trailer.ok){
+        think.remove();
+        setStatus(trailer.error === "timeout"
+          ? "That took too long — she may still be finishing it."
+          : (trailer.detail || "Echo didn't catch that — try again."));
+        $("msg").value = text;
+      }else{
+        setPhoto(null);   // spent on success (attached or dropped); errors keep them
+        setDoc(null);
+        think.classList.remove("thinking");
+        setBubble(think, trailer.reply || got || "…");
+        if(trailer.image_dropped) setStatus(DROP_HINTS[trailer.image_dropped] || "The photo didn't attach.");
+        if(trailer.doc_dropped) setStatus(DOC_DROP_HINTS[trailer.doc_dropped] || "The document didn't attach.");
+        if(trailer.signoff) setStatus("Session ended — Echo said goodbye.");
+      }
     }
   }catch(err){
     think.remove();

@@ -131,7 +131,8 @@ def _session():
 
 
 def _run(typed=None, audio=None, stt=None, tts=None, location_hint=None,
-         session=None, llm=None, registry=None, embedder=None, ib=None):
+         session=None, llm=None, registry=None, embedder=None, ib=None,
+         on_sentence=None, doc_text=None, doc_name=None):
     session = session or _session()
     llm = llm or FakeLLM()
     logger = CaptureLogger()
@@ -141,6 +142,7 @@ def _run(typed=None, audio=None, stt=None, tts=None, location_hint=None,
         session=session, vad_mode="ptt-only", ib=ib,
         speaker_embedder=embedder, speaker_registry=registry,
         typed_text=typed, location_hint=location_hint,
+        on_sentence=on_sentence, doc_text=doc_text, doc_name=doc_name,
     )
     return pipe, session, llm, logger
 
@@ -306,6 +308,200 @@ def run_route() -> None:
     print("  [PASS] unknown location hint degrades to auto, turn proceeds")
 
 
+def run_streaming() -> None:
+    """Chat streaming (2026-07-18): sentences flow out as the model produces them."""
+    print("\n── Chat lane: streaming (offline) ──")
+
+    # Pipeline side: on_sentence receives every reply sentence, and a broken consumer
+    # never costs the reply.
+    got = []
+    pipe, _, _, logger = _run(typed="stream me", on_sentence=got.append)
+    assert got == ["Right.", "Noted."], got
+    assert "Right." in logger.kw["response_full"]
+    print("  [PASS] on_sentence gets each sentence; reply still lands in full")
+
+    def boom(_s):
+        raise RuntimeError("consumer died")
+    pipe, _, _, logger = _run(typed="stream me anyway", on_sentence=boom)
+    assert pipe is not None and "Right." in logger.kw["response_full"]
+    print("  [PASS] a raising consumer never costs the reply")
+
+    # Slot side: stream=True carries a queue; finish_remote_turn pushes the sentinel.
+    control, _, _ = _mk_control()
+    slot = control.submit_remote_turn(None, typed_text="x", stream=True)
+    assert slot["stream_q"] is not None
+    plain = None
+    control.take_pending_remote()
+    control.finish_remote_turn(slot, {"ok": True, "reply": "done now"})
+    kind, payload = slot["stream_q"].get_nowait()
+    assert kind == "done" and payload["reply"] == "done now"
+    print("  [PASS] stream slot carries a queue; finish pushes the done sentinel")
+
+    plain = control.submit_remote_turn(None, typed_text="y")
+    assert plain["stream_q"] is None, "non-stream slots must not grow a queue"
+    control.take_pending_remote()
+    control.finish_remote_turn(plain, {"ok": True})
+    print("  [PASS] non-stream slots unchanged")
+
+    # Route side: stream:true → NDJSON (sentences then a done trailer, audio stripped).
+    control, _, _ = _mk_control()
+    app = create_app(control)
+    client = app.test_client()
+
+    def loop():
+        for _ in range(300):
+            slot = control.take_pending_remote()
+            if slot is not None:
+                slot["stream_q"].put(("sentence", "First bit."))
+                slot["stream_q"].put(("sentence", "Second bit."))
+                control.finish_remote_turn(slot, {
+                    "ok": True, "signoff": False, "transcript": "hi",
+                    "reply": "First bit. Second bit.", "speaker": "Michael",
+                    "speaker_score": None, "wav_b64": "STRIP-ME", "sample_rate": 24000,
+                })
+                return
+            time.sleep(0.01)
+
+    threading.Thread(target=loop, daemon=True).start()
+    r = client.post("/api/chat/turn", json={"text": "hi", "stream": True})
+    assert r.status_code == 200 and r.mimetype == "application/x-ndjson"
+    import json as _json
+    lines = [_json.loads(l) for l in r.data.decode("utf-8").splitlines() if l.strip()]
+    assert [l.get("sentence") for l in lines[:2]] == ["First bit.", "Second bit."]
+    trailer = lines[-1]
+    assert trailer["done"] is True and trailer["ok"] is True
+    assert trailer["reply"] == "First bit. Second bit."
+    assert "wav_b64" not in trailer and "sample_rate" not in trailer
+    print("  [PASS] NDJSON route: sentence lines then a clean trailer, audio stripped")
+
+
+def run_documents() -> None:
+    """Document attach (2026-07-18): extract → ride the turn → keep-latest-doc."""
+    print("\n── Chat lane: documents (offline) ──")
+
+    from webui.doc_extract import extract_doc, DOC_MAX_CHARS
+    from llm import doc_content, collapse_doc_history, DOC_MARKER, DOC_COLLAPSED_NOTE
+
+    assert extract_doc(b"hello notes\nline two", "notes.txt") == "hello notes\nline two"
+    assert extract_doc(b"# title\nbody", "readme.md").startswith("# title")
+    assert extract_doc(b"", "empty.txt") is None
+    assert extract_doc(b"\x00\x01binary", "data.exe") is None, "unknown binary must not pass"
+    big = ("word " * (DOC_MAX_CHARS // 2)).encode()
+    out = extract_doc(big, "big.txt")
+    assert len(out) < DOC_MAX_CHARS + 100 and "truncated" in out
+    print("  [PASS] text extraction: plain/md pass, empty/binary refused, cap + marker")
+
+    # A real (tiny) DOCX round-trip — python-docx writes it, extract_doc reads it back.
+    import io
+    import docx as _docx
+    d = _docx.Document()
+    d.add_paragraph("The goats are plotting again.")
+    buf = io.BytesIO()
+    d.save(buf)
+    assert "goats are plotting" in extract_doc(buf.getvalue(), "note.docx")
+    print("  [PASS] docx round-trip extracts")
+
+    # A minimal but VALID PDF (pypdf requires a byte-accurate xref, so build it computed).
+    stream = b"BT /F1 12 Tf 72 720 Td (Feed at dawn) Tj ET"
+    objs = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R"
+        b"/Resources<</Font<</F1 5 0 R>>>>>>",
+        b"<</Length " + str(len(stream)).encode() + b">>stream\n" + stream + b"\nendstream",
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, body in enumerate(objs, 1):
+        offsets.append(len(pdf))
+        pdf += f"{i} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref_pos = len(pdf)
+    pdf += b"xref\n0 6\n0000000000 65535 f \n"
+    for off in offsets:
+        pdf += f"{off:010d} 00000 n \n".encode()
+    pdf += (b"trailer\n<</Size 6/Root 1 0 R>>\nstartxref\n"
+            + str(xref_pos).encode() + b"\n%%EOF")
+    got = extract_doc(bytes(pdf), "chores.pdf")
+    assert got and "Feed at dawn" in got, got
+    print("  [PASS] pdf extraction reads a real text object")
+
+    # doc_content / collapse round-trip: the fences are load-bearing.
+    msg = doc_content("what does it say?", "line one\n\nline two", "notes.txt")
+    assert msg.startswith(DOC_MARKER) and msg.endswith("what does it say?")
+    history = [{"role": "user", "content": msg},
+               {"role": "assistant", "content": "It says lines."},
+               {"role": "user", "content": "plain follow-up"}]
+    n = collapse_doc_history(history)
+    assert n == 1
+    assert history[0]["content"] == (
+        f"{DOC_MARKER}notes.txt]\n{DOC_COLLAPSED_NOTE}\n\nwhat does it say?")
+    assert collapse_doc_history(history) == 0, "collapse must be idempotent"
+    assert history[2]["content"] == "plain follow-up"
+    print("  [PASS] keep-latest-doc: collapse keeps header+question, idempotent")
+
+    # Pipeline: the doc rides the LLM message and history; transcript/log stay bare.
+    ib = _mk_ib()
+    pipe, session, llm_f, logger = _run(typed="what's in the file?", ib=ib,
+                                        doc_text="secret contents here", doc_name="f.txt")
+    ib.close()
+    assert "secret contents here" in llm_f.last_user_msg
+    assert logger.kw["transcript"] == "what's in the file?", "doc leaked into the transcript"
+    assert logger.kw["doc_attached"] is True and logger.kw["doc_name"] == "f.txt"
+    assert session.turns[0]["content"] == "what's in the file?"
+    print("  [PASS] doc rides the LLM message only; transcript/log/gate see the question")
+
+    # Route: doc_b64 attaches; garbage degrades to a text-only turn with doc_dropped.
+    control, _, _ = _mk_control()
+    app = create_app(control)
+    client = app.test_client()
+
+    seen = {}
+
+    def loop():
+        for _ in range(300):
+            slot = control.take_pending_remote()
+            if slot is not None:
+                seen.update({k: slot.get(k) for k in ("doc_text", "doc_name")})
+                control.finish_remote_turn(slot, {"ok": True, "reply": "read it",
+                                                  "speaker": "Michael", "speaker_score": None})
+                return
+            time.sleep(0.01)
+
+    import base64 as _b64
+    threading.Thread(target=loop, daemon=True).start()
+    r = client.post("/api/chat/turn", json={
+        "text": "read this", "doc_b64": _b64.b64encode(b"chore list: feed goats").decode(),
+        "doc_name": "chores.txt"})
+    j = r.get_json()
+    assert j["ok"] is True and j["doc_attached"] is True and "doc_dropped" not in j
+    assert seen["doc_text"] == "chore list: feed goats" and seen["doc_name"] == "chores.txt"
+    print("  [PASS] route: doc extracts on the web thread and rides the slot")
+
+    threading.Thread(target=loop, daemon=True).start()
+    r = client.post("/api/chat/turn", json={
+        "text": "read this too", "doc_b64": _b64.b64encode(b"\x00\x01\x02junk").decode(),
+        "doc_name": "mystery.bin"})
+    j = r.get_json()
+    assert j["ok"] is True and j["doc_attached"] is False and j["doc_dropped"] == "unreadable"
+    print("  [PASS] unreadable doc degrades to a text-only turn, never costs the question")
+
+
+def _mk_control():
+    session = Session(model="m", stt_backend="b", tts_backend="t", user_name="Michael")
+    sm = StateMachine()
+    events = {k: threading.Event() for k in
+              ("space_pressed", "space_released", "mute_toggle_event", "quit_event")}
+    control = EchoControl(
+        session, sm, None,
+        space_pressed=events["space_pressed"], space_released=events["space_released"],
+        mute_toggle_event=events["mute_toggle_event"], quit_event=events["quit_event"],
+        model_name="test/model-x", speaker_active=False, vad_available=False,
+        list_models=lambda: [], list_voices=lambda: [], model_state=lambda: "loaded",
+    )
+    return control, session, sm
+
+
 if __name__ == "__main__":
     try:
         run_pipeline_text_mode()
@@ -313,6 +509,8 @@ if __name__ == "__main__":
         run_typed_commands()
         run_voice_control()
         run_route()
+        run_streaming()
+        run_documents()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print("\n  OFFLINE: all chat-lane checks passed.\n")

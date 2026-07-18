@@ -15,6 +15,7 @@ relies on for cross-thread flags (e.g. session.persona_correction). No new locks
 
 import json
 import time
+import queue
 import threading
 from pathlib import Path
 
@@ -257,7 +258,10 @@ class EchoControl:
                            image_mime: str | None = None,
                            image_file: str | None = None,
                            typed_text: str | None = None,
-                           location_hint: str | None = None) -> dict | None:
+                           location_hint: str | None = None,
+                           stream: bool = False,
+                           doc_text: str | None = None,
+                           doc_name: str | None = None) -> dict | None:
         """Web thread: park a decoded utterance OR a typed turn (photo optional on either).
 
         Returns the slot to wait on, or None if busy. The image fields default to None so a
@@ -265,6 +269,11 @@ class EchoControl:
         Chat lane (2026-07-18): `typed_text` set + pcm None parks a text turn through the
         SAME single-flight slot — a phone voice turn and a typed turn can never interleave.
         `location_hint` is the per-turn register override (remote or chat).
+
+        `stream=True` (chat streaming): the slot carries a Queue; the pipeline pushes each
+        reply sentence in, and finish_remote_turn pushes the ("done", result) sentinel —
+        the request thread drains it into a chunked response. `doc_text`/`doc_name` attach
+        an extracted document to the turn (chat lane; the pipeline seam is generic).
         """
         with self._remote_lock:
             if self.pending_remote is not None or self._remote_busy:
@@ -272,7 +281,9 @@ class EchoControl:
             slot = {"audio": pcm, "event": threading.Event(), "result": None,
                     "image_b64": image_b64, "image_mime": image_mime,
                     "image_file": image_file, "typed_text": typed_text,
-                    "location_hint": location_hint}
+                    "location_hint": location_hint,
+                    "stream_q": queue.Queue() if stream else None,
+                    "doc_text": doc_text, "doc_name": doc_name}
             self.pending_remote = slot
             return slot
 
@@ -286,8 +297,15 @@ class EchoControl:
             return slot
 
     def finish_remote_turn(self, slot: dict, result: dict) -> None:
-        """Main loop only: publish the result, wake the waiting request, clear in-flight."""
+        """Main loop only: publish the result, wake the waiting request, clear in-flight.
+
+        Streaming slots also get the ("done", result) sentinel — pushed HERE (which runs in
+        a finally upstream) so a pipeline exception can never leave the drain loop hanging.
+        """
         slot["result"] = result
+        q = slot.get("stream_q")
+        if q is not None:
+            q.put(("done", result))
         slot["event"].set()
         with self._remote_lock:
             self._remote_busy = False

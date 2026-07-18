@@ -13,6 +13,8 @@ Config: echo_webui.json (load_webui_config), mirroring search.load_search_config
 """
 
 import json
+import time
+import queue
 import socket
 import base64
 import logging
@@ -61,6 +63,7 @@ def create_app(control):
     # flask-free (memory_admin pulls in ib_lite). Only paid when the dashboard is actually built.
     from . import memory_admin
     from . import remote_audio
+    from . import doc_extract
 
     app = Flask(__name__, static_folder=None)
     # Remote Voice uploads: a minute of phone AAC is ~1 MB; 32 MB is a runaway guard,
@@ -290,20 +293,77 @@ def create_app(control):
                 image_b64 = base64.b64encode(img).decode("ascii")
                 image_file = remote_audio.save_photo(img, mime,
                                                      control.session.session_id)
+
+        # Document attach (2026-07-18): extracted to plain text HERE (web thread), rides
+        # the turn like a photo. Same degrade rule: a bad doc never costs the question.
+        doc_text = doc_name = doc_dropped = None
+        if data.get("doc_b64"):
+            try:
+                doc_bytes = base64.b64decode(data["doc_b64"])
+            except Exception:
+                doc_bytes = b""
+            doc_name = (data.get("doc_name") or "attachment").strip()[:120]
+            if not doc_bytes:
+                doc_dropped = "not-a-doc"
+            elif len(doc_bytes) > doc_extract.DOC_MAX_BYTES:
+                doc_dropped = "too-large"
+            else:
+                doc_text = doc_extract.extract_doc(doc_bytes, doc_name)
+                if doc_text is None:
+                    doc_dropped = "unreadable"
+            if doc_text is None:
+                doc_name = None
+
+        stream = bool(data.get("stream"))
         slot = control.submit_remote_turn(None, image_b64=image_b64,
                                           image_mime=image_mime, image_file=image_file,
-                                          typed_text=text, location_hint=location_hint)
+                                          typed_text=text, location_hint=location_hint,
+                                          stream=stream,
+                                          doc_text=doc_text, doc_name=doc_name)
         if slot is None:
             return jsonify(ok=False, error="busy"), 409
+
+        def _finalize(result: dict) -> dict:
+            result = dict(result or {"ok": False, "error": "no-result"})
+            result["image_attached"] = image_b64 is not None
+            if image_dropped:
+                result["image_dropped"] = image_dropped
+            result["doc_attached"] = doc_text is not None
+            if doc_dropped:
+                result["doc_dropped"] = doc_dropped
+            result.pop("wav_b64", None)   # belt: a typed reply is text-only by contract
+            result.pop("sample_rate", None)
+            return result
+
+        if stream:
+            # NDJSON: one {"sentence": ...} line per reply sentence as the model produces
+            # it, then a single trailer line with done=true + the authoritative result.
+            # The sentinel is pushed by finish_remote_turn (inside the main loop's
+            # finally), so this drain can't hang on a pipeline exception.
+            def drain():
+                deadline = time.monotonic() + REMOTE_WAIT_S
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        yield json.dumps({"done": True, "ok": False,
+                                          "error": "timeout"}) + "\n"
+                        return
+                    try:
+                        kind, payload = slot["stream_q"].get(timeout=min(remaining, 1.0))
+                    except queue.Empty:
+                        continue
+                    if kind == "sentence":
+                        yield json.dumps({"sentence": payload}) + "\n"
+                    else:
+                        out = _finalize(payload)
+                        out["done"] = True
+                        yield json.dumps(out) + "\n"
+                        return
+            return app.response_class(drain(), mimetype="application/x-ndjson")
+
         if not slot["event"].wait(timeout=REMOTE_WAIT_S):
             return jsonify(ok=False, error="timeout"), 504
-        result = dict(slot["result"] or {"ok": False, "error": "no-result"})
-        result["image_attached"] = image_b64 is not None
-        if image_dropped:
-            result["image_dropped"] = image_dropped
-        result.pop("wav_b64", None)   # belt: a typed reply is text-only by contract
-        result.pop("sample_rate", None)
-        return jsonify(result)
+        return jsonify(_finalize(slot["result"]))
 
     # ── History page (Phase 3): read-only view over logs/stage0_log.jsonl ──
     @app.get("/history")

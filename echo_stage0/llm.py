@@ -56,6 +56,40 @@ def image_content(text: str, image_b64: str, mime: str = "image/jpeg") -> list[d
     ]
 
 
+DOC_MARKER = "[Michael attached a document: "
+DOC_COLLAPSED_NOTE = "(document no longer in context)"
+
+
+def doc_content(question: str, doc_text: str, doc_name: str) -> str:
+    """The user message for a document turn: the doc rides ahead of the question.
+
+    The framing is DETERMINISTIC — collapse_doc_history parses it back apart, so the
+    "\\n---\\n" fences and the blank line before the question are load-bearing, not style.
+    """
+    return f"{DOC_MARKER}{doc_name}]\n---\n{doc_text}\n---\n\n{question}"
+
+
+def collapse_doc_history(history: list[dict]) -> int:
+    """Flatten any prior document turn in history to its question (keep-latest-doc).
+
+    Called when a NEW document arrives — at most one document's text stays in context
+    (same bounded-prefill reasoning as keep-latest-photo). Only USER entries built by
+    doc_content are touched (recognized by the marker prefix). Idempotent; returns the
+    number of entries collapsed.
+    """
+    collapsed = 0
+    for entry in history:
+        content = entry.get("content")
+        if (entry.get("role") == "user" and isinstance(content, str)
+                and content.startswith(DOC_MARKER) and DOC_COLLAPSED_NOTE not in content):
+            header = content.split("\n", 1)[0]
+            _, sep, question = content.rpartition("\n---\n\n")
+            if sep:
+                entry["content"] = f"{header}\n{DOC_COLLAPSED_NOTE}\n\n{question}"
+                collapsed += 1
+    return collapsed
+
+
 def collapse_image_history(history: list[dict]) -> int:
     """Flatten any prior photo turn in history to plain text (keep-latest-photo).
 

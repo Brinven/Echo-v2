@@ -35,7 +35,8 @@ from audio_queue import AudioQueue
 from timer import PipelineTimer
 from logger import SessionLogger
 from stt import STTEngine, DEFAULT_MODEL_SIZE as DEFAULT_STT_MODEL
-from llm import LLMClient, image_content, collapse_image_history
+from llm import (LLMClient, image_content, collapse_image_history,
+                 doc_content, collapse_doc_history)
 from tts import TTSEngine
 from vad import VADDetector, FRAME_SIZE
 from state import State, StateMachine
@@ -202,6 +203,9 @@ def run_streaming_pipeline(
     image_file: str | None = None,
     typed_text: str | None = None,
     location_hint: str | None = None,
+    on_sentence=None,
+    doc_text: str | None = None,
+    doc_name: str | None = None,
 ) -> dict | None:
     """
     Run the streaming pipeline. Returns timing info dict, or None on error.
@@ -224,6 +228,15 @@ def run_streaming_pipeline(
     location_hint (rides remote/chat turns): a per-turn override of the register location
     passed to build_system_prompt. Deliberately does NOT touch session.location — no VAD
     side-effects at the desk, nothing sticky. The Colorado enabler.
+
+    on_sentence (chat streaming): called with each reply sentence as the LLM produces it —
+    the text counterpart of the voice path's sentence-by-sentence TTS. Typed turns only;
+    never raises into the loop (a broken consumer must not cost the reply).
+
+    doc_text/doc_name (chat documents): extracted text of an attached document rides the
+    LLM message ahead of the question (llm.doc_content), keep-latest-doc in history. The
+    transcript/log/gate see only the typed question — a 20k-char document must not flood
+    the memory gate, the same way the gate never sees a photo's pixels.
     """
     no_tts = typed_text is not None
 
@@ -533,7 +546,10 @@ def run_streaming_pipeline(
     # photo attached is a question about the IMAGE — the decider only sees the transcript,
     # so it would fire a nonsense keywordless web search. If she needs the web after seeing
     # it, that's a follow-up turn.
-    if search_provider is not None and not session.web_search_off and image_b64 is None:
+    # Photo AND document turns skip the search decision: the decider only sees the
+    # transcript, so a question about the attachment would fire a nonsense web search.
+    if (search_provider is not None and not session.web_search_off
+            and image_b64 is None and doc_text is None):
         decision = decide_search(transcript, llm.model_name)
         search_meta["search_prefilter_hit"] = decision["prefilter_hit"]
         search_meta["search_decision_ms"] = round(decision["decision_ms"], 1)
@@ -623,9 +639,13 @@ def run_streaming_pipeline(
     # Keep-latest-photo (Michael, 2026-07-17): a NEW photo collapses any earlier photo turn
     # in history to plain text, so at most one image is ever in context — bounded payload,
     # bounded prefill. Non-photo turns never walk history (an earlier photo stays visible
-    # for follow-ups).
+    # for follow-ups). Documents (2026-07-18) get the same keep-latest treatment.
     if image_b64:
         collapse_image_history(history)
+    if doc_text:
+        collapse_doc_history(history)
+        # The doc rides the LLM message only — transcript/log/gate keep the bare question.
+        user_msg = doc_content(user_msg, doc_text, doc_name or "attachment")
 
     try:
         for sentence in llm.stream_sentences(user_msg, history, timing=llm_timing,
@@ -638,6 +658,11 @@ def run_streaming_pipeline(
                 # "first output reached the user" in the timing fields.
                 if t_first_audio is None:
                     t_first_audio = time.perf_counter()
+                if on_sentence is not None:
+                    try:
+                        on_sentence(sentence)
+                    except Exception:
+                        pass
                 continue
 
             try:
@@ -761,6 +786,8 @@ def run_streaming_pipeline(
         # Chat lane (2026-07-18): this turn arrived as TEXT — Michael by policy, no TTS.
         typed=no_tts,
         location_hint=location_hint,
+        doc_attached=bool(doc_text),
+        doc_name=doc_name,
         # Visual input (Level 1): a photo rode this turn; image_file points at logs/photos/.
         image_attached=bool(image_b64),
         image_file=image_file,
@@ -1207,6 +1234,12 @@ def main():
                 image_file=rt.get("image_file"),
                 typed_text=rt.get("typed_text"),
                 location_hint=rt.get("location_hint"),
+                # Chat streaming: each reply sentence goes straight into the slot's queue;
+                # the request thread is draining it into a chunked response right now.
+                on_sentence=((lambda s: rt["stream_q"].put(("sentence", s)))
+                             if (typed and rt.get("stream_q") is not None) else None),
+                doc_text=rt.get("doc_text"),
+                doc_name=rt.get("doc_name"),
             )
             new_turns = session.turns[turns_before:]
             user_text = next((t["content"] for t in new_turns if t["speaker"] == "user"), "")

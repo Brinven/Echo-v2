@@ -26,6 +26,24 @@ typed text IS Michael (no guest picker); replies text-only (Kokoro skipped); sep
       Auto clears, localStorage persists, phone viewport intact).
 - [x] **M6** Docs: CLAUDE.md ⚠ Chat Interface section, voice-commands.md typed note, this.
 
+### Follow-up same night — streaming + documents (Michael's feedback after first use)
+Michael: looks/works very well, types longer when needed — but the reply arrived as a
+block ("distinct wait while she generates"), and he wants doc upload "like other chat
+interfaces". Both BUILT:
+- [x] **Streaming**: pipeline `on_sentence` (per-sentence callback, typed turns) → slot
+      `stream_q` → NDJSON response (`stream:true`; sentences then a done-trailer; timeout
+      in-stream). Sentinel pushed by `finish_remote_turn` (runs in the finally — the drain
+      can't hang). Page renders live; trailer text is authoritative. Non-stream JSON shape
+      kept for tests/back-compat.
+- [x] **Documents**: 📎 on /chat → `webui/doc_extract.py` (txt/md/csv/etc + PDF via pypdf
+      + Word via python-docx — **NEW DEPS pypdf==6.14.2, python-docx==1.2.0**, pure-Python,
+      torch untouched; 8 MB / 24k-char caps). Doc rides the LLM message only
+      (`llm.doc_content`/`collapse_doc_history` — keep-latest-doc); transcript/log/gate see
+      just the question; search skipped on doc turns; degrade codes never cost the text.
+- [x] Verified: `test_chat.py` grew streaming + documents sections (incl. a computed-xref
+      minimal PDF and a real docx round-trip) — 10/10 suites green; Chromium smoke 6/6
+      (live partial render proven with a 0.8s server gap; doc chip rides + clears).
+
 ### Open for Michael — live pass
 - [ ] Restart Echo, open `/chat` (PC or https://skorp99.tail5c0851.ts.net:7862/chat).
 - [ ] Type a few turns — replies must be text-only, PC speakers silent; then a VOICE turn
