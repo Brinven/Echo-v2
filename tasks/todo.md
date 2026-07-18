@@ -36,6 +36,15 @@ write "John" forever, and the stored facts already match; fighting the spelling 
       Pinned offline (`run_parse_salvage`).
 - Restart note: Echo wasn't running during any of this; next launch loads everything.
 
+### Voice-commands reference (same night)
+- [x] `echo_stage0/voice-commands.md` — the consolidated list that never existed (session.py
+      patterns are the source of truth; only sign-off/enroll require the word "Echo").
+- [x] Dashboard **❓ Voice Commands card** (Michael: "100% I'll forget in the middle of
+      wanting to use one") — native `<details>` collapsible between Speaker ID and the
+      placeholders: no JS, no polling, nothing to break when Echo is down; collapsed by
+      default so the kiosk column stays short. Pinned in `test_webui.py` (33 checks green).
+      Update the card AND the .md together when a pattern changes.
+
 ## ✅ DONE (2026-07-17) — Memory: anchor WHAT an entity is (the Willie-the-goat gap)
 
 Michael's flag after the photo session: the gate saved Willie's personality but never that he's

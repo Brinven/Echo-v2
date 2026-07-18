@@ -146,6 +146,19 @@
   .scores{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
   .sc{font-size:13px; padding:3px 8px; border-radius:6px; background:var(--panel2); border:1px solid var(--edge); color:var(--dim);}
   .sc.hit{color:var(--good); border-color:#2f6f45;}
+  /* voice commands — a static reference card (native <details>: no JS, no polling,
+     nothing to break when Echo is down; collapsed by default so the kiosk column stays short) */
+  details.cmds summary{list-style:none; cursor:pointer; min-height:48px; display:flex;
+    align-items:center; justify-content:space-between; gap:10px; user-select:none;}
+  details.cmds summary::-webkit-details-marker{display:none;}
+  details.cmds summary h2{margin-bottom:0;}
+  details.cmds summary .chev{color:var(--dim); font-size:14px; transition:transform .15s;}
+  details.cmds[open] summary .chev{transform:rotate(90deg);}
+  .cmd{display:flex; gap:12px; padding:9px 0; border-top:1px solid var(--edge); align-items:baseline;}
+  .cmd .say{flex:1; color:#cfe6ff; font-weight:600; line-height:1.35;}
+  .cmd .does{flex:1.15; color:var(--dim); font-size:14px; line-height:1.35;}
+  .cmd-note{color:var(--dim); font-size:13px; margin-top:10px; line-height:1.45;}
+
   .placeholders{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
   .ph{padding:22px; text-align:center; color:var(--dim); background:repeating-linear-gradient(45deg,#121a24,#121a24 10px,#141d28 10px,#141d28 20px); border:1px dashed var(--edge); border-radius:12px; font-size:15px;}
   .muted-note{color:var(--dim); font-size:14px; margin-top:6px;}
@@ -279,6 +292,31 @@
           <span id="score-val" class="val-badge">—</span>
         </div>
         <div id="scores" class="scores"></div>
+      </div>
+
+      <!-- Static reference — mirrors echo_stage0/voice-commands.md (session.py patterns
+           are the source of truth; update both when a pattern changes). -->
+      <div class="card">
+        <details class="cmds">
+          <summary><h2>❓ Voice Commands</h2><span class="chev">▶</span></summary>
+          <div class="cmd"><span class="say">“Echo, that's all for now”</span>
+            <span class="does">End the session — summary + memory save</span></div>
+          <div class="cmd"><span class="say">“Forget that” / “scratch that”</span>
+            <span class="does">Delete the last saved fact (guests: only their own)</span></div>
+          <div class="cmd"><span class="say">“Maximum snark”</span>
+            <span class="does">Lock snark at 10 until next launch</span></div>
+          <div class="cmd"><span class="say">“Stay offline” / “go back online”</span>
+            <span class="does">Web search off / on for the session</span></div>
+          <div class="cmd"><span class="say">“We're in the Jeep” / “we're home”</span>
+            <span class="does">Switch register — Jeep also turns hands-free off</span></div>
+          <div class="cmd"><span class="say">“Echo, this is ⟨name⟩”</span>
+            <span class="does">Enroll: the NEXT voice heard becomes ⟨name⟩'s print — stay quiet, let them talk</span></div>
+          <div class="cmd"><span class="say">“Cancel” / “never mind”</span>
+            <span class="does">Abort an armed enrollment</span></div>
+          <div class="cmd-note">Only signing off and enrolling need the word “Echo” — the rest fire
+            on the phrase alone. Ignored voices can't trigger commands; unknown voices can't sign
+            off or forget.</div>
+        </details>
       </div>
 
       <div class="placeholders">

@@ -445,6 +445,14 @@ def run_routes() -> None:
     assert b"History" in client.get("/history").data and b"Memory" in client.get("/memory").data
     print("  [PASS] /api/history shape + /history + /memory pages served")
 
+    # The Voice Commands reference card (2026-07-18) — static content, so this is the whole
+    # contract: it's served, and the two sharpest lines survive edits (the blind-capture
+    # warning and the sign-off phrase Michael forgets mid-want).
+    dash = client.get("/").data.decode("utf-8")
+    assert "Voice Commands" in dash, "commands card dropped from the dashboard"
+    assert "that's all for now" in dash and "stay quiet, let them talk" in dash
+    print("  [PASS] Voice Commands card served on the dashboard")
+
 
 if __name__ == "__main__":
     run()
