@@ -332,13 +332,18 @@ exactly the deferred Stage 5 Part 3 M9 "ephemeral web junk" item, now triggered)
 - Offline test `test_significance.py` pins the net against all 7 real accumulated-noise facts +
   durable-facts-pass. The one-time junk already in `echo.db` was cleared via the CLI / `/memory`
   editor (left 1 clean fact: `Michael/location/Magnolia, Texas`).
-- **Entity anchoring (2026-07-17):** `GATE_SYSTEM` guidance — a fact about an animal, or a person
-  other than Michael, says WHAT they are (species / relation to Michael) whenever the turn makes
-  it clear, woven into the value when the attribute is something else. Motivated by the Willie
-  case: photo-turn facts saved a goat's personality with no record he IS a goat — ambiguous once
-  the cast grows. Prompt-only (single-payload contract unchanged); presence pinned by
-  `test_significance.py run_anchor_guidance`. `Willie/species/goat` was backfilled by hand
-  (embedded + FTS-synced, mirroring `_insert`).
+- **Entity anchoring (2026-07-17, live-verified 07-18):** `GATE_SYSTEM` guidance — a fact about
+  an animal, or a person other than Michael, says WHAT they are (species / relation to Michael)
+  whenever the turn makes it clear, woven into the value when the attribute is something else.
+  Motivated by the Willie case: photo-turn facts saved a goat's personality with no record he IS
+  a goat — ambiguous once the cast grows. Live-verified on the 12B incl. the photo shape (species
+  present only in Echo's reply). Two live-caught rules ride with it: **the anchor lives in the
+  VALUE, the entity stays the plain name** (first wording produced entity="Anna (Michael's
+  sister)" — an entity-key split), and **the ONE-object contract is now stated in the prompt**
+  (the guidance tempts two-fact turns; the model emitted two concatenated JSON objects and the
+  old parser dropped the save silently — `_parse_json` now salvages the FIRST object via
+  `raw_decode`). All pinned in `test_significance.py`. `Willie/species/goat` was backfilled by
+  hand (embedded + FTS-synced, mirroring `_insert`).
 - **Stage 6 Phase 2 (2026-07-16) widened the gate to guests** — it now resolves "I"/"my" to the
   labelled speaker and rows carry `source_speaker`. See ⚠ Stage 6 Phase 2 at the end of this file.
 
@@ -1208,9 +1213,21 @@ the approved register wording): `~/.claude/plans/squishy-stirring-bentley.md`.
   (`_build_user_content`), `test_speaker_id.py` (known-gate + `can_forget` matrix + register
   strings), `test_webui.py` (provenance in `dump_all`). All offline suites green; live gate
   smoke passed. **Michael must restart Echo (restart-echo.bat) to load Phase 2.**
-- **Out of scope (later):** speaker-aware retrieval bias, provenance in the injected memory
-  line ("Hillary told me…"), episodic `source_speaker` (summaries are multi-speaker by nature
-  and already attributed by real names), auth.
+- **Speaker-aware retrieval — BUILT 2026-07-18** (was the deferred item here): when a known
+  NON-Michael speaker is on the mic, `retrieval.speaker_facts()` (deterministic entity-match,
+  case-insensitive, `MIN_CONFIDENCE`-gated, `SPEAKER_K=3`) front-loads facts ABOUT them into
+  the memory block via `read_memory(query, speaker=)` — the hybrid search only matches the
+  TRANSCRIPT, so a guest's "hey Echo" would otherwise surface nothing about them. No embedding
+  call, no change to the tuned hybrid scoring; front placement survives the tail-first budget
+  trim; deduped against hybrid hits. **Michael/None → byte-identical block** (his profile is
+  already structurally present via core_memory; solo path asserted unchanged in
+  `test_guest_memory.py run_speaker_retrieval`). Unknown speakers still skip `read_memory`
+  entirely. Enrollment spelling rule (2026-07-18, Michael): **enroll people under the spelling
+  Whisper produces** (his friend Jon enrolls as "John") — the transcriber re-votes its spelling
+  every turn, and entity/FTS matching is string-exact; fighting it splits the person.
+- **Out of scope (later):** provenance in the injected memory line ("Hillary told me…"),
+  episodic `source_speaker` (summaries are multi-speaker by nature and already attributed by
+  real names), auth.
 
 ---
 

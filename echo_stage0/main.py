@@ -545,7 +545,11 @@ def run_streaming_pipeline(
         known = session.current_speaker_known
         core_block = ib.build_context_block(include_profile=known)
         if known:
-            memory_block, memory_retrieval_ms, memories_injected = ib.read_memory(transcript)
+            # speaker= makes facts ABOUT the person on the mic ride the block even when
+            # the transcript never names them (speaker-aware retrieval, 2026-07-18).
+            # For Michael it's a no-op — the solo path is byte-identical.
+            memory_block, memory_retrieval_ms, memories_injected = ib.read_memory(
+                transcript, speaker=session.current_speaker)
 
     # Mood opener only on the opening exchange; it fades after that. The self-check
     # correction (if the probe flagged a break on a prior cycle) is consumed here and

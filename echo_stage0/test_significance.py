@@ -15,7 +15,7 @@ try:
 except Exception:
     pass
 
-from ib_lite.significance import GATE_SYSTEM, reject_reason, _build_user_content
+from ib_lite.significance import GATE_SYSTEM, reject_reason, _build_user_content, _parse_json
 
 
 def _fact(entity, attribute, value="x"):
@@ -115,11 +115,47 @@ def run_anchor_guidance() -> None:
     assert "say WHAT they are" in GATE_SYSTEM, "anchoring guidance dropped from GATE_SYSTEM"
     assert "species" in GATE_SYSTEM and "relation to Michael" in GATE_SYSTEM
     assert 'value="a goat; likes to tip things over"' in GATE_SYSTEM, "worked example dropped"
-    print("  [PASS] anchoring guidance + worked example present in GATE_SYSTEM")
+    # Live-caught regression (2026-07-18): the first wording made the model weave the anchor
+    # into the ENTITY ("Anna (Michael's sister)"), splitting the entity key. The rule that
+    # the anchor lives in the value and the entity stays plain must not be lost.
+    assert "The anchor lives in the VALUE" in GATE_SYSTEM
+    assert "\"Anna (Michael's sister)\"" in GATE_SYSTEM, "plain-entity counter-example dropped"
+    print("  [PASS] anchoring guidance + worked example + plain-entity rule present")
+
+
+def run_parse_salvage() -> None:
+    """Multi-object output must salvage the FIRST object, not drop the save.
+
+    Live-caught 2026-07-18: the model emitted two well-formed fact objects on one turn
+    (the anchoring guidance makes two-fact turns more tempting); the old parser failed
+    the concatenation and the save silently vanished. One-object is now stated in
+    GATE_SYSTEM; this pins the parser's salvage path for when the model disobeys anyway.
+    """
+    print("\n── Significance gate: _parse_json salvage (offline) ──")
+
+    two = ('{"save": true, "type": "fact", "entity": "Anna", "attribute": "relation", "value": "sister"}\n'
+           '{"save": true, "type": "fact", "entity": "Anna", "attribute": "profession", "value": "nurse"}')
+    got = _parse_json(two)
+    assert got.get("save") is True and got.get("attribute") == "relation", \
+        f"first object not salvaged from concatenated output: {got}"
+    print("  [PASS] two concatenated objects → first object salvaged")
+
+    trailing = '{"save": false}\nNothing else worth keeping here.'
+    assert _parse_json(trailing) == {"save": False}
+    print("  [PASS] trailing prose after the object is ignored")
+
+    fenced = '```json\n{"save": true, "type": "preference", "key": "coffee", "value": "black"}\n```'
+    assert _parse_json(fenced).get("key") == "coffee"
+    assert _parse_json("no json here at all").get("_error") == "json_parse_failed"
+    print("  [PASS] fenced JSON still parses; garbage still fails soft")
+
+    assert "ONE valid JSON object" in GATE_SYSTEM, "one-object contract dropped from the prompt"
+    print("  [PASS] one-object contract stated in GATE_SYSTEM")
 
 
 if __name__ == "__main__":
     run()
     run_user_content()
     run_anchor_guidance()
+    run_parse_salvage()
     print()

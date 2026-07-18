@@ -162,8 +162,65 @@ def run_context_gating() -> None:
     shutil.rmtree(tmp, ignore_errors=True)
 
 
+def run_speaker_retrieval() -> None:
+    """Speaker-aware retrieval (2026-07-18): facts ABOUT the speaker ride without being named.
+
+    The hybrid search only matches the transcript; speaker_facts is the deterministic
+    entity-match slot that fixes "Jon says hey and Echo knows nothing about Jon".
+    """
+    print("\n── Speaker-aware retrieval: speaker_facts + read_memory(speaker=) (offline, temp DB) ──")
+    import ib_lite.retrieval as ret_mod
+    from ib_lite.retrieval import speaker_facts, SPEAKER_K
+
+    # read_memory's hybrid path calls retrieval's own encode import — stub it like ib_mod's.
+    ret_mod.encode = lambda text: b"\x00\x00\x80\x3f" * 4
+
+    tmp = Path(tempfile.mkdtemp(prefix="echo_test_spk_"))
+    ib = IbLite("fake-model", db_path=tmp / "test.db")
+    ib.start_session("s1")
+    ib._insert("s1", _fact_payload("John", "description", "fantastic beard, friendly"), speaker="Michael")
+    ib._insert("s1", _fact_payload("John", "drink", "black coffee"), speaker="John")
+    ib._insert("s1", _fact_payload("Willie", "species", "goat"), speaker="Michael")
+    ib._insert("s1", _fact_payload("Michael", "location", "Magnolia, Texas"), speaker="Michael")
+
+    # Entity match is case-insensitive, capped at SPEAKER_K, and never leaks other entities.
+    facts = speaker_facts(ib._conn, "john")
+    assert {f["entity"] for f in facts} == {"John"}, "speaker slot leaked other entities"
+    assert len(facts) == 2 and len(facts) <= SPEAKER_K
+    print("  [PASS] speaker_facts: case-insensitive entity match, John rows only")
+
+    # The confidence gate applies — a soft-hidden fact (CLI dial-down) stays hidden here too.
+    ib._conn.execute("UPDATE fact_memory SET confidence = 0.05 WHERE attribute = 'drink'")
+    ib._conn.commit()
+    facts = speaker_facts(ib._conn, "John")
+    assert [f["attribute"] for f in facts] == ["description"], "confidence gate ignored"
+    assert speaker_facts(ib._conn, "") == [] and speaker_facts(ib._conn, "  ") == []
+    print("  [PASS] MIN_CONFIDENCE gate applies; empty speaker → no slot")
+
+    # A guest's facts lead the block even when the transcript never names them, and the
+    # dedupe keeps a fact that surfaced both ways to one line.
+    block, _, count = ib.read_memory("hey echo how is it going", speaker="John")
+    assert count >= 1
+    first_item = block.splitlines()[1]
+    assert first_item.startswith("- John"), f"speaker fact not front-loaded: {first_item!r}"
+    assert block.count("- John — description") == 1, "dedupe failed — fact listed twice"
+    print("  [PASS] read_memory(speaker=guest): guest facts lead the block, deduped")
+
+    # Michael/None → byte-identical block to the pre-feature call (the solo-path
+    # invariant). Compare block + count, not the tuple — element [1] is wall-clock ms.
+    base_block, _, base_count = ib.read_memory("hey echo")
+    for who in ("Michael", "michael", None):
+        blk, _, cnt = ib.read_memory("hey echo", speaker=who)
+        assert (blk, cnt) == (base_block, base_count), f"solo path changed for speaker={who!r}"
+    print("  [PASS] Michael/None speaker → read_memory block byte-identical (solo path unchanged)")
+
+    ib.close()
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     run_migration()
     run_provenance()
     run_context_gating()
+    run_speaker_retrieval()
     print("\n  OFFLINE: all guest-memory checks passed.\n")

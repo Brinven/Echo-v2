@@ -26,6 +26,8 @@ MIN_SCORE = 0.4
 # Facts below this confidence are suppressed entirely. Default fact confidence
 # is 0.85, so normal facts pass; lower a fact via the CLI to soft-hide it.
 MIN_CONFIDENCE = 0.15
+# Max facts injected ABOUT the current speaker (speaker-aware retrieval).
+SPEAKER_K = 3
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 _STOPWORDS = {
@@ -134,6 +136,30 @@ def _hybrid_search(
     params.append(top_k)
 
     rows = conn.execute(sql, tuple(params)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def speaker_facts(conn: sqlite3.Connection, speaker: str, k: int = SPEAKER_K) -> list[dict]:
+    """Facts ABOUT the current speaker (entity match), independent of the transcript.
+
+    Speaker-aware retrieval (2026-07-18): the hybrid search only matches the transcript,
+    so a known guest's "hey Echo, what's up" surfaces nothing about them unless someone
+    happens to say their name. This is the deterministic slot that fixes that: entity
+    equality (case-insensitive), confidence-gated like the hybrid path, most-confident-
+    then-newest first. No embedding call — it must not depend on what was said.
+    """
+    if not speaker or not speaker.strip():
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, entity, attribute, value, confidence, source_speaker
+        FROM fact_memory
+        WHERE entity = ? COLLATE NOCASE AND COALESCE(confidence, 1.0) >= ?
+        ORDER BY confidence DESC, updated_at DESC
+        LIMIT ?
+        """,
+        (speaker.strip(), MIN_CONFIDENCE, k),
+    ).fetchall()
     return [dict(r) for r in rows]
 
 

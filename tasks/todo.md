@@ -1,5 +1,41 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-18) — Speaker-aware retrieval + gate anchoring hardened live
+
+Follow-on from the Willie/John session (Michael: "bump up speaker-aware retrieval").
+Decision locked: the friend enrolls as **"John"** (go with the transcriber — Whisper will
+write "John" forever, and the stored facts already match; fighting the spelling loses).
+
+### Speaker-aware retrieval (the Phase 2 deferred item, now built)
+- [x] `retrieval.speaker_facts(conn, speaker, k=SPEAKER_K=3)` — deterministic entity-match
+      slot (case-insensitive, MIN_CONFIDENCE-gated, most-confident-then-newest). NO
+      embedding call and no score-formula change — the tuned hybrid path is untouched.
+- [x] `IbLite.read_memory(query, speaker=)` — for a known NON-Michael speaker, facts about
+      them ride at the FRONT of the memory block (tail-first budget trim can't eat them),
+      deduped against the hybrid results. Michael/None → byte-identical block (solo-path
+      invariant, asserted). `main.py` passes `session.current_speaker`; unknown speakers
+      still never reach read_memory at all.
+- [x] Why front-and-deterministic: the hybrid search only matches the TRANSCRIPT — John's
+      "hey Echo, what's up" surfaces nothing about John unless someone says his name. Now
+      his facts are present the moment he speaks.
+- [x] Tests: `test_guest_memory.py run_speaker_retrieval` (entity match, confidence gate,
+      front placement, dedupe, solo-path byte-identical). Real-DB read-only check: John's
+      beard fact leads the block on a generic greeting. All 9 offline suites green.
+
+### Gate anchoring — live pass CLOSED, two real fixes came out of it
+- [x] Live smoke on the 12B (Invoke closed, card free): Petunia→"a pushy rabbit who likes
+      to be first at feeding time" (anchor woven into value); Duke→species=goat **from
+      Echo's reply alone** — the exact Willie photo shape, fixed; ephemera still refused.
+- [x] **Regression caught + fixed:** first wording made the model anchor into the ENTITY
+      ("Anna (Michael's sister)") — would split the entity key. Guidance now: the anchor
+      lives in the VALUE, the entity stays the plain name. Pinned in test_significance.
+- [x] **Second catch:** the model sometimes emits TWO fact objects on a rich turn (the
+      anchoring guidance makes that more tempting); the old parser failed the concatenation
+      → silently dropped save. GATE_SYSTEM now states the ONE-object contract, and
+      `_parse_json` salvages the FIRST object via `raw_decode` when the model disobeys.
+      Pinned offline (`run_parse_salvage`).
+- Restart note: Echo wasn't running during any of this; next launch loads everything.
+
 ## ✅ DONE (2026-07-17) — Memory: anchor WHAT an entity is (the Willie-the-goat gap)
 
 Michael's flag after the photo session: the gate saved Willie's personality but never that he's
@@ -13,9 +49,8 @@ human Willie would collide). Camera pipeline won't cure the text side, so:
       they are (species / relation to Michael) whenever the turn makes it clear — woven into
       the value when the attribute is something else (single-payload contract unchanged).
       Presence pinned by `test_significance.py run_anchor_guidance`; suite green.
-- [ ] Live gate smoke pending: the 12B wasn't resident (card ~8.7GB occupied by another app,
-      zero LM Studio models loaded — the Stage 8.3 pattern; didn't force a load). Verify on the
-      next new-critter conversation, or re-run the T1 "Petunia the rabbit" smoke when loaded.
+- [x] Live gate smoke — CLOSED same night once Invoke freed the card (see the 2026-07-18
+      entry above: anchoring verified live, plus two fixes it surfaced).
 - Note: the gate spelled them "Willie"/"Lily" (Michael writes Willy/Lilly) — watch for entity
   splits if a future session spells it his way; `/memory` is the eraser.
 - **Restart Echo to load the new gate prompt** (a running process keeps the old one).

@@ -25,7 +25,7 @@ from . import db
 from .embedder import encode
 from .significance import run_gate, reject_reason
 from .schema import validate_write
-from .retrieval import fact_search, episodic_search
+from .retrieval import fact_search, episodic_search, speaker_facts
 
 logger = logging.getLogger(__name__)
 
@@ -150,14 +150,30 @@ class IbLite:
 
         return "\n\n".join(parts)
 
-    def read_memory(self, query: str) -> tuple[str, float, int]:
-        """Per-turn hybrid retrieval of Facts + Episodic. Returns (block, ms, count)."""
+    def read_memory(self, query: str, speaker: str | None = None) -> tuple[str, float, int]:
+        """Per-turn hybrid retrieval of Facts + Episodic. Returns (block, ms, count).
+
+        `speaker` (speaker-aware retrieval, 2026-07-18): the KNOWN speaker on the mic.
+        For a non-Michael speaker, facts ABOUT them ride at the FRONT of the block
+        regardless of what the transcript says — the hybrid search only matches the
+        transcript, so a guest's "hey Echo" would otherwise surface nothing about them.
+        Michael/None adds no slot: his profile is already structurally present via
+        core_memory, and the solo path stays byte-identical. Front placement also means
+        the budget trim (tail-first) can never eat the facts about the person present.
+        """
         if not self._available or not query.strip():
             return "", 0.0, 0
 
         t0 = time.perf_counter()
+        about_speaker: list[dict] = []
         facts: list[dict] = []
         episodes: list[dict] = []
+        who = (speaker or "").strip()
+        if who and who.lower() != "michael":
+            try:
+                about_speaker = speaker_facts(self._conn, who)
+            except Exception as e:
+                logger.error(f"speaker_facts failed: {e}")
         try:
             facts = fact_search(self._conn, query)
         except Exception as e:
@@ -168,7 +184,12 @@ class IbLite:
             logger.error(f"episodic_search failed: {e}")
         ms = (time.perf_counter() - t0) * 1000.0
 
-        lines = [f"- {f['entity']} — {f['attribute']}: {f['value']}" for f in facts]
+        # The speaker slot wins ties: a fact that surfaced both ways appears once, up front.
+        seen_ids = {f["id"] for f in about_speaker}
+        facts = [f for f in facts if f["id"] not in seen_ids]
+
+        lines = [f"- {f['entity']} — {f['attribute']}: {f['value']}" for f in about_speaker]
+        lines += [f"- {f['entity']} — {f['attribute']}: {f['value']}" for f in facts]
         lines += [f"- Earlier: {e['summary']}" for e in episodes]
         if not lines:
             return "", ms, 0

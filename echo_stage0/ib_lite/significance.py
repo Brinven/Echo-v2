@@ -24,7 +24,8 @@ GATE_SYSTEM = """You are Echo's memory gate. After each conversation turn, decid
 worth saving to Echo's LONG-TERM memory — things that will still be true and worth knowing weeks
 from now.
 
-Respond ONLY with valid JSON. No explanation, no markdown, no preamble.
+Respond ONLY with ONE valid JSON object. No explanation, no markdown, no preamble. If several
+things qualify, save the single most durable one — never emit more than one object.
 
 If nothing is worth saving:
 {"save": false}
@@ -55,9 +56,10 @@ Guidance:
   Michael is the one speaking.
 - Use the person's plain name as the entity — "Michael", never "Michael's location" or similar.
 - A fact about an animal, or a person other than Michael, should say WHAT they are — species,
-  or relation to Michael — whenever the turn makes that clear. Weave it into the value if the
-  attribute is something else: entity="Willie", attribute="personality",
-  value="a goat; likes to tip things over". A bare name with no anchor ages badly.
+  or relation to Michael — whenever the turn makes that clear. The anchor lives in the VALUE,
+  never the entity: entity="Willie", attribute="personality",
+  value="a goat; likes to tip things over". The entity stays the plain name — never
+  "Anna (Michael's sister)". A bare name with no anchor ages badly.
 - Be specific: "Jeep needs new shocks" not "car stuff".
 - Facts use entity/attribute/value: entity="Michael", attribute="favorite_bird", value="crows".
 - If uncertain, return {"save": false}.
@@ -93,13 +95,28 @@ def reject_reason(payload: dict) -> str | None:
 
 
 def _parse_json(raw: str) -> dict:
-    """Best-effort extraction of a JSON object from an LLM response."""
+    """Best-effort extraction of a JSON object from an LLM response.
+
+    The contract is ONE object, but the model occasionally emits two (live-caught
+    2026-07-18: the anchoring guidance made two-fact turns more tempting, and a
+    concatenated pair used to fail the whole parse — a silently dropped save).
+    raw_decode from the first '{' salvages the FIRST object from concatenated
+    output or trailing prose; the greedy regex stays as the last-ditch fallback.
+    """
     cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
     cleaned = re.sub(r"\s*```\s*$", "", cleaned, flags=re.MULTILINE)
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
+    start = cleaned.find("{")
+    if start != -1:
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if match:
         try:
