@@ -139,6 +139,13 @@ Do not architect for dual-GPU now.
   casual speech). Override: `config.json` → `stt_model`, or env `ECHO_STT_MODEL` (wins).
   Rollback: `"stt_model": "base"` and restart. First launch downloads CTranslate2 weights once.
   Startup line must say `on cuda` — if it falls to `cpu`, free VRAM (not a silent accuracy fix).
+- **Production compute type: `int8_float16`** (2026-07-19 — VRAM headroom for the Bonsai 27B:
+  ~1.7GB → ~0.9GB, converted at load from the same cached weights, no new download; STT speed
+  was never the problem — 0.15–0.35s/turn at fp16). Same resolution ladder: env
+  `ECHO_STT_COMPUTE` (wins) → `config.json stt_compute` → default. Rollback:
+  `"stt_compute": "float16"` and restart. Startup line shows it:
+  `STT: faster-whisper (large-v3-turbo, int8_float16) on cuda`. Watch proper nouns in the
+  first live pass — int8 accuracy loss should be negligible; if names degrade, roll back.
 - Sample rate: 16kHz mono (Whisper native — no resampling)
 - Input: dashboard Talk (press-and-hold) + location-aware hands-free VAD (Stage 8); no keyboard
 

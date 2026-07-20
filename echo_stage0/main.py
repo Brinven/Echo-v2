@@ -35,7 +35,8 @@ from audio import AudioRecorder, SAMPLE_RATE
 from audio_queue import AudioQueue
 from timer import PipelineTimer
 from logger import SessionLogger
-from stt import STTEngine, DEFAULT_MODEL_SIZE as DEFAULT_STT_MODEL
+from stt import (STTEngine, DEFAULT_MODEL_SIZE as DEFAULT_STT_MODEL,
+                 DEFAULT_COMPUTE_TYPE as DEFAULT_STT_COMPUTE)
 from llm import (LLMClient, LLM_BASE_URL, image_content, collapse_image_history,
                  doc_content, collapse_doc_history)
 from tts import TTSEngine
@@ -900,10 +901,18 @@ def main():
         or (config.get("stt_model") or "").strip()
         or DEFAULT_STT_MODEL
     )
-    if "stt_model" not in config:
-        config["stt_model"] = stt_model
+    # Compute type: same resolution ladder. int8_float16 default (2026-07-19) halves the
+    # STT VRAM footprint for the 27B's headroom. Rollback: "stt_compute": "float16".
+    stt_compute = (
+        os.environ.get("ECHO_STT_COMPUTE", "").strip()
+        or (config.get("stt_compute") or "").strip()
+        or DEFAULT_STT_COMPUTE
+    )
+    if "stt_model" not in config or "stt_compute" not in config:
+        config.setdefault("stt_model", stt_model)
+        config.setdefault("stt_compute", stt_compute)
         save_config(config)
-    stt = STTEngine(model_size=stt_model)
+    stt = STTEngine(model_size=stt_model, compute_type=stt_compute)
     # Model selection: --model/ECHO_MODEL pin, else last_model / dashboard (no interactive picker).
     pinned_model = _parse_model_arg(sys.argv[1:])
     llm = LLMClient(pinned=pinned_model, last_model=config.get("last_model"))

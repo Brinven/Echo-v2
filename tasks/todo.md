@@ -1,5 +1,21 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-19 late) — STT to int8_float16 (VRAM headroom for the 27B)
+
+Card was at 15.2/16.3GB with Bonsai + STT fp16 + desktop; generation was visibly slower
+than the audited 96 tok/s (Michael's 1.85–4s first-audio reads). Logs proved STT itself
+was innocent (0.15–0.35s/turn) — this shrink is a VRAM reclaim, not a speed fix.
+
+- [x] `stt.py DEFAULT_COMPUTE_TYPE = "int8_float16"` (~1.7GB → ~0.9GB, load-time
+      conversion, no new download); CPU fallback still int8; startup line now shows
+      compute; `compute_type` property.
+- [x] `main.py` resolution ladder: `ECHO_STT_COMPUTE` → config `stt_compute` → default
+      (mirrors stt_model). Rollback: `"stt_compute": "float16"`.
+- [x] Live-verified: loads on cuda int8_float16, transcribes. Watch proper nouns in the
+      live pass.
+- [ ] Michael: shrink the bonsai1 context window in Sindri (the KV cache is the other
+      big tenant), restart Echo, confirm generation speed recovers.
+
 ## ✅ DONE (2026-07-19 late) — Echo has a clock (date/time in the system prompt)
 
 Michael asked Bonsai for the time; she said "Oct 24, just past 2pm" (it was July 19) —

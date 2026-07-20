@@ -31,6 +31,13 @@ if _BACKEND is None:
 # (Maat 2026-07 STT brief). Turbo keeps CTranslate2 / torch-independent CUDA.
 DEFAULT_MODEL_SIZE = "large-v3-turbo"
 
+# Production compute type (2026-07-19): int8_float16 halves the CUDA weight footprint
+# vs float16 (~1.7GB → ~0.9GB for turbo) with negligible accuracy cost — chosen to give
+# the 27B headroom on the shared 16GB card, not for speed (STT was already 0.15-0.35s).
+# CT2 converts at load from the same cached weights — no new download. Rollback:
+# config.json "stt_compute": "float16" (or ECHO_STT_COMPUTE=float16) and restart.
+DEFAULT_COMPUTE_TYPE = "int8_float16"
+
 # openai-whisper does not ship large-v3-turbo; map to the closest stock model.
 _OPENAI_SIZE_MAP = {
     "large-v3-turbo": "large-v3",
@@ -42,7 +49,8 @@ _OPENAI_SIZE_MAP = {
 class STTEngine:
     """Speech-to-text engine with auto-detection of available backends."""
 
-    def __init__(self, model_size: str = DEFAULT_MODEL_SIZE):
+    def __init__(self, model_size: str = DEFAULT_MODEL_SIZE,
+                 compute_type: str = DEFAULT_COMPUTE_TYPE):
         if _BACKEND is None:
             print(
                 "\n ERROR: No STT engine found.\n"
@@ -54,6 +62,7 @@ class STTEngine:
 
         self._backend = _BACKEND
         self._model_size = (model_size or DEFAULT_MODEL_SIZE).strip() or DEFAULT_MODEL_SIZE
+        self._compute = (compute_type or DEFAULT_COMPUTE_TYPE).strip() or DEFAULT_COMPUTE_TYPE
         self._model = None
         self._device = None
         self._load_model()
@@ -69,7 +78,7 @@ class STTEngine:
                 self._model = _FasterWhisperModel(
                     self._model_size,
                     device="cuda",
-                    compute_type="float16",
+                    compute_type=self._compute,
                 )
                 self._device = "cuda"
             except Exception as cuda_err:
@@ -85,6 +94,7 @@ class STTEngine:
                         compute_type="int8",
                     )
                     self._device = "cpu"
+                    self._compute = "int8"  # report what actually loaded
                 except Exception as cpu_err:
                     print(
                         f"\n ERROR: STT failed to load model '{self._model_size}'.\n"
@@ -114,7 +124,10 @@ class STTEngine:
                 sys.exit(1)
             self._device = device
 
-        print(f"  STT: {self._backend} ({self._model_size}) on {self._device}")
+        # compute type only applies to CTranslate2; openai-whisper keeps the plain line.
+        detail = (f"{self._model_size}, {self._compute}"
+                  if self._backend == "faster-whisper" else self._model_size)
+        print(f"  STT: {self._backend} ({detail}) on {self._device}")
 
     def transcribe(self, audio: np.ndarray) -> str:
         """
@@ -151,3 +164,7 @@ class STTEngine:
     @property
     def model_size(self) -> str:
         return self._model_size
+
+    @property
+    def compute_type(self) -> str:
+        return self._compute
