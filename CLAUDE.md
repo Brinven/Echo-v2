@@ -420,10 +420,13 @@ memory_block, search_block, mood_opener, location, correction)`. Identity is her
   (persona, calibration when opted in, mood, location, speaker, time, core, search, anchor,
   correction) is never trimmed.
 - **Echo has a clock (2026-07-19):** `persona.time_context(now)` — one plain line
-  ("Current date and time: Monday, July 20, 2026, 2:05 PM.") injected every turn via
-  `build_system_prompt(now=datetime.now())` in `main.py`. Before this she had NO time
-  source and hallucinated confidently (Bonsai: "Oct 24, just past 2pm"), and couldn't
-  anchor weekday names in search results ("Saturday: 94°" vs "tomorrow"). **Placement is
+  ("Current date and time: Monday, July 20, 2026, 2:05 PM. Tomorrow is Tuesday, July 21.")
+  injected every turn via `build_system_prompt(now=datetime.now())` in `main.py`. Before
+  this she had NO time source and hallucinated confidently (Bonsai: "Oct 24, just past
+  2pm"), and couldn't anchor weekday names in search results ("Saturday: 94°" vs
+  "tomorrow"). The tomorrow clause STATES the next day rather than trusting the model
+  with date math — first live pass, Bonsai read Sunday off the line correctly and still
+  said "Tomorrow's Sunday too" (Q1_0 weekday arithmetic is not to be trusted). **Placement is
   deliberate — after the session-stable context blocks, right before core** — the line
   changes every turn (minute granularity), so anything after it loses llama.cpp's prefix
   cache; everything before it keeps it. Don't move it earlier. Harnesses/tests omit `now`

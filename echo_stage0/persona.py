@@ -16,7 +16,7 @@ holds identity stable; the richness comes from the memory blocks assembled after
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # ── Character invariants (single-sourced) ──────────────────────────────────
@@ -337,13 +337,20 @@ def time_context(now: datetime | None) -> str:
     Mechanical context like MULTI_SPEAKER_NOTE, not approved persona content — keep it
     a bare fact, not an instruction. The caller passes datetime.now() per turn; tests
     pass a fixed datetime so prompt comparisons stay deterministic.
+
+    The "Tomorrow is ..." clause does the one-step date math the model can't be trusted
+    with: first live pass, Bonsai read "Sunday" off the clock line correctly and still
+    said "Tomorrow's Sunday too" (Q1_0 fumbles weekday arithmetic and papers over it).
+    State the answer, don't make a 1-bit quant compute it.
     """
     if now is None:
         return ""
     hour = now.strftime("%I").lstrip("0") or "12"
+    tomorrow = now + timedelta(days=1)
     return (
         f"Current date and time: {now.strftime('%A')}, {now.strftime('%B')} "
-        f"{now.day}, {now.year}, {hour}:{now.strftime('%M')} {now.strftime('%p')}."
+        f"{now.day}, {now.year}, {hour}:{now.strftime('%M')} {now.strftime('%p')}. "
+        f"Tomorrow is {tomorrow.strftime('%A')}, {tomorrow.strftime('%B')} {tomorrow.day}."
     )
 
 

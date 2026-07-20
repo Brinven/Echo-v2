@@ -125,8 +125,11 @@ def run_offline_checks() -> None:
     #    the speaker block / before core, and never trimmed under budget pressure.
     fixed_now = datetime(2026, 7, 20, 14, 5)
     tline = time_context(fixed_now)
-    assert tline == "Current date and time: Monday, July 20, 2026, 2:05 PM.", f"bad format: {tline}"
-    assert time_context(datetime(2026, 7, 20, 0, 30)).endswith("12:30 AM."), "midnight hour wrong"
+    assert tline == ("Current date and time: Monday, July 20, 2026, 2:05 PM. "
+                     "Tomorrow is Tuesday, July 21."), f"bad format: {tline}"
+    assert "12:30 AM. Tomorrow is" in time_context(datetime(2026, 7, 20, 0, 30)), "midnight hour wrong"
+    assert time_context(datetime(2026, 7, 31, 10, 0)).endswith("Tomorrow is Saturday, August 1."), \
+        "month rollover wrong"
     assert time_context(None) == "", "time_context(None) must be empty"
     assert "Current date and time:" not in build_system_prompt(1, 5), \
         "time line leaked into a prompt built without now="
