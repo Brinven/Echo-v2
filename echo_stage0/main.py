@@ -27,6 +27,7 @@ import sys
 import time
 import random
 import threading
+from datetime import datetime
 
 import numpy as np
 
@@ -621,6 +622,7 @@ def run_streaming_pipeline(
         exchange_n, snark_level, core_block, memory_block,
         search_block=search_block, mood_opener=opener, location=turn_location,
         speaker=session.current_speaker, multi_speaker=multi_speaker, correction=correction,
+        now=datetime.now(),
     )
     if correction:
         print("  [self-check: steering back to character this turn]")

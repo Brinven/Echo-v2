@@ -21,9 +21,12 @@ try:
 except Exception:
     pass
 
+from datetime import datetime
+
 from persona import (
     build_system_prompt,
     build_persona_block,
+    time_context,
     PERSONA_BLOCK,
     CALIBRATION_EXAMPLES,
     ANTI_DRIFT_ANCHOR,
@@ -115,6 +118,25 @@ def run_offline_checks() -> None:
     assert assembled.count("- fact ") < 40, "memory block was not trimmed under budget"
     assert assembled.count("- fact ") >= 3, "memory trimmed below the k=3 floor"
     print(f"  [PASS] over-budget assembly trims memory only (kept {assembled.count('- fact ')} of 40 facts)")
+
+    # 6. Date/time line (2026-07-19 — Bonsai hallucinated "Oct 24, just past 2pm"):
+    #    formatted from an injected datetime (12-hour, no leading zero, weekday named),
+    #    absent when `now` isn't passed (harness prompts stay deterministic), placed after
+    #    the speaker block / before core, and never trimmed under budget pressure.
+    fixed_now = datetime(2026, 7, 20, 14, 5)
+    tline = time_context(fixed_now)
+    assert tline == "Current date and time: Monday, July 20, 2026, 2:05 PM.", f"bad format: {tline}"
+    assert time_context(datetime(2026, 7, 20, 0, 30)).endswith("12:30 AM."), "midnight hour wrong"
+    assert time_context(None) == "", "time_context(None) must be empty"
+    assert "Current date and time:" not in build_system_prompt(1, 5), \
+        "time line leaked into a prompt built without now="
+    pt = build_system_prompt(1, 5, core_block="CORE-SLAB", location="home",
+                             speaker="Jon", now=fixed_now)
+    assert pt.index("right now is Jon") < pt.index(tline) < pt.index("CORE-SLAB"), \
+        "time line must sit after the speaker block, before core (prefix-cache placement)"
+    trimmed = build_system_prompt(2, 5, core_block=core, memory_block=big_mem, now=fixed_now)
+    assert tline in trimmed, "time line dropped under budget pressure"
+    print("  [PASS] date/time line: format, off-by-default, placement, never trimmed")
 
     print("  OFFLINE: all checks passed.")
 

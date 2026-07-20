@@ -16,6 +16,7 @@ holds identity stable; the richness comes from the memory blocks assembled after
 """
 
 import re
+from datetime import datetime
 
 
 # ── Character invariants (single-sourced) ──────────────────────────────────
@@ -327,6 +328,25 @@ def speaker_context(speaker: str, user_name: str = "Michael") -> str:
     return SPEAKER_KNOWN.format(name=s)
 
 
+def time_context(now: datetime | None) -> str:
+    """One plain line of current date/time for the system prompt ('' when now is None).
+
+    Without this the model has NO clock — asked the time, it invents one with total
+    confidence (Bonsai said "Oct 24, just past 2pm" on 2026-07-19), and search results
+    with weekday names ("Saturday: 94°") can't be anchored to "today"/"tomorrow".
+    Mechanical context like MULTI_SPEAKER_NOTE, not approved persona content — keep it
+    a bare fact, not an instruction. The caller passes datetime.now() per turn; tests
+    pass a fixed datetime so prompt comparisons stay deterministic.
+    """
+    if now is None:
+        return ""
+    hour = now.strftime("%I").lstrip("0") or "12"
+    return (
+        f"Current date and time: {now.strftime('%A')}, {now.strftime('%B')} "
+        f"{now.day}, {now.year}, {hour}:{now.strftime('%M')} {now.strftime('%p')}."
+    )
+
+
 # Token budget for the assembled system prompt (PRD §4). A guide, not a hard cap —
 # only ever enforced by trimming the retrieved-memory block, never persona/core/policy.
 TOKEN_BUDGET = 1200
@@ -370,6 +390,7 @@ def build_system_prompt(
     multi_speaker: bool = False,
     correction: str = "",
     calibration: bool = False,
+    now: datetime | None = None,
 ) -> str:
     """Assemble the full per-turn system prompt.
 
@@ -381,9 +402,16 @@ def build_system_prompt(
                  →  MOOD OPENER (opening only)
                  →  LOCATION CONTEXT (every turn)  →  MULTI-SPEAKER NOTE (while tagging)
                  →  SPEAKER CONTEXT (every turn)
+                 →  DATE/TIME (every turn, when `now` is passed)
                  →  CORE/POLICY slab  →  RETRIEVED MEMORY (if any)
                  →  WEB SEARCH (this turn only)  →  ANTI-DRIFT ANCHOR
                  →  SELF-CHECK CORRECTION (one turn, on demand)
+
+    The date/time line sits deliberately LATE — after the session-stable context blocks
+    (persona/location/speaker), right before the data slabs. It changes every turn
+    (minute granularity), which invalidates llama.cpp's prefix cache from that point on;
+    everything before it stays byte-stable within a session and keeps its cache. Don't
+    move it earlier.
 
     Args:
         exchange_count: 1-based count of the exchange this prompt is being built for.
@@ -415,6 +443,10 @@ def build_system_prompt(
             Default False — OFF in production since 2026-07-17 (the 12B doesn't need them
             and they read as a script; see the CALIBRATION_EXAMPLES comment). The eval
             harness passes True when auditioning small models, their original purpose.
+        now: the current datetime (main.py passes datetime.now() each turn) →
+            time_context() one-liner so Echo has a clock. None (the default, and what the
+            offline harnesses use) → no block, keeping prompt comparisons deterministic.
+            Never trimmed.
 
     Token budget (PRD §4): if the assembled prompt exceeds TOKEN_BUDGET, ONLY the
     retrieved-memory block is trimmed (last lines dropped toward k=3). Persona, mood,
@@ -425,6 +457,7 @@ def build_system_prompt(
     location_block = LOCATION_CONTEXTS.get(location, "")
     multi_block = MULTI_SPEAKER_NOTE if multi_speaker else ""
     speaker_block = speaker_context(speaker)
+    time_block = time_context(now)
     correction_block = _correction_block(correction)
 
     # The anchor is decided on the value THIS turn carries: first real exchange is 1
@@ -441,11 +474,12 @@ def build_system_prompt(
     # calibration examples (when opted in) sit with the persona, and the self-check
     # correction is a one-turn steer — both are never trimmed.
     fixed = (persona, calibration_block, mood_opener, location_block, multi_block,
-             speaker_block, core_block, search_block, anchor, correction_block)
+             speaker_block, time_block, core_block, search_block, anchor, correction_block)
     trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
     return _join_blocks(
         persona, calibration_block, mood_opener, location_block, multi_block,
-        speaker_block, core_block, trimmed_memory, search_block, anchor, correction_block
+        speaker_block, time_block, core_block, trimmed_memory, search_block, anchor,
+        correction_block
     )
 
 

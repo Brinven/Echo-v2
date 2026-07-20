@@ -405,12 +405,22 @@ memory_block, search_block, mood_opener, location, correction)`. Identity is her
 - **System prompt assembly is now in `main.py`, not `ib_lite`.** Per turn it builds
   (full order as of Part 4/5): `persona block (+snark) → calibration examples (Part 4 —
   HARNESS OPT-IN ONLY since 2026-07-17, absent in production) → mood opener (exchange 1 only)
-  → location context (Part 5, every turn) →
+  → location context (Part 5, every turn) → [multi-speaker note + speaker block, Stage 6]
+  → date/time line (2026-07-19, every turn) →
   core_block (ib.build_context_block) → memory_block (ib.read_memory) → web-search block
   (Part 3, search turns only) → anti-drift anchor → self-check correction (Part 4, one turn
   on demand)`. Only `memory_block` is ever trimmed to budget; everything else
-  (persona, calibration when opted in, mood, location, core, search, anchor, correction) is
-  never trimmed.
+  (persona, calibration when opted in, mood, location, speaker, time, core, search, anchor,
+  correction) is never trimmed.
+- **Echo has a clock (2026-07-19):** `persona.time_context(now)` — one plain line
+  ("Current date and time: Monday, July 20, 2026, 2:05 PM.") injected every turn via
+  `build_system_prompt(now=datetime.now())` in `main.py`. Before this she had NO time
+  source and hallucinated confidently (Bonsai: "Oct 24, just past 2pm"), and couldn't
+  anchor weekday names in search results ("Saturday: 94°" vs "tomorrow"). **Placement is
+  deliberate — after the session-stable context blocks, right before core** — the line
+  changes every turn (minute granularity), so anything after it loses llama.cpp's prefix
+  cache; everything before it keeps it. Don't move it earlier. Harnesses/tests omit `now`
+  (default None → no block) so prompt comparisons stay deterministic.
   `IbLite.system_prompt_for_turn()`
   still exists but is **retired from the hot path** — do not reintroduce it as the assembler
   or the two orderings will diverge.

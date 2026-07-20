@@ -1,5 +1,22 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-19 late) — Echo has a clock (date/time in the system prompt)
+
+Michael asked Bonsai for the time; she said "Oct 24, just past 2pm" (it was July 19) —
+nothing in the prompt path ever carried the date, so she hallucinated with confidence.
+The weather turn's "Saturday" framing was the same hole: real SearXNG results, but no
+"today" to anchor weekday names against.
+
+- [x] `persona.time_context(now)` — one plain line ("Current date and time: Monday,
+      July 20, 2026, 2:05 PM."), mechanical context (not approved-persona content).
+- [x] `build_system_prompt(now=)` — injected after speaker block / before core (prefix-
+      cache placement: everything before it stays byte-stable per session), never
+      trimmed; default None → absent (harness prompts stay deterministic).
+- [x] `main.py` passes `now=datetime.now()` (local clock) each turn.
+- [x] test_personality.py offline check 6: format (12-hour no leading zero, weekday,
+      midnight edge), off-by-default, placement, never-trimmed. All offline suites green
+      (personality, speaker_id, chat, guest_memory).
+
 ## ✅ DONE (2026-07-19) — Bonsai 27B 1-bit is the production model (gate + persona audited)
 
 Michael's call: switch from the 12B Hauhaucs to **Bonsai 27B 1-bit** (`bonsai1` on Sindri —
