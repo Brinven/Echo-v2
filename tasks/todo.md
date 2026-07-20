@@ -1,5 +1,32 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-07-19) — Bonsai 27B 1-bit is the production model (gate + persona audited)
+
+Michael's call: switch from the 12B Hauhaucs to **Bonsai 27B 1-bit** (`bonsai1` on Sindri —
+dealignai CRACK repack, Q1_0 ~4.35 GB, Qwen3.6-27B base, mmproj included in the repack).
+"Really really good, super fast" from his own use; the ask here was the ib-lite retains test.
+
+- [x] **NEW `eval_gate.py`** — the missing gate-JSON audition harness (the known gap next to
+      eval_persona_matrix): 11 production-shaped turns through the real run_gate + reject_reason
+      net, system-level scoring, search-decider sanity call, latency table.
+- [x] Bonsai gate audit: **11/11, median 809ms**, no thinking leak (no --reasoning-budget
+      needed — measured). Guest attribution, searched-turn + ephemera rejection, species
+      anchor, ONE-object contract all hold.
+- [x] Style finding (accepted, advisory soft-check in the harness): Bonsai saves passing-
+      mention facts bare (`Anna/allergies/cats`, 4/4 deterministic) and anchors relations as
+      their own attribute only when central (`Anna/relation_to_michael/sister`) — no woven
+      values like the 12B. Cost: passing-mention people lack a relation row until stated.
+- [x] Persona audit: **eval_persona_matrix 94/100 PASS** — all hard gates, hold 10/10,
+      TTFT 0.219s, 96.2 tok/s. Parroting advisory = audition-mode artifact (production runs
+      calibration=False).
+- [x] config.json `last_model` → `bonsai1`; CLAUDE.md ⚠ section + LLM Stack updated.
+
+### Open for Michael
+- [ ] Add the **mmproj flag** to the bonsai1 Sindri profile (📷 stays lit on Sindri —
+      fail-soft True — so a projector-less backend would error a photo turn, not degrade).
+- [ ] First real Bonsai session: normal conversation, glance at `/memory` for save quality,
+      then a photo turn. The 12B profile stays in Sindri as the known-good fallback.
+
 ## ✅ BUILT (2026-07-19) — Configurable LLM endpoint: Sindri replaces LM Studio
 
 Michael built **Sindri** (`H:\AxlyGitHub_H\Sindri`) — a llama.cpp `llama-server` GUI with a

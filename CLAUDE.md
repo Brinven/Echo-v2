@@ -119,7 +119,13 @@ Do not architect for dual-GPU now.
   `main.py`) swaps BOTH the voice model (`llm.set_model`) and the gate model (`ib.set_model`),
   preserving conversation history; first reply after a swap pauses while LM Studio JIT-loads.
   Full workflow doc: `echo_stage0/audition.md`. The harnesses honor `ECHO_MODEL` for batch testing.
-- **Preferred models**: Gemma 4B (fast, ~80 tok/s on this hardware) or similar small-medium local model
+- **Production model (since 2026-07-19): Bonsai 27B 1-bit** (`bonsai1` Sindri route;
+  dealignai Bonsai-27b-1bit-CRACK-GGUF, Q1_0, ~4.35 GB, base Qwen3.6-27B, multimodal via its
+  own mmproj). Audited before the switch: **eval_gate.py 11/11** (gate JSON clean, median
+  809ms, guest attribution + species anchor + ONE-object all hold) and **eval_persona_matrix
+  94/100 PASS** (all hard gates, hold 10/10, TTFT 0.219s, 96 tok/s). Replaced the Gemma 4 12B
+  QAT Hauhaucs (which remains a known-good fallback profile).
+- Historical: Gemma 4B (fast, ~80 tok/s on this hardware) or similar small-medium local model
 - **No cloud LLM**: do not add fallback to OpenAI, Anthropic, or any external API
 - **Fine-tuning**: considered as a future option, not in scope yet
 
@@ -1481,3 +1487,41 @@ Sindri vs ~60 on LM Studio for the same model.
 - **Tests:** `test_llm_endpoint.py` (offline) — resolver precedence/normalization, the
   `_sindri_state` parser, single-source assertions (including a sweep that FAILS if a
   hardcoded `1234/v1` sneaks into a runtime module), and the IbLite `lm_base` threading.
+
+---
+
+## ⚠ Production Model: Bonsai 27B 1-bit + the gate audition harness (2026-07-19)
+
+Michael switched Echo from the Gemma 4 12B QAT Hauhaucs to **Bonsai 27B 1-bit**
+(`bonsai1` route on Sindri; dealignai `Bonsai-27b-1bit-CRACK-GGUF`, Q1_0, ~4.35 GB,
+base Qwen3.6-27B, multimodal — the repack ships its own mmproj). "One of the reasons I
+built Sindri was to get that 27B available." Both halves of the dense-only contract were
+audited BEFORE the switch:
+
+- **`eval_gate.py` — NEW, the previously-missing audition harness.** eval_persona_matrix
+  audits character; nothing audited whether a candidate emits clean SIGNIFICANCE-GATE JSON
+  (the known harness gap). It runs 11 production-shaped turns through the real `run_gate`
+  + the `reject_reason` net (system-level scoring: an over-save the net catches passes,
+  with a note), plus a search-decider JSON sanity call. Skips cleanly if the server is
+  down; `--model` / `ECHO_MODEL` / `last_model` resolution like the other harnesses.
+- **Bonsai gate results: 11/11, median 809ms** (12B baseline ~1s), zero thinking leak
+  (no `--reasoning-budget` needed on this profile — measured, not assumed). Guest
+  attribution (Hillary→Hillary, Dave→Dave), searched-turn rejection, ephemera rejection,
+  species anchor (`Willie/species/goat`), ONE-object contract: all hold.
+- **One STYLE difference, deliberate accept (advisory in the harness, not a failure):**
+  the 12B weaves a passing-mention relation into the value ("…(Michael's sister)" style);
+  Bonsai deterministically (4/4) saves the bare fact (`Anna/allergies/cats`) and anchors
+  relations as their own attribute ONLY when the relation is the information
+  (`Anna/relation_to_michael/sister` — arguably a cleaner schema). Cost: a person only
+  ever mentioned in passing may lack a relation row until it's stated directly. The
+  harness soft-check keeps the difference visible for future candidates.
+- **Persona: eval_persona_matrix 94/100 PASS** — zero banned phrases, Michael Directive
+  held the full 20-turn hold, no as-an-AI; snark 8.0 / memory 10 / hold 10; TTFT 0.219s,
+  96.2 tok/s. The parroting advisory (7 echoes) is an AUDITION-MODE artifact: the harness
+  injects `CALIBRATION_EXAMPLES` by design; production runs `calibration=False`, so that
+  surface does not exist in real sessions.
+- **Open (Michael):** add the **mmproj flag to the bonsai1 Sindri profile** before the
+  first photo turn — `supports_vision()` is fail-soft True on Sindri, so the 📷 button
+  stays lit and a photo against a projector-less backend errors the turn instead of
+  degrading. Then the ordinary live pass: a real conversation, a `/memory` glance at what
+  the gate saved, a photo turn.
