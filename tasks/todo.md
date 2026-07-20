@@ -21,11 +21,25 @@ dealignai CRACK repack, Q1_0 ~4.35 GB, Qwen3.6-27B base, mmproj included in the 
       calibration=False).
 - [x] config.json `last_model` → `bonsai1`; CLAUDE.md ⚠ section + LLM Stack updated.
 
+### Vision on Bonsai — VERIFIED live (2026-07-19, same night)
+- [x] mmproj flag confirmed on the bonsai1 profile (Michael) — backend `/props` reports
+      `modalities.vision: true` (probed via the proxy passthrough).
+- [x] Echo's real path (`llm.image_content` content-array via `LLMClient`): solid
+      red/blue/green all named correctly at 256×256, spatial split (top red / bottom blue)
+      correct, follow-up with the image riding in HISTORY answered in 0.2s (keep-latest
+      contract intact). ⚠ A 64×64 test patch was misread ("Blue" for red) — below the
+      vision encoder's reliable floor, irrelevant in production (the /remote client sends
+      ≤1600px; don't audition vision with tiny synthetic patches).
+- [ ] Watch in the live pass: on the spatial test she improvised a fake callback ("like
+      your favorite hoodie from that trip") — that run used the bare DEFAULT_SYSTEM_PROMPT
+      with no memory block, so invented nostalgia was cheap. The production persona +
+      real memory block is the actual test; if she fabricates memories there, that's a
+      persona-layer flag (the "never claim a memory she doesn't have" line of thinking).
+
 ### Open for Michael
-- [ ] Add the **mmproj flag** to the bonsai1 Sindri profile (📷 stays lit on Sindri —
-      fail-soft True — so a projector-less backend would error a photo turn, not degrade).
 - [ ] First real Bonsai session: normal conversation, glance at `/memory` for save quality,
-      then a photo turn. The 12B profile stays in Sindri as the known-good fallback.
+      then a photo turn from the phone. The 12B profile stays in Sindri as the known-good
+      fallback.
 
 ## ✅ BUILT (2026-07-19) — Configurable LLM endpoint: Sindri replaces LM Studio
 
