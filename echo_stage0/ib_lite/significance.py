@@ -18,7 +18,10 @@ from openai import OpenAI, APITimeoutError
 
 logger = logging.getLogger(__name__)
 
-LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
+# Fallback only — production threads the resolved endpoint through IbLite(lm_base=)
+# → run_gate(lm_base=) (see llm.LLM_BASE_URL, the single source). ib_lite deliberately
+# imports nothing from the top-level app, so this constant stays as the standalone default.
+DEFAULT_LLM_URL = "http://127.0.0.1:1234/v1"
 
 GATE_SYSTEM = """You are Echo's memory gate. After each conversation turn, decide if anything is
 worth saving to Echo's LONG-TERM memory — things that will still be true and worth knowing weeks
@@ -165,7 +168,7 @@ def run_gate(
     correction: str | None = None,
     searched: bool = False,
     speaker: str = "Michael",
-    lm_base: str = LM_STUDIO_URL,
+    lm_base: str | None = None,
 ) -> dict:
     """Run the significance gate on a single turn.
 
@@ -182,9 +185,12 @@ def run_gate(
             JSON does NOT carry attribution — the pipeline stamps source_speaker from
             this same ground-truth value, so the model can't misattribute a write.
 
+        lm_base: OpenAI-compatible endpoint. None → DEFAULT_LLM_URL; the pipeline
+            passes the resolved llm.LLM_BASE_URL through IbLite.
+
     Returns a parsed dict; {"save": false} on any failure (never raises).
     """
-    client = OpenAI(base_url=lm_base, api_key="not-needed", timeout=10)
+    client = OpenAI(base_url=lm_base or DEFAULT_LLM_URL, api_key="not-needed", timeout=10)
 
     user_content = _build_user_content(
         turn_text, searched=searched, correction=correction, speaker=speaker

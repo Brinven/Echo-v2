@@ -34,10 +34,11 @@ def _fresh_db() -> Path:
 
 
 def _detect_model() -> str | None:
-    """Return the id of a model loaded in LM Studio, or None if unreachable."""
+    """Return the id of a model available on the LLM server, or None if unreachable."""
     try:
         from openai import OpenAI
-        models = OpenAI(base_url="http://127.0.0.1:1234/v1", api_key="x").models.list()
+        from llm import LLM_BASE_URL
+        models = OpenAI(base_url=LLM_BASE_URL, api_key="x").models.list()
         return models.data[0].id if models.data else None
     except Exception:
         return None

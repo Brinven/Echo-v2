@@ -17,9 +17,9 @@ import re
 import logging
 from openai import OpenAI, APITimeoutError
 
-logger = logging.getLogger(__name__)
+from llm import LLM_BASE_URL
 
-LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
+logger = logging.getLogger(__name__)
 
 SUMMARY_SYSTEM_PROMPT = (
     "You are a session summarizer. Extract structured information from "
@@ -178,7 +178,7 @@ def generate_summary(
         Validated summary dict with all frozen schema fields
     """
     client = OpenAI(
-        base_url=LM_STUDIO_URL,
+        base_url=LLM_BASE_URL,
         api_key="not-needed",
         timeout=60,  # generous timeout — correctness > speed
     )

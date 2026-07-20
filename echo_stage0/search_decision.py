@@ -25,9 +25,9 @@ import logging
 
 from openai import OpenAI, APITimeoutError
 
-logger = logging.getLogger(__name__)
+from llm import LLM_BASE_URL
 
-LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
+logger = logging.getLogger(__name__)
 
 # ── Stage A: keyword pre-filter ──────────────────────────────────────────────
 # Lookup signals (PRD §6). Recall-biased: generous set; over-firing just costs a
@@ -164,7 +164,7 @@ def decide_search(
     transcript: str,
     model: str,
     *,
-    lm_base: str = LM_STUDIO_URL,
+    lm_base: str = LLM_BASE_URL,
 ) -> dict:
     """Full decision: Stage A pre-filter → Stage B call (only if A hits).
 

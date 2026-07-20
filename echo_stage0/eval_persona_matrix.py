@@ -94,16 +94,16 @@ MODELS_JSON = Path(__file__).resolve().parent / "persona_matrix_models.json"
 # ── Model-list resolution ────────────────────────────────────────────────
 
 def _list_available() -> list[str] | None:
-    """Live model ids from LM Studio. Returns None if LM Studio is unreachable."""
+    """Live model ids from the LLM server. Returns None if it is unreachable."""
     from openai import OpenAI, APIConnectionError
-    from llm import LM_STUDIO_URL
+    from llm import LLM_BASE_URL
     try:
-        client = OpenAI(base_url=LM_STUDIO_URL, api_key="not-needed", timeout=10)
+        client = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=10)
         return [m.id for m in client.models.list().data]
     except APIConnectionError:
         return None
     except Exception as e:
-        print(f"  [Could not list LM Studio models: {e}]")
+        print(f"  [Could not list models: {e}]")
         return None
 
 
@@ -545,10 +545,11 @@ def main() -> int:
 
     available = _list_available()
     if available is None:
-        print("\n  [SKIP] LM Studio not reachable at 127.0.0.1:1234 — start it and load the models.")
+        from llm import LLM_BASE_URL
+        print(f"\n  [SKIP] LLM server not reachable at {LLM_BASE_URL} — start it and load the models.")
         return 0
     if not available:
-        print("\n  [SKIP] LM Studio is up but no models are loaded.")
+        print("\n  [SKIP] LLM server is up but no models are loaded.")
         return 0
 
     # Resolve each requested entry against the live list (exact id or unique substring).

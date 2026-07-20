@@ -1,6 +1,7 @@
 {
   "user_name": "Michael",
   "user_pronouns": "he/him",
+  "llm_base_url": "http://127.0.0.1:4610/v1",
   "last_model": "hauhaucs/gemma4-12b-qat-uncensored-hauhaucs-balanced@q4_k_m",
   "voice": "bf_lily",
   "stt_model": "large-v3-turbo"

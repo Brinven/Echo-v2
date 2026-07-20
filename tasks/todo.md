@@ -1,5 +1,60 @@
 # Echo — tasks/todo.md
 
+## ✅ BUILT (2026-07-19) — Configurable LLM endpoint: Sindri replaces LM Studio
+
+Michael built **Sindri** (`H:\AxlyGitHub_H\Sindri`) — a llama.cpp `llama-server` GUI with a
+v1.5 swap proxy on **http://127.0.0.1:4610/v1** (OpenAI-compatible; routes = opted-in
+profiles; backends JIT-spawned per request, one resident at a time). It replaces LM Studio
+for Echo. Echo had NO endpoint config — `http://127.0.0.1:1234/v1` was a constant duplicated
+in llm.py, significance.py, persona_check.py, search_decision.py, summarizer.py, control.py,
+eval_persona_matrix.py, smoke_ib_lite.py, and start-echo.bat.
+
+### Decisions
+- **Resolution: `ECHO_LLM_URL` env → config.json `llm_base_url` → LM Studio default** —
+  the exact `stt_model` pattern. Rollback = delete the config key. Normalized (scheme
+  added, trailing `/` stripped, `/v1` appended if missing — never doubled).
+- **Single source: `llm.resolve_llm_base_url()` → module constant `llm.LLM_BASE_URL`.**
+  Top-level modules (search_decision, persona_check, summarizer, eval harness, smoke)
+  import it. **ib_lite stays self-contained**: `IbLite(model_name, lm_base=)` threads it
+  to `run_gate` (the `set_model` pattern) — no ib_lite→top-level import.
+- **model_state() learns Sindri**: native `/api/v0/models` first (LM Studio), then Sindri
+  `/health` (`service=="sindri-proxy"`) matching `resident[].profile` via a routeSlug
+  mirror. supports_vision() unchanged — fail-soft True on Sindri (no `type` field there;
+  the 12B profile must carry its mmproj).
+- config.json gets `"llm_base_url": "http://127.0.0.1:4610/v1"` (committed — localhost,
+  not a secret).
+
+### Checklist — DONE (offline + live vs Sindri verified here)
+- [x] llm.py: resolver + `LLM_BASE_URL` (rename LM_STUDIO_URL) + native-root derivation +
+      Sindri `/health` fallback in model_state + honest server-neutral messages.
+- [x] ib_lite: `lm_base` threaded IbLite→_gate_worker→run_gate (default None → old const).
+- [x] search_decision / persona_check / summarizer / eval_persona_matrix / smoke_ib_lite:
+      defaults come from `llm.LLM_BASE_URL`.
+- [x] main.py: `IbLite(lm_base=)`, `EchoControl(lm_studio_url=f"{LLM_BASE_URL}/models")`,
+      user-facing strings say "LLM server", not "LM Studio". Dashboard tile label too
+      (wire key `lm_studio` in /api/state unchanged — display-only rename).
+- [x] start-echo.bat: pre-flight the CONFIGURED url (venv python one-liner — single source),
+      CRLF normalized + verified (115 CRLF / 0 lone LF); one-liner prints the URL correctly.
+- [x] config.json → `"llm_base_url": "http://127.0.0.1:4610/v1"`.
+- [x] NEW test_llm_endpoint.py: 14 checks incl. a sweep that FAILS if a hardcoded `1234/v1`
+      ever sneaks back into a runtime module. All green.
+- [x] Adjacent suites green (significance, webui, chat, persona_check, guest_memory).
+- [x] LIVE vs Sindri: resolver → 4610; auto-picked `bonsai1` (only route; stale last_model
+      skipped gracefully); model_state `not-loaded` → completion `'ready'` in **5.1s cold**
+      (JIT spawn incl., production kwargs accepted by llama.cpp) → state `loaded` via the
+      /health resident match. Vision probe fail-soft True.
+- [x] Docs: CLAUDE.md ⚠ section + LLM Stack pointer; this file.
+
+### Open for Michael
+- [ ] In Sindri: create the **Hauhaucs 12B profile** with its **mmproj** (vision) and
+      **`--reasoning-budget 0`** (llama.cpp may ignore the per-request
+      `reasoning_effort:"none"` LM Studio honored — server-side off is the reliable knob);
+      enable its proxy route.
+- [ ] First 12B-on-Sindri session: verify the gate still emits clean JSON (`/memory` shows
+      sane saves) and TTFT has no silent thinking preamble — the CLAUDE.md rule: any new
+      server/model behind the gate needs the reasoning-off re-verify.
+- [ ] A photo turn on Sindri (proves mmproj + the vision content-array path).
+
 ## ✅ BUILT (2026-07-18) — Chat interface (text turns) + location hint on remote turns
 
 Plan (approved): `~/.claude/plans/ticklish-cuddling-sifakis.md`. Michael's decisions: all

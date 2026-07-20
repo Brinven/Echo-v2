@@ -35,7 +35,7 @@ from audio_queue import AudioQueue
 from timer import PipelineTimer
 from logger import SessionLogger
 from stt import STTEngine, DEFAULT_MODEL_SIZE as DEFAULT_STT_MODEL
-from llm import (LLMClient, image_content, collapse_image_history,
+from llm import (LLMClient, LLM_BASE_URL, image_content, collapse_image_history,
                  doc_content, collapse_doc_history)
 from tts import TTSEngine
 from vad import VADDetector, FRAME_SIZE
@@ -532,7 +532,7 @@ def run_streaming_pipeline(
     # advancing the exchange counter or spending a search, and don't fake a persona reply out of
     # an error: an explicit notice beats a silent fallback.
     if not llm.model_name:
-        print("  [No model selected — pick one in the dashboard dropdown (LM Studio must have it loaded)]")
+        print("  [No model selected — pick one in the dashboard dropdown (the LLM server must offer it)]")
         return None
 
     search_block = ""
@@ -914,7 +914,7 @@ def main():
     vad = VADDetector()
 
     # Initialize memory (Ib-Lite: local SQLite, Core + Policy injected at session start)
-    ib = IbLite(llm.model_name)
+    ib = IbLite(llm.model_name, lm_base=LLM_BASE_URL)
 
     # Preload the Ib-Lite embedder (Stage 8.1). all-MiniLM-L6-v2 is a lazy singleton that used to
     # load on the FIRST encode() — i.e. during the first turn's memory retrieval — stalling Echo
@@ -1049,6 +1049,7 @@ def main():
         vad_available=vad.available, list_models=llm.list_models,
         list_voices=tts.list_voices, voice_name=tts.voice,
         model_state=llm.model_state, supports_vision=llm.supports_vision,
+        lm_studio_url=f"{LLM_BASE_URL}/models",
     )
     _webui = start_webui(control)
     if _webui:
@@ -1144,7 +1145,7 @@ def main():
         if not llm.supports_vision():
             if collapse_image_history(history):
                 print("  [photo context dropped — the new model can't see images]")
-        print(f"  [Now using {new_model} — first reply may pause while LM Studio loads it]")
+        print(f"  [Now using {new_model} — first reply may pause while the server loads it]")
 
     def do_voice_preview(name: str):
         """Speak the sample line in `name` WITHOUT adopting it. Main loop only, while idle.

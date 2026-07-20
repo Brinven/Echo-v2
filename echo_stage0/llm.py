@@ -1,7 +1,12 @@
 """
 LLM wrapper for Echo.
 
-Connects to LM Studio's OpenAI-compatible API at localhost:1234.
+Connects to any OpenAI-compatible server — Sindri (llama.cpp swap proxy, the current
+production server) or LM Studio (the fallback default). The endpoint is configurable:
+ECHO_LLM_URL env var → config.json `llm_base_url` → the LM Studio default. Everything
+in Echo that talks to the LLM resolves through LLM_BASE_URL below — never a second
+hardcoded URL.
+
 Auto-detects loaded models. Supports both blocking and streaming generation.
 """
 
@@ -127,8 +132,77 @@ DEFAULT_SYSTEM_PROMPT = (
     "saying \"I remember\" or \"last time we spoke\". Simply know it and let "
     "it inform how you talk to him."
 )
-LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
+# ── LLM endpoint (Sindri / LM Studio / any OpenAI-compatible server) ──────
+# Single source for the whole app. The gate (ib_lite), the search decider, the persona
+# probe, the summarizer, the eval harness, and the dashboard health probe all resolve
+# through this — adding a second hardcoded URL anywhere recreates the 2026-07-19 hunt.
+_DEFAULT_LLM_URL = "http://127.0.0.1:1234/v1"   # LM Studio (pre-Sindri default)
+
+
+def resolve_llm_base_url(env: dict | None = None, config_path: Path | None = None) -> str:
+    """ECHO_LLM_URL env → config.json `llm_base_url` → LM Studio default.
+
+    Same pattern as the STT model override (env wins, config is the normal path,
+    a missing key is the pre-Sindri behavior — rollback is deleting the key).
+    Normalized so a hand-typed value can't break the OpenAI client: scheme added if
+    missing, trailing slashes stripped, `/v1` appended exactly once (never doubled).
+    Fail-soft: any config problem falls through to the default. `env`/`config_path`
+    are test seams.
+    """
+    env = os.environ if env is None else env
+    raw = (env.get("ECHO_LLM_URL") or "").strip()
+    if not raw:
+        path = config_path or (Path(__file__).resolve().parent / "config.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = str(json.load(f).get("llm_base_url") or "").strip()
+        except (OSError, json.JSONDecodeError):
+            raw = ""
+    if not raw:
+        return _DEFAULT_LLM_URL
+    base = raw.rstrip("/")
+    if "://" not in base:
+        base = "http://" + base
+    if not base.lower().endswith("/v1"):
+        base = base + "/v1"
+    return base
+
+
+LLM_BASE_URL = resolve_llm_base_url()
+
+# The server's native root (no /v1) — LM Studio's /api/v0/models and Sindri's /health
+# live here. Derived, never configured separately.
+_NATIVE_ROOT = LLM_BASE_URL[: -len("/v1")]
+# Short host:port label for startup prints ("via 127.0.0.1:4610").
+_SERVER_LABEL = _NATIVE_ROOT.split("://")[-1]
+
 TIMEOUT_S = 30
+
+
+def _route_slug(name: str) -> str:
+    """Mirror of Sindri's routeSlug (src/main/profiles.js): a proxy route defaults to the
+    slugified profile name, and /health reports resident PROFILE names — this bridges the
+    two so model_state can match the active model (a route id) against residency."""
+    s = re.sub(r"[^a-z0-9._-]+", "-", str(name or "").lower()).strip("-")
+    return s or "profile"
+
+
+def _sindri_state(health: dict, model_id: str) -> str | None:
+    """Residency from a sindri-proxy /health payload; None if this isn't Sindri.
+
+    Pure (unit-tested offline). Best-effort match: an explicit proxy_route that differs
+    from the slugified profile name will read as 'not-loaded' — advisory dot, fail-soft.
+    Only `running` counts as loaded; spawning/loading backends aren't serving yet.
+    """
+    if not isinstance(health, dict) or health.get("service") != "sindri-proxy":
+        return None
+    want = _route_slug(model_id)
+    for entry in health.get("resident") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("state") == "running" and _route_slug(entry.get("profile", "")) == want:
+            return "loaded"
+    return "not-loaded"
 
 # Character-pass sampler (PRD Stage 5 Part 2 §7). Loaded from echo_sampler.json at
 # startup; these are the fail-soft defaults if the file is missing or corrupt. The
@@ -168,7 +242,7 @@ class LLMClient:
 
     def __init__(self, pinned: str | None = None, last_model: str | None = None):
         self._client = OpenAI(
-            base_url=LM_STUDIO_URL,
+            base_url=LLM_BASE_URL,
             api_key="not-needed",
             timeout=TIMEOUT_S,
         )
@@ -237,8 +311,9 @@ class LLMClient:
             # Name VRAM too: LM Studio drops the connection when a load OOMs, which lands here
             # looking exactly like "the server is down" (gpu.py explains why).
             print(
-                "\n ERROR: Can't reach LM Studio at 127.0.0.1:1234.\n"
-                "  Either it isn't running, or it's up but couldn't serve a model.\n"
+                f"\n ERROR: Can't reach the LLM server at {LLM_BASE_URL}.\n"
+                "  Either it isn't running (start Sindri, or LM Studio if configured),\n"
+                "  or it's up but couldn't serve a model.\n"
             )
             hint = gpu.vram_hint()
             if hint:
@@ -250,26 +325,26 @@ class LLMClient:
             resolved, matches = _resolve_pin(pin, available)
             if resolved:
                 self._model = resolved
-                print(f"  LLM: {self._model} via LM Studio (pinned '{pin}')")
+                print(f"  LLM: {self._model} via {_SERVER_LABEL} (pinned '{pin}')")
                 return
             print(f"  LLM: pin '{pin}' matched {len(matches)} models — ignoring it."
                   if matches else f"  LLM: nothing matches pin '{pin}' — ignoring it.")
 
         if last_model and last_model in available:
             self._model = last_model
-            print(f"  LLM: {self._model} via LM Studio (last used)")
+            print(f"  LLM: {self._model} via {_SERVER_LABEL} (last used)")
             return
 
         if len(available) == 1:
             self._model = available[0]
-            print(f"  LLM: {self._model} via LM Studio (only one available)")
+            print(f"  LLM: {self._model} via {_SERVER_LABEL} (only one available)")
             return
 
         self._model = None
         if last_model:
             print(f"  LLM: last-used model is not available ({last_model})")
-        print("  LLM: NO MODEL SELECTED — load one in LM Studio, then pick it in the dashboard "
-              "dropdown. Echo can't reply until then.")
+        print("  LLM: NO MODEL SELECTED — load one on the LLM server, then pick it in the "
+              "dashboard dropdown. Echo can't reply until then.")
 
     def set_model(self, name: str) -> None:
         """Swap the active model in place (mid-chat hot-swap). The gate is swapped separately."""
@@ -287,21 +362,33 @@ class LLMClient:
         """Is the ACTIVE model actually resident in VRAM? 'loaded' | 'not-loaded' | 'unknown'.
 
         The OpenAI-compatible /v1/models lists every model regardless of whether it's loaded, so it
-        can't answer this — LM Studio's native /api/v0/models carries a per-model `state`. That
-        distinction is the whole point: "not-loaded" plus a full card is the VRAM problem Michael
-        hits when Invoke (or a forgotten model) owns the GPU. Fail-soft: 'unknown' on any error.
+        can't answer this. Two native probes, in order:
+          1. LM Studio's /api/v0/models — per-model `state` field.
+          2. Sindri's /health — `resident` lists the backends that actually have a live
+             llama-server (state running/loading/spawning). Only `running` counts as loaded.
+        The distinction is the whole point: "not-loaded" plus a full card is the VRAM problem
+        Michael hits when Invoke (or a forgotten model) owns the GPU. Fail-soft: 'unknown' on
+        any error.
 
         Not an error by itself — Echo's model is normally 'not-loaded' until the first request
-        JIT-loads it. Read it alongside gpu.vram_usage().
+        JIT-loads (LM Studio) or JIT-spawns (Sindri) it. Read it alongside gpu.vram_usage().
         """
         if not self._model:
             return "unknown"
         try:
-            resp = httpx.get("http://127.0.0.1:1234/api/v0/models", timeout=2.0)
+            resp = httpx.get(f"{_NATIVE_ROOT}/api/v0/models", timeout=2.0)
             resp.raise_for_status()
             for entry in resp.json().get("data", []):
                 if entry.get("id") == self._model:
                     return entry.get("state") or "unknown"
+        except (httpx.HTTPError, ValueError, KeyError):
+            pass
+        try:
+            resp = httpx.get(f"{_NATIVE_ROOT}/health", timeout=2.0)
+            resp.raise_for_status()
+            state = _sindri_state(resp.json(), self._model)
+            if state:
+                return state
         except (httpx.HTTPError, ValueError, KeyError):
             pass
         return "unknown"
@@ -325,7 +412,7 @@ class LLMClient:
             return cached[1]
         value = True
         try:
-            resp = httpx.get("http://127.0.0.1:1234/api/v0/models", timeout=1.5)
+            resp = httpx.get(f"{_NATIVE_ROOT}/api/v0/models", timeout=1.5)
             resp.raise_for_status()
             for entry in resp.json().get("data", []):
                 if entry.get("id") == model:
@@ -374,7 +461,8 @@ class LLMClient:
         except APITimeoutError:
             raise TimeoutError(
                 f"LLM did not respond within {TIMEOUT_S}s. "
-                "Check LM Studio -- the model may be too large for this hardware."
+                "Check the LLM server -- the model may still be loading (Sindri swaps "
+                "models on demand) or be too large for this hardware."
             )
 
     def stream_sentences(
@@ -410,7 +498,8 @@ class LLMClient:
         except APITimeoutError:
             raise TimeoutError(
                 f"LLM did not respond within {TIMEOUT_S}s. "
-                "Check LM Studio -- the model may be too large for this hardware."
+                "Check the LLM server -- the model may still be loading (Sindri swaps "
+                "models on demand) or be too large for this hardware."
             )
 
         buffer = ""

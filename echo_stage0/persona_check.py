@@ -30,12 +30,11 @@ from datetime import datetime
 
 from openai import OpenAI, APITimeoutError
 
+from llm import LLM_BASE_URL
 from persona import BANNED_PHRASES, banned_hits, adopts_mike
 from session import SESSIONS_DIR
 
 logger = logging.getLogger(__name__)
-
-LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
 
 # Fire the probe every N exchanges (not every turn — bounds LM Studio load and avoids
 # contending with the significance gate that fires each turn). Judge the last K Echo replies.
@@ -84,7 +83,7 @@ def _parse_json(raw: str) -> dict:
     return {"in_character": True, "_error": "json_parse_failed", "_raw": raw[:300]}
 
 
-def run_self_check(recent_replies: list[str], model: str, lm_base: str = LM_STUDIO_URL) -> dict:
+def run_self_check(recent_replies: list[str], model: str, lm_base: str = LLM_BASE_URL) -> dict:
     """Run the persona self-check on Echo's recent replies.
 
     Returns a parsed dict. Fail-SAFE: any failure (timeout, connection, empty content,

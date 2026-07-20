@@ -219,7 +219,7 @@
   </div>
 
   <div class="health">
-    <div class="stat"><span id="d-lm" class="dot"></span><div><div class="lbl">LM Studio</div><div class="val" id="v-lm">—</div></div></div>
+    <div class="stat"><span id="d-lm" class="dot"></span><div><div class="lbl">LLM Server</div><div class="val" id="v-lm">—</div></div></div>
     <div class="stat"><span id="d-ko" class="dot"></span><div><div class="lbl">Kokoro TTS</div><div class="val" id="v-ko">—</div></div></div>
     <div class="stat"><span id="d-model" class="dot"></span><div><div class="lbl">Model</div><div class="val" id="v-model">—</div></div></div>
     <div class="stat"><span id="d-vram" class="dot"></span><div><div class="lbl">VRAM</div><div class="val" id="v-vram">—</div></div></div>
@@ -385,7 +385,7 @@ function renderState(s){
   vb.className = s.vad_enabled ? "on" : "";
 
   let hint = s.muted ? "Mic muted — tap Mute to resume." : "";
-  if(!hint && !s.model) hint = "No model selected — load one in LM Studio, then pick it above.";
+  if(!hint && !s.model) hint = "No model selected — load one on the LLM server, then pick it above.";
   if(!hint && s.pending_model) hint = "Switching model after this turn…";
   if(!hint && s.pending_voice) hint = "New voice starts on her next reply…";
   if(!hint && s.vad_enabled) hint = "Hands-free: just talk, or hold Talk to be deliberate.";
@@ -582,7 +582,7 @@ async function loadModels(){
   const sel = $("model-sel");
   if(document.activeElement === sel) return;   // don't yank the list open under the user
   sel.innerHTML = r.models.map(m=>`<option value="${esc(m)}"${m===r.current?" selected":""}>${esc(m)}</option>`).join("");
-  if(!r.models.length) sel.innerHTML = `<option>(LM Studio unreachable)</option>`;
+  if(!r.models.length) sel.innerHTML = `<option>(LLM server unreachable)</option>`;
   modelsLoaded = true;
 }
 $("model-sel").addEventListener("focus", ()=>{ if(!modelsLoaded) loadModels(); });
@@ -591,7 +591,7 @@ $("model-sel").onchange = e=>{
   api("/api/model","POST",{name:e.target.value}).then(loopState);
 };
 loadModels();
-// Keep retrying while empty: Michael may load a model in LM Studio AFTER Echo started.
+// Keep retrying while empty: Michael may load a model on the server AFTER Echo started.
 setInterval(()=>{ if(!modelsLoaded) loadModels(); }, 15000);
 
 // ── Kokoro voice dropdown (audition voices without editing code) ──

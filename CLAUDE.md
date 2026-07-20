@@ -105,7 +105,11 @@ Do not architect for dual-GPU now.
 
 ## LLM Stack
 
-- **Runtime**: LM Studio, localhost:1234, OpenAI-compatible API (`/v1/`)
+- **Runtime (since 2026-07-19): Sindri** — Michael's llama.cpp wrapper (`H:\AxlyGitHub_H\Sindri`),
+  swap proxy at `http://127.0.0.1:4610/v1`. LM Studio (:1234) remains the fallback default when
+  no endpoint is configured. **See ⚠ Configurable LLM Endpoint at the end of this file** — the
+  endpoint is resolved ONCE in `llm.py`; never hardcode a server URL anywhere else.
+- Historical: LM Studio, localhost:1234, OpenAI-compatible API (`/v1/`)
 - **Package**: `openai` Python package pointed at local endpoint
 - **Model selection** (Stage 5 Part 2, 2026-06-24): live `/v1/models` + a **filter-picker** in
   `llm.py` (`_pick_interactive`) — type a substring to narrow the (huge) list, number to pick,
@@ -1430,3 +1434,50 @@ Remote Voice sink substitution.
   guest identity picker, a speak-typed-replies toggle, the Colorado named location, chat on
   the kiosk, auth, OCR for scanned PDFs.
 
+
+---
+
+## ⚠ Configurable LLM Endpoint (2026-07-19) — Sindri replaces LM Studio
+
+Echo's LLM server is now **Sindri** (`H:\AxlyGitHub_H\Sindri`) — Michael's llama.cpp
+`llama-server` GUI with a **swap proxy on `http://127.0.0.1:4610/v1`**: OpenAI-compatible,
+routes = opted-in profiles (each an id in `/v1/models`), backends **JIT-spawned per request**
+(one resident at a time, previous drained and stopped). Measured 2026-07-19: ~95 tok/s on
+Sindri vs ~60 on LM Studio for the same model.
+
+- **Resolution: `ECHO_LLM_URL` env → config.json `llm_base_url` → LM Studio `:1234` default**
+  (the `stt_model` pattern; rollback = delete the config key). Resolved ONCE at import in
+  `llm.resolve_llm_base_url()` → **`llm.LLM_BASE_URL`, the app-wide single source**. Values
+  are normalized (scheme added, trailing `/` stripped, `/v1` appended exactly once) so a
+  hand-typed URL can't produce a double-`/v1` path.
+- **Who gets it how:** `LLMClient`, `search_decision.decide_search`, `persona_check.
+  run_self_check`, `summarizer.generate_summary`, `eval_persona_matrix`, `smoke_ib_lite`
+  import/default to `llm.LLM_BASE_URL`. **ib_lite stays self-contained**: `IbLite(model_name,
+  lm_base=)` threads it to `run_gate` (the `set_model` pattern) — significance.py keeps its
+  own `DEFAULT_LLM_URL` fallback and imports nothing top-level. The dashboard health probe
+  gets `lm_studio_url=f"{LLM_BASE_URL}/models"` from `main.py` (the wire key stays
+  `lm_studio` in `/api/state`; the tile label now reads "LLM Server"). `start-echo.bat`
+  pre-flights the CONFIGURED url via a venv-python one-liner importing `llm` — the launcher
+  can never disagree with what Echo dials. **Never add a second hardcoded endpoint.**
+- **`llm.model_state()` speaks both native dialects:** LM Studio's `/api/v0/models` (per-model
+  `state`) first, then **Sindri's `/health`** (`service=="sindri-proxy"`; `resident[]` holds
+  live backends — only `state:"running"` counts as loaded, matched via `_route_slug()`, a
+  mirror of Sindri's `routeSlug`). Live-verified both ways: `not-loaded` before the first
+  request, `loaded` after. `supports_vision()` stays fail-soft **True** on Sindri (no `type`
+  field there — LM Studio's native endpoint was the only source; the server itself is the
+  authority and reports clearly if a model can't take images).
+- **Sindri behavior worth knowing:** first request to a cold route JIT-spawns llama-server
+  (live smoke: 5.1s including spawn; the proxy queues up to 120s). During a cold **streamed**
+  request the proxy emits SSE comment heartbeats (`: sindri-loading`) — the OpenAI SDK skips
+  comments, so Echo just sees a longer TTFT. Requests are routed by the `model` field;
+  `last_model` ids from LM Studio won't match Sindri routes — with exactly one route Echo
+  auto-picks it, otherwise pick in the dashboard dropdown (which now effectively drives
+  Sindri's model swapping).
+- **⚠ Open items for the 12B on Sindri (Michael):** the Hauhaucs 12B profile needs its
+  **mmproj** flag (vision) and **`--reasoning-budget 0`** (llama.cpp may ignore the
+  per-request `reasoning_effort:"none"` that LM Studio honored — server-side off is the
+  reliable knob; the CLAUDE.md gate rule applies: any new server/model behind the gate needs
+  the reasoning-off re-verify — check `/memory` saves + TTFT on the first session).
+- **Tests:** `test_llm_endpoint.py` (offline) — resolver precedence/normalization, the
+  `_sindri_state` parser, single-source assertions (including a sweep that FAILS if a
+  hardcoded `1234/v1` sneaks into a runtime module), and the IbLite `lm_base` threading.

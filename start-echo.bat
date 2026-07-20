@@ -12,9 +12,11 @@ REM     python -m venv echo_stage0\.venv
 REM     echo_stage0\.venv\Scripts\python -m pip install -r echo_stage0\requirements.txt
 REM
 REM Servers this launcher handles for you:
-REM   - LM Studio at 127.0.0.1:1234 with a model loaded (target: gemma-4-12b-it-qat).
-REM     It's a GUI app, so this launcher only CHECKS it -- open LM Studio and load
-REM     the model yourself. main.py stops with a clear message if it's down.
+REM   - The LLM server (Sindri proxy at 127.0.0.1:4610 -- configured in
+REM     echo_stage0\config.json `llm_base_url` / the ECHO_LLM_URL env var; falls back
+REM     to LM Studio :1234 if unset). GUI apps, so this launcher only CHECKS the
+REM     endpoint -- open Sindri (or LM Studio) yourself. main.py stops with a clear
+REM     message if it's down.
 REM   - Kokoro-FastAPI at 127.0.0.1:8880. This launcher AUTO-STARTS it if it isn't
 REM     already running (from KOKORO_BAT below) and waits until it responds, so you
 REM     only have to run THIS file.
@@ -48,12 +50,16 @@ if not exist ".venv\Scripts\python.exe" (
 echo.
 echo  ---- Pre-flight ----
 
-REM ---- LM Studio (GUI app -- we can only check it, not start it) ----
-curl -s -m 2 -o NUL "http://127.0.0.1:1234/v1/models" 2>nul
+REM ---- LLM server (GUI app -- we can only check it, not start it) ----
+REM Resolve the configured endpoint through llm.py so this pre-flight can never
+REM disagree with what Echo actually dials (single source: llm.LLM_BASE_URL).
+set "LLM_URL=http://127.0.0.1:1234/v1"
+for /f "usebackq delims=" %%u in (`".venv\Scripts\python.exe" -c "from llm import LLM_BASE_URL; print(LLM_BASE_URL)" 2^>nul`) do set "LLM_URL=%%u"
+curl -s -m 2 -o NUL "%LLM_URL%/models" 2>nul
 if errorlevel 1 (
-    echo  LM Studio : NOT reachable at 127.0.0.1:1234 -- open LM Studio and load a model.
+    echo  LLM server: NOT reachable at %LLM_URL% -- start Sindri ^(or LM Studio^) and serve a model.
 ) else (
-    echo  LM Studio : reachable.
+    echo  LLM server: reachable at %LLM_URL%.
 )
 
 REM ---- Kokoro-FastAPI (auto-start if it's not already up) ----

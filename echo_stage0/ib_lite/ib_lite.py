@@ -65,8 +65,13 @@ def _new_id() -> str:
 
 
 class IbLite:
-    def __init__(self, model_name: str, db_path: Path | None = None):
+    def __init__(self, model_name: str, db_path: Path | None = None,
+                 lm_base: str | None = None):
         self._model = model_name
+        # LLM endpoint for the significance gate. None → significance.DEFAULT_LLM_URL.
+        # Threaded (like _model / set_model) so ib_lite never imports top-level llm.py —
+        # main passes llm.LLM_BASE_URL, the app-wide single source (Sindri/LM Studio).
+        self._lm_base = lm_base
         self._db_path = db_path
         self._conn = None
         self._available = False
@@ -274,7 +279,8 @@ class IbLite:
         speaker: str = "Michael",
     ) -> None:
         try:
-            payload = run_gate(turn_text, self._model, searched=searched, speaker=speaker)
+            payload = run_gate(turn_text, self._model, searched=searched, speaker=speaker,
+                               lm_base=self._lm_base)
             if not isinstance(payload, dict) or not payload.get("save"):
                 return
 
@@ -282,7 +288,8 @@ class IbLite:
             if not ok:
                 # Retry once with the validation error as a correction hint.
                 payload = run_gate(turn_text, self._model, correction=err,
-                                   searched=searched, speaker=speaker)
+                                   searched=searched, speaker=speaker,
+                                   lm_base=self._lm_base)
                 if not isinstance(payload, dict) or not payload.get("save"):
                     return
                 ok, err = validate_write(payload)
