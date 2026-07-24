@@ -135,6 +135,13 @@ def run_anchor_guidance() -> None:
     assert "say WHAT they are" in GATE_SYSTEM, "anchoring guidance dropped from GATE_SYSTEM"
     assert "species" in GATE_SYSTEM and "relation to Michael" in GATE_SYSTEM
     assert 'value="a goat; likes to tip things over"' in GATE_SYSTEM, "worked example dropped"
+
+    # Attribute-naming guidance (2026-07-24 — the 26B MoE audition): the model judged
+    # "Jeep paid off" save-worthy but named the attribute bare "status", which the net
+    # correctly screens as ephemeral — a durable fact lost to a naming collision, 2/2
+    # deterministic. The prompt steers naming (primary defense); the net stays unchanged.
+    assert 'never a bare "status"' in GATE_SYSTEM, "attribute-naming guidance dropped"
+    assert 'attribute="status" loses it' in GATE_SYSTEM, "naming worked-example dropped"
     # Live-caught regression (2026-07-18): the first wording made the model weave the anchor
     # into the ENTITY ("Anna (Michael's sister)"), splitting the entity key. The rule that
     # the anchor lives in the value and the entity stays plain must not be lost.

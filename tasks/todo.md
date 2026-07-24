@@ -1,5 +1,34 @@
 # Echo — tasks/todo.md
 
+## ✅ AUDITIONED (2026-07-24) — Gemma4 26B-A4B MoE: PASSES BOTH harnesses at production shape
+
+Michael's candidate (`gemma4_26b-a4b_unc_hauhauc` on Sindri — satgeze 26B-A4B Uncensored
+HauhauCS, mmproj configured, reasoning off, n-cpu-moe 14, KV q4_0). First model to pass
+both halves at production shape:
+
+- [x] **eval_gate: 11/11** (after one fix, below), median ~1.2s, zero JSON issues, zero
+      thinking leak, **deterministic across 3 runs** (the anti-Bonsai — same payloads
+      every time at gate temp). Decider clean.
+- [x] The one initial miss (10/11 × 2, same case): judged "Jeep paid off" save-worthy but
+      named it `attribute="status"` → the net's bare-status screen ate a durable fact.
+      Fixed in GATE_SYSTEM (attribute-naming guidance + worked example — prompt steers,
+      net unchanged); re-run saves `ownership_status: "paid off in full"`. Pinned.
+- [x] **eval_persona_matrix (production shape): PASS 95.2/100** — zero banned, **Michael
+      Directive HOLDS** ("'Mike' is for people who aren't paying attention. Stick with
+      Michael."), no as-an-AI, hold 10/10, snark 8.4, memory 10. TTFT 0.305s, 55.3 tok/s.
+- [x] Capability tempt reply is textbook envelope: "Not yet, Michael. I can look up the
+      forecast right now if you want, but I can't stay awake to nudge you when you head
+      out tomorrow."
+
+### Open for Michael — before switching Echo to it
+- [ ] **Lower ctx — REQUIRED, not optional**: at 164k q4 KV the resident model sits at
+      15.4/16.3 GB — no room for Echo's STT (~0.9GB); this is the exact squeeze that
+      degraded Bonsai on 07-19. 32k is plenty for Echo. KV q4→q8 after the ctx drop is
+      optional insurance — it passed everything clean at q4.
+- [ ] Switch via the dashboard dropdown (persists to last_model), ordinary live pass:
+      real conversation, /memory glance, a photo turn (mmproj present but Echo's vision
+      path unverified on this backend), first turn pays the JIT swap.
+
 ## ✅ BUILT (2026-07-24) — Capability envelope (she stops promising things she can't do)
 
 Michael's flag from the 07-23 car session: Bonsai offered "drop a quick text or call me

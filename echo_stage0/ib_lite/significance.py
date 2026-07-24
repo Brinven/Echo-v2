@@ -65,6 +65,9 @@ Guidance:
   "Anna (Michael's sister)". A bare name with no anchor ages badly.
 - Be specific: "Jeep needs new shocks" not "car stuff".
 - Facts use entity/attribute/value: entity="Michael", attribute="favorite_bird", value="crows".
+- Name the attribute for WHAT the information is, never a bare "status", "state", or "mood" —
+  those read as momentary and get discarded. attribute="ownership", value="paid off in full"
+  keeps a durable fact durable; attribute="status" loses it.
 - If uncertain, return {"save": false}.
 """
 

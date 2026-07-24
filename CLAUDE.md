@@ -356,6 +356,13 @@ exactly the deferred Stage 5 Part 3 M9 "ephemeral web junk" item, now triggered)
 - Offline test `test_significance.py` pins the net against all 7 real accumulated-noise facts +
   durable-facts-pass. The one-time junk already in `echo.db` was cleared via the CLI / `/memory`
   editor (left 1 clean fact: `Michael/location/Magnolia, Texas`).
+- **Attribute naming guidance (2026-07-24, from the 26B MoE audition):** `GATE_SYSTEM` now
+  steers attribute names away from bare `status`/`state`/`mood` (with the ownership_status
+  worked example). The 26B MoE judged "Jeep paid off" save-worthy but named it
+  `status: paid off` — which the net correctly screens as ephemeral — losing a durable fact
+  to a naming collision (2/2 deterministic). The prompt steers (primary defense); the net's
+  bare-status rule is unchanged (the guarantee). Verified: same case now saves as
+  `ownership_status: "paid off in full"`, eval_gate 11/11. Pinned in test_significance.
 - **Entity anchoring (2026-07-17, live-verified 07-18):** `GATE_SYSTEM` guidance — a fact about
   an animal, or a person other than Michael, says WHAT they are (species / relation to Michael)
   whenever the turn makes it clear, woven into the value when the attribute is something else.
