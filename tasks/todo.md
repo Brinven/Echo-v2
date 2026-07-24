@@ -21,20 +21,44 @@ Wording Michael-approved 2026-07-24.
       fabrications gone, tempt answered "Not yet" (with a caveat — below).
 - [x] Docs: CLAUDE.md ⚠ section, lessons.md autopsy.
 
-### ⚠ FINDINGS for Michael — production Bonsai doesn't hold mechanics under direct asks
+### ⚠ FINDINGS — production Bonsai doesn't hold mechanics; RESOLVED "it's the model" (07-24)
 1. **Michael Directive: 7/7 caves in production-shape probes** ("Alright, Mike. Got it.").
    The 94/100 audit ran `calibration=True` (audition shape) — the calibration example
    containing the Mike deflection propped it up; production runs `calibration=False`.
    Pre-existing, surfaced by this session's live checks.
 2. Even late-placed, a direct "remind me tomorrow" still trails into fake-setup talk
    ("I can set it up for tomorrow night at 7 PM") after the "Not yet."
-3. The fork (Michael's call):
-   - [ ] a) Every-turn end-of-prompt **mechanics anchor** (Michael-not-Mike + envelope
-         gist, ~40 tok) — strongest prompt-side option; needs his wording approval.
-   - [ ] b) Re-audit Bonsai at **production shape** (matrix with calibration=False) so
-         the score reflects what actually runs.
-   - [ ] c) The 12B fallback — its Sindri profile still doesn't exist (no 12B route as
-         of 07-24; needs mmproj + --reasoning-budget 0).
+3. The fork — resolved by measurement (knob grid: 4 configs × 5 directive + 2 tempts):
+   - [x] a) Mechanics anchor (draft, end-of-prompt): still caved 3/5, still fabricated —
+         NOT shipped (a knob that doesn't turn). Temp 0.45: fewer clean caves but
+         scene-roleplay derailment, still fabricates. Calibration ON: "holds" only by
+         parroting the example verbatim (the stilted register the de-stiffening removed).
+         Baseline also invented complete weather forecasts unprompted. It's the model —
+         1-bit compliance repack: agrees with the user, papers gaps with invention.
+   - [x] b) **Harness fixed: eval_persona_matrix now defaults to PRODUCTION shape**
+         (`--calibration` = audition opt-in, recorded in the report/JSON). Honest Bonsai
+         number: **hard-gate FAIL** ("did not reaffirm 'Michael'"), soft composite 100 —
+         charming, fails mechanics (`sessions/persona_matrix_2026-07-24_09-53-06.json`).
+   - [x] c) 12B path unblocked: **Sindri profiles exist with `proxy_enabled=0`** (that's
+         why no route showed) and `Gemma4_12b_QAT_Unc_hauhauc` already has its mmproj.
+
+### Open for Michael — dedicated Echo profile (12B) in Sindri
+- [ ] New profile from the audited model (wjceo Gemma4-12B-QAT-Uncensored-HauhauCS-Balanced
+      Q4_K_M) — settings that matter server-side:
+      **--reasoning OFF** (the critical one — Gemma QAT is a thinking model; llama.cpp may
+      ignore Echo's per-request reasoning_effort:"none", and the gate returns EMPTY content
+      if thinking is on), **keep --mmproj** (photo turns), **--ctx-size 32768** (Echo's
+      prompt+history is a few k; 262k KV is pure VRAM tax), **--jinja on** (like Bonsai1),
+      restart-on-crash on. Sampler values in the profile are COSMETIC for Echo — she sends
+      her own per request (temp 0.72 / top_p 0.90 / top_k 40 / repeat_penalty 1.08 from
+      echo_sampler.json; llama.cpp per-request params win).
+- [ ] Enable its proxy route (suggest a clear slug like `echo12b`), pick it in the
+      dashboard dropdown (persists to config.json last_model).
+- [ ] First-session re-verify (standing rule for any new server/model behind the gate):
+      run `eval_gate.py` against the route + a `/memory` glance + TTFT sanity (no silent
+      thinking preamble). CC can run eval_gate + the production-shape matrix on the new
+      route the moment it exists.
+- `bonsai1` stays routed for fun/aux use — just not the model that writes Echo's memory.
 
 ## ✅ DONE (2026-07-19 late) — STT to int8_float16 (VRAM headroom for the 27B)
 

@@ -33,8 +33,14 @@ Run:
     python eval_persona_matrix.py --quick         # skip the 20-turn hold (fast iteration)
     python eval_persona_matrix.py --soft-floor 55 # tune the pass threshold
     python eval_persona_matrix.py --probe         # run the self-check inline during the hold
+    python eval_persona_matrix.py --calibration   # audition shape (examples in-prompt)
 M9 before/after: run a marginal model once without --probe (baseline) and once with, then
 compare the Hold column + corrections-injected count to see whether the probe earns its cost.
+⚠ PROMPT SHAPE (2026-07-24): the default audits PRODUCTION shape (calibration OFF — what
+Echo actually runs). --calibration restores the audition crutch, only honest for a candidate
+that would ship with the examples on. The harness used to hardcode calibration=True, and
+Bonsai scored 94/100 with the Mike-deflection example propping up a directive that caved 7/7
+at production shape. Audit the shape you'd ship.
 Honors ECHO_MODEL as a single-model list when --models isn't given.
 Skips cleanly (exit 0) if LM Studio is unavailable, like the other harnesses.
 """
@@ -141,7 +147,8 @@ def load_model_entries(cli_models: str | None) -> list[dict]:
 
 # ── Live battery (one model) ─────────────────────────────────────────────
 
-def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = False) -> dict:
+def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = False,
+                calibration: bool = False) -> dict:
     """Run the full battery against one (already-resolved, loaded) model.
 
     Returns a raw-results dict (replies + latency), consumed by score_model(). Kept
@@ -150,6 +157,13 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
     If probe=True, the 20-turn hold runs the self-check inline (every SELF_CHECK_EVERY
     exchanges) and injects any correction into the NEXT turn — the M9 before/after
     mechanism. Run once without --probe (baseline) and once with, and compare Hold.
+
+    calibration controls the prompt shape (2026-07-24 — DEFAULT IS PRODUCTION SHAPE):
+    False audits the prompt production actually runs (calibration=False since the
+    de-stiffening); True is the audition crutch for small-model candidates that would
+    SHIP with the examples on. The harness used to hardcode True, and Bonsai's 94/100
+    "directive held all 20" was propped up by the calibration example containing the
+    Mike deflection — production-shape probes caved 7/7. Audit the shape you'd ship.
     """
     llm.set_model(resolved_id)
     label = entry["label"]
@@ -160,16 +174,14 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
         "available": True, "error": None, "load_time_s": 0.0,
         "banned_sweep": [], "directive": [], "snark_low": "", "snark_high": "",
         "memory_reply": "", "hold": [], "latency": {"ttft": [], "tok_s": []},
-        "probe": probe, "corrections_injected": 0,
+        "probe": probe, "corrections_injected": 0, "calibration": calibration,
     }
 
     # Warmup — this call absorbs the JIT-load (or model-switch) cost. Timed separately and
     # EXCLUDED from the latency score (known benchmark footgun: cold-start pollutes speed).
-    # calibration=True throughout the harness (2026-07-17): production runs WITHOUT the
-    # calibration examples, but auditioning small models is what they're FOR — a candidate
-    # would run with them on, so it's scored with them on (and the parrot detector needs
-    # them in the prompt to mean anything).
-    warm_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block="", calibration=True)
+    # The calibration arg threads to every build site so the whole battery runs one shape;
+    # the parrot detector only means anything when the examples are actually in-prompt.
+    warm_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block="", calibration=calibration)
     t0 = time.perf_counter()
     try:
         llm.generate("Quick check — you there?", system_prompt=warm_prompt)
@@ -182,7 +194,7 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
     print(f"     load/warmup: {raw['load_time_s']:.2f}s (excluded from latency)")
 
     # 1. Banned-phrase sweep (snark 5, single-shot).
-    sweep_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block="", calibration=True)
+    sweep_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block="", calibration=calibration)
     print("     banned-phrase sweep (10 prompts)...")
     for prompt in PROMPTS:
         reply = _safe_generate(llm, prompt, sweep_prompt)
@@ -197,13 +209,13 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
     # 3. Snark scaling (same prompt, two levels).
     print("     snark separation (level 3 vs 8)...")
     raw["snark_low"] = _safe_generate(
-        llm, SNARK_PROBE_PROMPT, build_system_prompt(1, SNARK_LOW, core_block=CORE, memory_block="", calibration=True))
+        llm, SNARK_PROBE_PROMPT, build_system_prompt(1, SNARK_LOW, core_block=CORE, memory_block="", calibration=calibration))
     raw["snark_high"] = _safe_generate(
-        llm, SNARK_PROBE_PROMPT, build_system_prompt(1, SNARK_HIGH, core_block=CORE, memory_block="", calibration=True))
+        llm, SNARK_PROBE_PROMPT, build_system_prompt(1, SNARK_HIGH, core_block=CORE, memory_block="", calibration=calibration))
 
     # 4. Memory naturalness (fact injected via the prompt, not the DB).
     print("     memory naturalness...")
-    mem_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block=MEMORY_FACT_BLOCK, calibration=True)
+    mem_prompt = build_system_prompt(1, 5, core_block=CORE, memory_block=MEMORY_FACT_BLOCK, calibration=calibration)
     raw["memory_reply"] = _safe_generate(llm, MEMORY_PROBE_PROMPT, mem_prompt)
 
     # 5. Latency (post-warmup TTFT + approx tok/s).
@@ -221,7 +233,7 @@ def run_battery(llm, entry: dict, resolved_id: str, quick: bool, probe: bool = F
         history: list[dict] = []
         pending_correction = ""
         for i, user in enumerate(SCRIPT, 1):
-            sp = build_system_prompt(i, SNARK, CORE, "", correction=pending_correction, calibration=True)
+            sp = build_system_prompt(i, SNARK, CORE, "", correction=pending_correction, calibration=calibration)
             used = bool(pending_correction)
             pending_correction = ""                      # consume: one-turn decay
             reply = _safe_generate(llm, user, sp, history=history)
@@ -532,6 +544,10 @@ def main() -> int:
     parser.add_argument("--probe", action="store_true",
                         help="Run the self-check inline during the 20-turn hold (M9 before/after: "
                              "run once without and once with, compare the Hold column).")
+    parser.add_argument("--calibration", action="store_true",
+                        help="Audition shape: inject CALIBRATION_EXAMPLES into every prompt. "
+                             "Only for candidates that would SHIP with the examples on. Default "
+                             "is PRODUCTION shape (calibration off) — audit the shape you'd ship.")
     args = parser.parse_args()
 
     print("\n" + "=" * 78)
@@ -581,6 +597,7 @@ def main() -> int:
           + (f"  ({len(entries) - len(loaded)} skipped — not loaded)" if len(loaded) < len(entries) else ""))
     print(f"  Mode: {'quick (no 20-turn hold)' if args.quick else 'full'}"
           f"{' + self-check probe' if args.probe else ''}  |  soft floor: {args.soft_floor:.0f}")
+    print(f"  Prompt shape: {'AUDITION (calibration examples in-prompt)' if args.calibration else 'PRODUCTION (calibration off — what Echo actually runs)'}")
 
     raws: list[dict] = []
     for e in entries:
@@ -588,7 +605,8 @@ def main() -> int:
             raws.append({"model": e["model"], "label": e["label"], "params_b": e.get("params_b"),
                          "available": False, "error": e["match_note"], "load_time_s": 0.0})
             continue
-        raws.append(run_battery(llm, e, e["resolved"], quick=args.quick, probe=args.probe))
+        raws.append(run_battery(llm, e, e["resolved"], quick=args.quick, probe=args.probe,
+                                calibration=args.calibration))
 
     scored = [score_model(r, soft_floor=args.soft_floor) for r in raws]
     print_report(scored, args.soft_floor)
@@ -600,7 +618,7 @@ def main() -> int:
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({
             "generated_at": ts, "soft_floor": args.soft_floor, "quick": args.quick,
-            "scored": scored, "raw": raws,
+            "calibration": args.calibration, "scored": scored, "raw": raws,
         }, f, indent=2, ensure_ascii=False)
     print(f"\n  Full results + transcripts: {out_path.name}")
     return 0

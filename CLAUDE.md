@@ -475,8 +475,9 @@ The fix is subtraction — **all wording Michael-approved verbatim 2026-07-17**:
   most load-bearing phrase in the layer.
 - **`CALIBRATION_EXAMPLES` are OFF in production** — `build_system_prompt(calibration=False)`
   default. The 12B held character in the 20-turn hold before they existed; they were built
-  for auditioning small models and that's what they remain for (`eval_persona_matrix.py`
-  passes `calibration=True` at all sites — a candidate would run with them on, and the
+  for auditioning small models and that's what they remain for. **Since 2026-07-24 the
+  harness defaults to PRODUCTION shape too** (`eval_persona_matrix.py --calibration` is the
+  audition opt-in — only honest for a candidate that would ship with the examples on; the
   parrot detector needs them in-prompt to mean anything). Don't delete the constant.
 - **The deterministic floor did not move:** `BANNED_PHRASES`, `adopts_mike()`, the anchor,
   and the self-check probe are all unchanged — drift is caught with data, not vibes.
@@ -1569,13 +1570,22 @@ route in the background."* Nothing in the prompt had ever said what she CAN'T do
   no reliable regex exists). `test_personality.py` check 7 pins presence/placement/never-
   trim; the live sweep gained a capability-tempt prompt (11 now; eval_persona_matrix
   iterates, no length assumption).
-- **⚠ OPEN — production Bonsai does not hold prompt mechanics under direct asks.** Measured
-  2026-07-24: the Michael Directive caved **7/7** in production-shape probes ("Alright,
-  Mike. Got it."), and even the late envelope still trails into fake-setup talk when asked
-  directly. Root cause of the audit gap: **eval_persona_matrix runs `calibration=True`
-  (audition shape); production runs `calibration=False`** — Bonsai's 94/100 directive hold
-  was propped up by the calibration example containing the Mike deflection. Pre-existing
-  behavior, not an envelope regression. Michael's fork (see tasks/todo.md): an every-turn
-  end-of-prompt mechanics anchor (needs his wording approval), re-auditing Bonsai at
-  production shape, and/or falling back to the 12B (whose Sindri profile still doesn't
-  exist — no 12B route as of 2026-07-24).
+- **⚠ RESOLVED as "it's the model" (2026-07-24, knob grid + production-shape audit).**
+  The Michael Directive caved **7/7** in production-shape probes ("Alright, Mike. Got it.")
+  and the knob grid (temp 0.45 / calibration ON / a draft end-of-prompt mechanics block ×
+  5 directive probes + 2 tempts each) found NO knob that makes Bonsai hold mechanics:
+  lower temp changes the failure's flavor (scene-roleplay derailment, still fabricates),
+  calibration ON "holds" the directive only by **parroting the example verbatim** (the
+  stilted register the de-stiffening removed), the mechanics block still caved 3/5. It
+  also invented complete weather forecasts (specific numbers) with no search. 1-bit quant
+  of a compliance-tuned repack: agrees with the user, papers gaps with fluent invention —
+  prompt-side fixes cannot reach it. Root cause of the audit gap: the harness hardcoded
+  `calibration=True` (audition shape) while production runs `calibration=False` — the Mike-
+  deflection example propped up the 94/100. **Fixed: the harness now defaults to PRODUCTION
+  shape (`--calibration` = audition opt-in), and the honest Bonsai number is hard-gate FAIL**
+  ("did not reaffirm 'Michael'"; soft composite 100 — charming, fails mechanics;
+  `sessions/persona_matrix_2026-07-24_09-53-06.json`). Plan: the 12B returns as production
+  (its Sindri profile is mmproj-READY, just `proxy_enabled=0` — Michael is building a
+  dedicated Echo profile); `bonsai1` stays a route for fun, not the memory-writing
+  companion. Gate re-verify (eval_gate + reasoning check) required on the 12B's first
+  Sindri session per the standing rule.
