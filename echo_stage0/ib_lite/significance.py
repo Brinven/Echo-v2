@@ -82,18 +82,43 @@ _EPHEMERAL_ATTRS = {"status", "state", "activity", "mood", "current_status", "cu
 def reject_reason(payload: dict) -> str | None:
     """Return why a save should be dropped as non-durable, or None to allow it.
 
-    A deterministic net for facts: self/meta entities (Echo, the memory system) and ephemeral
-    attributes (anything current_*, or a bare status/state/mood) are never durable memories,
-    whatever the model decided. Preferences and policies pass through untouched.
+    A deterministic net: for facts, self/meta entities (Echo, the memory system) and
+    ephemeral attributes (anything current_*, or a bare status/state/mood) are never
+    durable memories, whatever the model decided. Policies pass through untouched
+    (the gate doesn't author them; they're seeded/curated by hand).
+
+    Preferences get a narrower screen (2026-07-24 — eval_gate caught Bonsai dodging the
+    facts-only net by typing self/meta junk as `preference`, e.g. "morning_routine: Echo
+    prefers to start the day with a calm tone"): an ephemeral key, or a key/value that
+    talks ABOUT Echo/the system, is dropped. Preferences are a PERSON's likes by design;
+    behavior rules belong in the policy table, added by hand from /memory or the CLI.
+    Known limit: self-derived junk that never names Echo ("flattery_handling: logged and
+    immediately discarded") is deterministically indistinguishable from a real pref —
+    the GATE_SYSTEM prompt remains the primary defense; this net is the backstop.
     """
-    if not isinstance(payload, dict) or payload.get("type") != "fact":
+    if not isinstance(payload, dict):
         return None
-    entity = str(payload.get("entity", "")).strip().lower()
-    attribute = str(payload.get("attribute", "")).strip().lower()
-    if entity in _SELF_META_ENTITIES:
-        return f"self/meta entity {entity!r}"
-    if attribute.startswith("current_") or attribute in _EPHEMERAL_ATTRS:
-        return f"ephemeral attribute {attribute!r}"
+    ptype = payload.get("type")
+    if ptype == "fact":
+        entity = str(payload.get("entity", "")).strip().lower()
+        attribute = str(payload.get("attribute", "")).strip().lower()
+        if entity in _SELF_META_ENTITIES:
+            return f"self/meta entity {entity!r}"
+        if attribute.startswith("current_") or attribute in _EPHEMERAL_ATTRS:
+            return f"ephemeral attribute {attribute!r}"
+        return None
+    if ptype == "preference":
+        key = str(payload.get("key", "")).strip().lower()
+        value = str(payload.get("value", "")).strip().lower()
+        if key.startswith("current_") or key in _EPHEMERAL_ATTRS:
+            return f"ephemeral preference key {key!r}"
+        for blob, where in ((key, "key"), (value, "value")):
+            # Underscores are word chars to \b, so snake_case keys ("echo_tone") would
+            # hide the word — normalize them to spaces before matching.
+            if re.search(r"\becho\b|\bthe system\b|\bmemory system\b|\bthe assistant\b",
+                         blob.replace("_", " ")):
+                return f"self/meta preference ({where} references Echo/the system)"
+        return None
     return None
 
 

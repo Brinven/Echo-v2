@@ -92,12 +92,32 @@ def run() -> None:
         assert reject_reason(p) is not None, f"live noise slipped through: {p['entity']}/{p['attribute']}"
     print("  [PASS] all 7 real accumulated-noise facts are caught")
 
-    # Preferences and policies pass through untouched (keyed + intentional, not gate-invented facts).
+    # Real preferences and policies pass through (keyed + intentional, not gate-invented facts).
     assert reject_reason({"save": True, "type": "preference", "key": "coffee", "value": "black"}) is None
+    assert reject_reason({"save": True, "type": "preference", "key": "ground_preference", "value": "dry"}) is None
     assert reject_reason({"save": True, "type": "policy", "key": "x", "rule": "y", "priority": 5}) is None
     assert reject_reason({"save": False}) is None
     assert reject_reason("not a dict") is None
-    print("  [PASS] preferences / policies / non-saves pass through")
+    print("  [PASS] real preferences / policies / non-saves pass through")
+
+    # Self/meta junk typed as `preference` is caught (2026-07-24 — eval_gate caught Bonsai
+    # dodging the facts-only net this way; real payload from that run pinned here).
+    assert reject_reason({"save": True, "type": "preference", "key": "morning_routine",
+                          "value": "Echo prefers to start the day with a calm tone and a "
+                                   "reminder about unfinished tasks."}) is not None, \
+        "self/meta preference (value references Echo) slipped the net"
+    assert reject_reason({"save": True, "type": "preference", "key": "echo_tone",
+                          "value": "warm"}) is not None, \
+        "self/meta preference (key references Echo) slipped the net"
+    assert reject_reason({"save": True, "type": "preference", "key": "current_mood",
+                          "value": "upbeat"}) is not None, \
+        "ephemeral preference key slipped the net"
+    # Known limit, documented in reject_reason: self-derived junk that never names Echo
+    # ("flattery_handling") is deterministically indistinguishable from a real pref —
+    # the prompt is the primary defense there. This pin records the boundary on purpose.
+    assert reject_reason({"save": True, "type": "preference", "key": "flattery_handling",
+                          "value": "logged and immediately discarded"}) is None
+    print("  [PASS] self/meta + ephemeral preferences caught; known limit pinned")
 
     print("  OFFLINE: all significance-gate checks passed.")
 

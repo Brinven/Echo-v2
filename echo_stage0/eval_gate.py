@@ -16,7 +16,10 @@ Latency per call is reported against the gate's own 10s client timeout.
 
 Usage (from echo_stage0/, venv active, LLM server up):
     python eval_gate.py [--model <id|substring>]
+    python eval_gate.py --models route1,route2,route3     # batch screen + scorecard
 Model resolution: --model → ECHO_MODEL → config.json last_model → the only one available.
+--models (2026-07-24) screens a comma list in one run — built for sweeping the Sindri
+MoE shelf; each model pays its own JIT swap in warmup, unresolved names SKIP not FAIL.
 Exits 0 all-pass / 1 any-fail / 0 with [SKIP] if the server is unreachable (harness house rule).
 """
 
@@ -208,25 +211,20 @@ def _warmup(model: str) -> float:
     return time.perf_counter() - t0
 
 
-def main() -> int:
-    cli_model = None
-    if "--model" in sys.argv:
-        cli_model = sys.argv[sys.argv.index("--model") + 1]
-
-    model = _pick_model(cli_model)
-    if model is None:
-        print(f"\n  [SKIP] LLM server not reachable at {LLM_BASE_URL}.")
-        return 0
-    if not model:
-        return 1
+def run_model(model: str) -> dict:
+    """Full battery against one model. Returns a summary row for the scorecard."""
+    result = {"model": model, "skipped": False, "failures": 0, "total": len(CASES),
+              "median_ms": None, "worst_ms": None, "decider_ok": None, "notes": ""}
 
     print(f"\n  Gate audition: {model} @ {LLM_BASE_URL}")
     try:
         warm = _warmup(model)
         print(f"  warmup: {warm:.1f}s {DIM}(JIT spawn/load paid here, not in scored calls){RESET}\n")
     except Exception as e:
-        print(f"\n  [SKIP] warmup completion failed: {e}")
-        return 0
+        print(f"  [SKIP] warmup completion failed: {e}")
+        result["skipped"] = True
+        result["notes"] = f"warmup failed: {e}"
+        return result
 
     failures = 0
     latencies = []
@@ -286,6 +284,7 @@ def main() -> int:
 
     # Bonus sanity: the search decider is the same JSON-call pattern on the same model.
     print(f"\n  {DIM}search-decider JSON sanity (same call pattern, same model):{RESET}")
+    s_ok = False
     try:
         from search_decision import decide_search
         t0 = time.perf_counter()
@@ -305,9 +304,70 @@ def main() -> int:
           f"{DIM}(client timeout 10s; 12B-on-LM-Studio baseline was ~1s){RESET}")
     if failures:
         print(f"\n  {RED}{failures}/{len(CASES)} cases failed — this model is not gate-safe yet.{RESET}")
-        return 1
-    print(f"\n  {GREEN}All {len(CASES)} gate cases passed — retains look safe on this model.{RESET}")
-    return 0
+    else:
+        print(f"\n  {GREEN}All {len(CASES)} gate cases passed — retains look safe on this model.{RESET}")
+
+    result.update(failures=failures, median_ms=med, worst_ms=worst, decider_ok=s_ok)
+    return result
+
+
+def main() -> int:
+    cli_model = None
+    cli_models = None
+    if "--model" in sys.argv:
+        cli_model = sys.argv[sys.argv.index("--model") + 1]
+    if "--models" in sys.argv:
+        cli_models = sys.argv[sys.argv.index("--models") + 1]
+
+    if not cli_models:
+        # Single-model path (original behavior, original resolution ladder).
+        model = _pick_model(cli_model)
+        if model is None:
+            print(f"\n  [SKIP] LLM server not reachable at {LLM_BASE_URL}.")
+            return 0
+        if not model:
+            return 1
+        r = run_model(model)
+        return 0 if (r["skipped"] or not r["failures"]) else 1
+
+    # Batch path (--models a,b,c): resolve each against the live list; unresolved → SKIP.
+    from openai import OpenAI, APIConnectionError
+    try:
+        client = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=10)
+        available = [m.id for m in client.models.list().data]
+    except APIConnectionError:
+        print(f"\n  [SKIP] LLM server not reachable at {LLM_BASE_URL}.")
+        return 0
+
+    rows = []
+    for pin in [m.strip() for m in cli_models.split(",") if m.strip()]:
+        resolved, matches = _resolve_pin(pin, available)
+        if not resolved:
+            note = (f"matches {len(matches)} models — be specific" if matches
+                    else "not available on the server")
+            print(f"\n  {YELLOW}[SKIP] '{pin}': {note}{RESET}")
+            rows.append({"model": pin, "skipped": True, "failures": 0, "total": len(CASES),
+                         "median_ms": None, "worst_ms": None, "decider_ok": None, "notes": note})
+            continue
+        rows.append(run_model(resolved))
+
+    # Scorecard (mirrors the persona-matrix table style).
+    print("\n" + "=" * 78)
+    print("  GATE AUDITION — SCORECARD")
+    print("=" * 78)
+    print("| Model | Cases | Decider | Median | Worst | Verdict |")
+    print("|---|---|---|---|---|---|")
+    for r in rows:
+        if r["skipped"]:
+            print(f"| {r['model']} | — | — | — | — | SKIP ({r['notes']}) |")
+            continue
+        passed = r["total"] - r["failures"]
+        decider = "✓" if r["decider_ok"] else "⚠"
+        verdict = "PASS" if not r["failures"] else "FAIL"
+        print(f"| {r['model']} | {passed}/{r['total']} | {decider} "
+              f"| {r['median_ms']:.0f}ms | {r['worst_ms']:.0f}ms | {verdict} |")
+    tested = [r for r in rows if not r["skipped"]]
+    return 1 if any(r["failures"] for r in tested) else 0
 
 
 if __name__ == "__main__":

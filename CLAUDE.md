@@ -343,9 +343,16 @@ exactly the deferred Stage 5 Part 3 M9 "ephemeral web junk" item, now triggered)
 - **`reject_reason(payload)`** — a deterministic backstop in `_gate_worker` (before `_insert`) that
   drops facts with a self/meta entity (`echo`, `memory_system`, `the system`, …) or an ephemeral
   attribute (`current_*`, or bare `status`/`state`/`mood`) **even if the model returns save=true**.
-  Facts only — prefs/policies pass. **This layer is load-bearing:** live-verified, the model still
-  tried to save "testing image models" as `current_project` and the net caught it. The prompt is the
-  primary defense; the net is the guarantee.
+  **This layer is load-bearing:** live-verified, the model still tried to save "testing image
+  models" as `current_project` and the net caught it. The prompt is the primary defense; the net
+  is the guarantee. **Widened 2026-07-24** (eval_gate caught Bonsai dodging the facts-only net by
+  typing self/meta junk as `preference` — "morning_routine: Echo prefers a calm tone"): prefs with
+  an ephemeral key or a key/value that references Echo/the system are now dropped too; policies
+  still pass (gate never authors them). Known, pinned limit: self-derived pref junk that never
+  names Echo ("flattery_handling: logged and immediately discarded") is deterministically
+  indistinguishable from a real pref — a model that does that must fail the audition instead
+  (eval_gate case "fact about Echo rejected"). Behavior rules belong in POLICY, not preference —
+  that split is what makes the Echo-mention screen safe.
 - Offline test `test_significance.py` pins the net against all 7 real accumulated-noise facts +
   durable-facts-pass. The one-time junk already in `echo.db` was cleared via the CLI / `/memory`
   editor (left 1 clean fact: `Michael/location/Magnolia, Texas`).

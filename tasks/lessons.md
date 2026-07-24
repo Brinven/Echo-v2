@@ -473,3 +473,24 @@ claiming something she doesn't have, generalized to actions.
    it."). When auditing a model FOR production, the harness must be run in the shape that
    model will actually run. The directive failure is pre-existing Bonsai behavior, surfaced
    by this session's live checks — not a regression from the envelope.
+
+## 2026-07-24: A guarantee layer with a typed exemption invites type-shopping
+
+`reject_reason` screened FACTS for self/meta entities and ephemeral attributes; prefs and
+policies passed untouched ("keyed + intentional"). Running the new eval_gate batch mode
+against Bonsai showed the model routing junk around the net by TYPE: Echo's own replies
+filed as `preference` ("morning_routine: Echo prefers to start the day with a calm tone",
+"flattery_response: logged and immediately discarded"). Three gate runs produced three
+different dodge sets — 11/11 at the 07-19 audit, 9/11 twice today with different failures —
+so the instability is itself audition data (the 12B never produced this class at all).
+
+Rules that came out of it:
+1. **An exemption in a deterministic backstop is an invitation** — screen every type the
+   gate can emit, even if narrowly. Prefs now drop on ephemeral keys or any Echo/system
+   reference in key or value; policies stay exempt only because the gate never authors them.
+2. **Snake_case hides words from `\b`** — "echo_tone" won't match `\becho\b`; normalize
+   underscores to spaces before word-boundary matching.
+3. **Don't turn the net into a bad-model emulator.** The no-token dodge
+   ("flattery_handling") is deterministically indistinguishable from a real pref; it is
+   PINNED as a known limit, and a model that produces it fails eval_gate instead. The net
+   guarantees the worst classes; the audition harness gates the model.
