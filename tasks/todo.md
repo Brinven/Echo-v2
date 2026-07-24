@@ -21,13 +21,17 @@ both halves at production shape:
       out tomorrow."
 
 ### Open for Michael — before switching Echo to it
-- [ ] **Lower ctx — REQUIRED, not optional**: at 164k q4 KV the resident model sits at
-      15.4/16.3 GB — no room for Echo's STT (~0.9GB); this is the exact squeeze that
-      degraded Bonsai on 07-19. 32k is plenty for Echo. KV q4→q8 after the ctx drop is
-      optional insurance — it passed everything clean at q4.
-- [ ] Switch via the dashboard dropdown (persists to last_model), ordinary live pass:
-      real conversation, /memory glance, a photo turn (mmproj present but Echo's vision
-      path unverified on this backend), first turn pays the JIT swap.
+- [x] **Lower ctx — DONE (2026-07-24 pm):** Michael built the dedicated
+      **`Echo_Gemma4_26B-A4B_Unc`** profile — 54k ctx, **q8 KV**, ~13.7GB resident (with
+      Plex transcoding sharing the card). Route: `echo_gemma4_26b-a4b_unc`.
+- [x] **Gate-checked the dedicated profile: eval_gate 11/11 first try** — payloads
+      byte-consistent with the audited 164k profile, naming guidance holds
+      (`ownership_status: "paid off in full"`), median 1279ms. GREEN LIT.
+- [ ] Michael's live pass: pick `echo_gemma4_26b-a4b_unc` in the dashboard dropdown,
+      **restart-echo.bat** (loads the envelope + widened net + naming guidance — she's
+      on last week's code until restart), then: real conversation to seed memory,
+      /memory glance, a photo turn (vision path unverified on this backend), feel-check
+      vs the 12B (hoping: 12B register + a touch of Bonsai's verbosity).
 
 ## ✅ BUILT (2026-07-24) — Capability envelope (she stops promising things she can't do)
 
