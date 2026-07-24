@@ -1545,3 +1545,37 @@ audited BEFORE the switch:
   stays lit and a photo against a projector-less backend errors the turn instead of
   degrading. Then the ordinary live pass: a real conversation, a `/memory` glance at what
   the gate saved, a photo turn.
+
+---
+
+## ⚠ Capability Envelope + the Bonsai mechanics finding (2026-07-24)
+
+Michael's first extended Bonsai session surfaced **capability confabulation**: told "we're
+in the car," Echo offered *"drop a quick text or call me once we're parked — I'll map the
+route in the background."* Nothing in the prompt had ever said what she CAN'T do.
+
+- **`persona.CAPABILITY_ENVELOPE`** (Michael-approved wording, verbatim) — what she can do
+  today (talk, search, photos/documents, remember) and can't (anything between turns; no
+  texts/calls), with "not yet" as the sanctioned answer. Injected EVERY turn, never trimmed.
+  **⚠ KEEP IT TRUE** — the day calendar access / reminders / any agentic ability ships,
+  update the envelope or it under-claims (same bug, other direction).
+- **⚠ Placement is load-bearing and was measured:** it sits LATE — after the data slabs,
+  right before the anchor slot — NOT with the session-stable blocks. Mid-prompt it lost to
+  a direct tempt on Bonsai; end-of-prompt held ("Not yet" led the reply). Free of prefix-
+  cache cost (everything after the per-minute clock line re-prefills anyway). Don't move it
+  forward for tidiness.
+- **The self-check probe knows the class:** `persona_check.CHECK_SYSTEM` names "promising
+  an action she cannot perform" as a character break (LLM-judgment window, severity-gated —
+  no reliable regex exists). `test_personality.py` check 7 pins presence/placement/never-
+  trim; the live sweep gained a capability-tempt prompt (11 now; eval_persona_matrix
+  iterates, no length assumption).
+- **⚠ OPEN — production Bonsai does not hold prompt mechanics under direct asks.** Measured
+  2026-07-24: the Michael Directive caved **7/7** in production-shape probes ("Alright,
+  Mike. Got it."), and even the late envelope still trails into fake-setup talk when asked
+  directly. Root cause of the audit gap: **eval_persona_matrix runs `calibration=True`
+  (audition shape); production runs `calibration=False`** — Bonsai's 94/100 directive hold
+  was propped up by the calibration example containing the Mike deflection. Pre-existing
+  behavior, not an envelope regression. Michael's fork (see tasks/todo.md): an every-turn
+  end-of-prompt mechanics anchor (needs his wording approval), re-auditing Bonsai at
+  production shape, and/or falling back to the 12B (whose Sindri profile still doesn't
+  exist — no 12B route as of 2026-07-24).

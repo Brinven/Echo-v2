@@ -1,5 +1,41 @@
 # Echo — tasks/todo.md
 
+## ✅ BUILT (2026-07-24) — Capability envelope (she stops promising things she can't do)
+
+Michael's flag from the 07-23 car session: Bonsai offered "drop a quick text or call me
+once we're parked — I'll map the route in the background." She can't receive texts/calls
+and doesn't exist between turns; nothing in the prompt had ever said what she can't DO.
+Wording Michael-approved 2026-07-24.
+
+- [x] `persona.CAPABILITY_ENVELOPE` — can (talk, search, photos/docs, remember) / can't
+      (anything between turns, no texts/calls) / "not yet" as the sanctioned answer.
+      Every turn, never trimmed. ⚠ Must be updated when a listed limit ships for real.
+- [x] Placement measured, not assumed: mid-prompt LOST to a direct tempt ("You want a
+      nudge an hour before departure?"); moved late (after data slabs, by the anchor) →
+      "Not yet." leads the reply. Free — past the clock-line cache break anyway.
+- [x] `persona_check.CHECK_SYSTEM`: capability fabrication named as a break class
+      (probe nudges recovery; severity-gated, no false-positive regex attempted).
+- [x] `test_personality.py`: offline check 7 (presence/late placement/never-trim) +
+      a capability-tempt prompt in the live sweep (PROMPTS now 11). All 6 prompt-touching
+      offline suites green. Live replay of the exact failed conversation: spontaneous
+      fabrications gone, tempt answered "Not yet" (with a caveat — below).
+- [x] Docs: CLAUDE.md ⚠ section, lessons.md autopsy.
+
+### ⚠ FINDINGS for Michael — production Bonsai doesn't hold mechanics under direct asks
+1. **Michael Directive: 7/7 caves in production-shape probes** ("Alright, Mike. Got it.").
+   The 94/100 audit ran `calibration=True` (audition shape) — the calibration example
+   containing the Mike deflection propped it up; production runs `calibration=False`.
+   Pre-existing, surfaced by this session's live checks.
+2. Even late-placed, a direct "remind me tomorrow" still trails into fake-setup talk
+   ("I can set it up for tomorrow night at 7 PM") after the "Not yet."
+3. The fork (Michael's call):
+   - [ ] a) Every-turn end-of-prompt **mechanics anchor** (Michael-not-Mike + envelope
+         gist, ~40 tok) — strongest prompt-side option; needs his wording approval.
+   - [ ] b) Re-audit Bonsai at **production shape** (matrix with calibration=False) so
+         the score reflects what actually runs.
+   - [ ] c) The 12B fallback — its Sindri profile still doesn't exist (no 12B route as
+         of 07-24; needs mmproj + --reasoning-budget 0).
+
 ## ✅ DONE (2026-07-19 late) — STT to int8_float16 (VRAM headroom for the 27B)
 
 Card was at 15.2/16.3GB with Bonsai + STT fp16 + desktop; generation was visibly slower

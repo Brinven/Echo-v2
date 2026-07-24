@@ -438,3 +438,38 @@ started with no finger down and no release ever coming). A press sequence counte
 any press that a release overtakes during an await, and a tappable "enable the microphone"
 banner primes the permission up front. iOS re-asks per page load BY DESIGN unless the site
 is set to Allow (aA menu → Website Settings → Microphone).
+
+## 2026-07-24: "I'll map the route in the background" — nothing ever told her what she CAN'T do
+
+Michael's first extended Bonsai session: told "we're in the car," Echo offered "drop a
+quick text or call me once we're parked — I'll map the route in the background so you
+don't have to think about it." Two fabricated capabilities in one sentence (she can't
+receive texts or calls; she has no existence between turns). Not the Jeep register —
+those turns ran `home` (hint on Auto). The prompt described who she is, where she is,
+what time it is, and what she remembers — and never what she can DO. The 12B was literal
+enough that the hole never showed; Bonsai is verbose and eager and invents the
+follow-through the moment context suggests a role. Same failure class as the invented
+hoodie-callback and Phase 2's "never promise a secrecy or memory she won't honour":
+claiming something she doesn't have, generalized to actions.
+
+1. **Capabilities are mechanics, and mechanics need instruction** (the Michael Directive
+   lesson, third confirmation). `persona.CAPABILITY_ENVELOPE` — Michael-approved wording,
+   stated ONCE — now rides every prompt. Keep it TRUE: the day calendar/reminders/agentic
+   anything ships, update the envelope or it lies in the other direction.
+2. **Placement was measured, not assumed: the END of the prompt is the strong position on
+   Bonsai.** Mid-prompt (after the speaker block) the envelope lost to a direct tempt
+   ("You want a nudge an hour before departure, or 30 minutes?"); moved past the data
+   slabs to sit by the anchor, the same tempt opened with "Not yet." No cache cost —
+   everything after the per-minute clock line re-prefills anyway.
+3. **A prompt instruction reduces but does not eliminate this on Bonsai.** Even late-placed,
+   a direct ask still pulled trailing fake-setup talk ("I can set it up for tomorrow night
+   at 7 PM"). The self-check probe now names capability fabrication as a break class
+   (persona_check.CHECK_SYSTEM) so drift gets nudged; the full fix is a Michael fork
+   (see todo).
+4. **The audit had a blind spot: eval_persona_matrix runs calibration=True, production runs
+   calibration=False — the harness audits a prompt shape production never uses.** Bonsai's
+   94/100 "Michael Directive held all 20" was propped up by the calibration example that
+   contains the Mike deflection. Production-shape probes: 7/7 caves ("Alright, Mike. Got
+   it."). When auditing a model FOR production, the harness must be run in the shape that
+   model will actually run. The directive failure is pre-existing Bonsai behavior, surfaced
+   by this session's live checks — not a regression from the envelope.

@@ -302,6 +302,45 @@ MULTI_SPEAKER_NOTE = (
 )
 
 
+# ── Capability envelope (2026-07-24 — Michael-approved wording, verbatim) ──
+#
+# What Echo can and cannot DO. Added after the first extended Bonsai 27B session:
+# told "we're in the car", she offered "drop a quick text or call me once we're parked —
+# I'll map the route in the background so you don't have to think about it" — two
+# fabricated capabilities in one sentence (she can't receive texts/calls, and she has no
+# existence between turns). Nothing in the prompt had ever said what she can't do; the
+# 12B was literal enough that the gap never showed, but Bonsai is verbose and eager and
+# invents the follow-through the moment context suggests a role. Same failure class as
+# the invented-memory watch item and Phase 2's "never promise a secrecy or memory she
+# won't honour" — claiming something she doesn't have — generalized to ACTIONS.
+#
+# Capabilities are MECHANICS, and mechanics need instruction, not disposition (the
+# Michael Directive lesson). Stated ONCE, here, per the de-stiffening rule — do not
+# restate "you can't do X" in other blocks.
+#
+# ⚠ KEEP THIS TRUE. It must be UPDATED the day a listed limit stops being real
+# (calendar access, reminders, any agentic ability) — an envelope that under-claims
+# is the same bug in the other direction. The "not yet" phrasing is deliberate:
+# Michael adds capabilities constantly, and "I can't see a calendar yet" is both
+# honest and in-character.
+#
+# ⚠ PLACEMENT IS LOAD-BEARING (measured 2026-07-24): injected LATE — after the data
+# slabs, right before the anchor slot — not with the session-stable blocks up top.
+# First attempt placed it mid-prompt (speaker block → envelope → clock) and Bonsai
+# still offered a weather "nudge an hour before departure" when tempted directly:
+# this model weighs the end of the prompt over the middle (the same reason the
+# self-check correction rides at the very end). No prefix-cache cost — everything
+# after the per-minute clock line re-prefills every turn anyway.
+
+CAPABILITY_ENVELOPE = (
+    "What you can actually do, today: talk, search the web, look at photos and read "
+    "documents sent to you, and remember what matters. Between turns you don't exist — "
+    "you can't watch, monitor, remind, or check anything in the background, and nobody "
+    "can text or call you. Never offer something you can't deliver; offer what you can, "
+    "or just say 'not yet.'"
+)
+
+
 # Spoken aloud by the dashboard's voice Preview button (Stage 8.2) — NOT a system prompt: this
 # is literal text Kokoro says, so it is the one persona string Michael hears verbatim.
 # APPROVED as-is by Michael 2026-07-15. Deliberately fixed, not random: auditioning ~67 voices is an A/B test, and
@@ -411,14 +450,18 @@ def build_system_prompt(
                  →  SPEAKER CONTEXT (every turn)
                  →  DATE/TIME (every turn, when `now` is passed)
                  →  CORE/POLICY slab  →  RETRIEVED MEMORY (if any)
-                 →  WEB SEARCH (this turn only)  →  ANTI-DRIFT ANCHOR
+                 →  WEB SEARCH (this turn only)
+                 →  CAPABILITY ENVELOPE (every turn — late on purpose, see its comment)
+                 →  ANTI-DRIFT ANCHOR
                  →  SELF-CHECK CORRECTION (one turn, on demand)
 
     The date/time line sits deliberately LATE — after the session-stable context blocks
     (persona/location/speaker), right before the data slabs. It changes every turn
     (minute granularity), which invalidates llama.cpp's prefix cache from that point on;
     everything before it stays byte-stable within a session and keeps its cache. Don't
-    move it earlier.
+    move it earlier. The capability envelope sits later still (past the data slabs, by
+    the anchor) — that's the strong position for it, and it's past the cache break
+    already, so its per-turn re-prefill is free.
 
     Args:
         exchange_count: 1-based count of the exchange this prompt is being built for.
@@ -479,14 +522,16 @@ def build_system_prompt(
     # Everything except the retrieved memory is never trimmed. The search block is
     # load-bearing for this exact turn (Echo answers from it), so it's fixed too. The
     # calibration examples (when opted in) sit with the persona, and the self-check
-    # correction is a one-turn steer — both are never trimmed.
+    # correction is a one-turn steer — both are never trimmed. The capability envelope
+    # is always on (mechanics, not disposition) and never trimmed.
     fixed = (persona, calibration_block, mood_opener, location_block, multi_block,
-             speaker_block, time_block, core_block, search_block, anchor, correction_block)
+             speaker_block, time_block, core_block, search_block, CAPABILITY_ENVELOPE,
+             anchor, correction_block)
     trimmed_memory = _trim_memory_to_budget(memory_block, *fixed)
     return _join_blocks(
         persona, calibration_block, mood_opener, location_block, multi_block,
-        speaker_block, time_block, core_block, trimmed_memory, search_block, anchor,
-        correction_block
+        speaker_block, time_block, core_block, trimmed_memory, search_block,
+        CAPABILITY_ENVELOPE, anchor, correction_block
     )
 
 

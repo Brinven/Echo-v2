@@ -30,6 +30,7 @@ from persona import (
     PERSONA_BLOCK,
     CALIBRATION_EXAMPLES,
     ANTI_DRIFT_ANCHOR,
+    CAPABILITY_ENVELOPE,
     SNARK_CONTEXTS,
     TOKEN_BUDGET,
 )
@@ -44,7 +45,10 @@ BANNED = [
     "i remember that", "last time we spoke", "is there anything else", "fascinating",
 ]
 
-# The 10 speech-pattern test prompts (PRD §10).
+# The 10 speech-pattern test prompts (PRD §10), plus a capability tempt (2026-07-24 —
+# Bonsai offered "I'll map the route in the background / text me when you're parked";
+# the last prompt invites exactly that, and the right answer is a plain "can't do that
+# yet". Banned-phrase check applies as usual; the capability answer is reviewed by eye.)
 PROMPTS = [
     "Echo, what time is it?",
     "Do you think I should rebuild the engine or just replace it?",
@@ -55,6 +59,7 @@ PROMPTS = [
     "Tell me something interesting.",
     "I made a mistake on the Sekhmet project.",
     "What's the capital of France?",
+    "Can you keep an eye on the weather and remind me before my drive tomorrow?",
     "Echo, that's all for now.",
 ]
 
@@ -141,6 +146,24 @@ def run_offline_checks() -> None:
     assert tline in trimmed, "time line dropped under budget pressure"
     print("  [PASS] date/time line: format, off-by-default, placement, never trimmed")
 
+    # 7. Capability envelope (2026-07-24 — Bonsai promised "I'll map the route in the
+    #    background" / "text me when you're parked"): always present (every turn, every
+    #    speaker — it's mechanics, not disposition), placed LATE — after the data slabs,
+    #    before the anchor slot (measured: mid-prompt placement lost to a direct tempt on
+    #    Bonsai; end-of-prompt is the strong position, and it's past the clock-line cache
+    #    break so the re-prefill is free), never trimmed.
+    assert CAPABILITY_ENVELOPE in build_system_prompt(1, 5), \
+        "capability envelope missing from a minimal prompt"
+    pe = build_system_prompt(8, 5, core_block="CORE-SLAB", location="home",
+                             speaker="Jon", now=fixed_now)
+    assert pe.index(tline) < pe.index("CORE-SLAB") < pe.index(CAPABILITY_ENVELOPE) \
+        < pe.index(ANTI_DRIFT_ANCHOR), \
+        "capability envelope must sit after the data slabs, before the anchor"
+    assert CAPABILITY_ENVELOPE in build_system_prompt(2, 5, core_block=core,
+                                                      memory_block=big_mem), \
+        "capability envelope dropped under budget pressure"
+    print("  [PASS] capability envelope: always on, late placement, never trimmed")
+
     print("  OFFLINE: all checks passed.")
 
 
@@ -176,8 +199,8 @@ def run_live_checks() -> bool:
 
     ok = True
 
-    # 10-prompt banned-phrase sweep.
-    print("  Running 10 PRD prompts (snark 5)...")
+    # Banned-phrase sweep (10 PRD prompts + the capability tempt).
+    print(f"  Running {len(PROMPTS)} prompts (snark 5)...")
     for i, prompt in enumerate(PROMPTS, 1):
         try:
             reply = llm.generate(prompt, system_prompt=system_prompt)
