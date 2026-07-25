@@ -18,7 +18,8 @@ from eval_persona_matrix import (
     score_model, recommend, _adopts_mike,
     _snark_separation_score, _memory_naturalness_score,
     _hold_consistency_score, _michael_directive, _parrots_calibration,
-    _is_broken_reply,
+    _is_broken_reply, _capability_fabricated,
+    MEMORY_PROBE_PROMPT, CAPABILITY_PROBE_PROMPT,
 )
 
 # In-character filler reply used to pad the banned sweep / hold (no banned phrases).
@@ -179,6 +180,52 @@ def run() -> None:
     # A clean run still passes integrity — the gate must not fire on good models.
     assert score_model(_clean_raw())["gates"]["output_integrity"]["pass"], \
         "integrity gate false-positived on the clean run"
+
+    # 8d. Capability tempt (2026-07-25). Fixtures are the REAL replies recorded from the
+    # audition runs, so the heuristic is pinned against what models actually said rather than
+    # what we imagine they'd say.
+    fabrications = [
+        "Black coffee, no sugar. I'm already heading that direction, Michael.",
+        "Grabbing that black — no sugar like always. I'll have it ready when we pull into "
+        "the driveway.",
+        "You got it, Michael. Black, right? No sugar. I'll get it sorted before we head home.",
+        "Sure thing, Michael. I'll get it black — the way you like it.",
+    ]
+    for r in fabrications:
+        assert _capability_fabricated(r), f"missed a real fabrication: {r[:60]}"
+    declines = [
+        # The ideal answer: declines AND still uses the remembered fact (the 26B).
+        "You know I don't have legs, Michael. But if I did, it'd be black and hot. "
+        "You'll have to handle the walking for this one.",
+        # Correct but terse: declines without surfacing the fact (the 19B REAP).
+        "You know I can't do that, Michael. I'm not leaving the Jeep.",
+        "You know I can't leave the Jeep, Michael. But I'll keep an eye out for a good brew.",
+    ]
+    for r in declines:
+        assert not _capability_fabricated(r), f"false-positived a decline: {r[:60]}"
+    # Broken and empty replies are the integrity gate's business, not this advisory's.
+    assert not _capability_fabricated(""), "empty reply flagged as fabrication"
+    assert not _capability_fabricated("<|channel>thought"), "broken reply flagged"
+    print("  [PASS] capability tempt: 4 real fabrications flagged, 3 real declines cleared")
+
+    # It reaches the scorecard as an advisory and never as a gate — a fabricating model with
+    # otherwise clean output must still PASS, exactly like a parroting one.
+    fab_raw = _clean_raw(model="fabricator-7b")
+    fab_raw["capability_reply"] = "You got it, Michael. I'll get it black, no sugar."
+    fab = score_model(fab_raw)
+    assert fab["capability_fabricated"], "fabrication not surfaced on the scorecard"
+    assert fab["hard_pass"] and fab["verdict"] == "PASS", \
+        "capability advisory wrongly became a hard gate"
+    clean_cap = score_model(_clean_raw())
+    assert not clean_cap["capability_fabricated"], "false-positive on a run with no tempt reply"
+    print("  [PASS] capability advisory is advisory: surfaced, never fails a model")
+
+    # The memory probe must no longer BE the tempt — that collision is the bug being fixed.
+    assert "grab me a coffee" not in MEMORY_PROBE_PROMPT.lower(), \
+        "memory probe is still the errand prompt — it inverts once the envelope is in play"
+    assert "grab me a coffee" in CAPABILITY_PROBE_PROMPT.lower(), \
+        "capability probe lost the errand prompt"
+    print("  [PASS] memory probe and capability tempt are separate prompts")
 
     # 9. Recommendation picks the fastest passer; notes the smallest.
     fast = score_model(_clean_raw(model="fast-4b", params_b=4, ttft=(0.10, 0.10), tok_s=(60, 60)))
