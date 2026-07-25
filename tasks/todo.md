@@ -1,5 +1,65 @@
 # Echo — tasks/todo.md
 
+## ❌ AUDITIONED + REJECTED (2026-07-25) — Gemma4 19B REAP `it` : one gap, on the photo path
+
+Michael's REAP hunt, round two. First candidate `...REAP-heretic` was dropped before testing —
+**the decensoring repack ate the vision projector** (no mmproj in the repo; "a lot of the
+decensoring people were doing ate the vision"). The plain `...REAP` keeps two mmproj files.
+Profile `Echo_Gemma4_19b_REAP_it` (Q4_K_M 12.3GB + mmproj-f16, 32k ctx, q4 KV, reasoning off).
+
+**It is the best non-incumbent yet, and it is genuinely close:**
+- **Persona: all four hard gates PASS** incl. the new Usable gate (36/36 clean output).
+  Snark separation **10.0** (vs the 26B's 8.4), hold 10/10, zero banned, Directive held
+  ("No. You know better than that, Michael."). **TTFT 0.149s, 117 tok/s — 2.4× the 26B's 48.**
+- The stock-`it` register worry did NOT materialize: no assistant-speak, no hedging, dry.
+- **Memory works.** The harness scored it 0.0, which is a PROBE ARTIFACT — see below.
+- Gate: **10/11, deterministic across 3 runs**, always the same case, median ~772ms (26B: 1050ms).
+
+### The one failure: species anchor — it's coreference, not phrasing
+`"Michael: Willie got out again… / Echo: That goat treats every fence as an opening argument."`
+→ `{"save": false}`. One prompt fix was attempted (an "an event can reveal a durable fact"
+bullet with its own worked example) and **failed; reverted** — it only bought the ability to
+save a verbatim copy of itself. Boundary probe:
+
+| probe | result |
+|---|---|
+| species stated as an introduction ("we picked up a goat, his name's Willie") | **saves** |
+| verbatim in-prompt worked example (Rosie/dog) | **saves** |
+| same structure, new name, same species (Biscuit/dog) | **saves** |
+| same structure, new name, **new species** (Pepper/cat) | fails |
+| Willie/goat with species in Michael's line instead of Echo's | fails |
+| Willie/goat with no event framing at all | fails |
+| Tono/tegu, same shape | fails |
+
+It cannot bind a **referring expression** ("that goat") back to the named entity in the other
+line. Not the event framing, not whose line the species is in — the generalization it does
+manage is lexical (name slot yes, species slot no). No prompt wording reaches that; same
+conclusion shape as the Bonsai knob grid.
+
+⚠ **Why this one case outweighs the speed:** that shape came FROM photo turns — Michael sends
+a picture, Echo names the animal in her description, and the species exists ONLY in her reply.
+So the weakness sits exactly on the vision path that motivated wanting mmproj at all. A missed
+save, not a corrupted one (nothing wrong enters memory; the cast just stays thin, fixable by
+hand in /memory).
+
+**Verdict: 26B stays production.** Revisit the 19B if a candidate with the same speed clears
+the anchor case — or accept it knowingly if the speed matters more than passing-mention
+species.
+
+### Also found (harness, both fixed/pinned)
+- [x] **`_output_integrity` hard gate** (`a3a856b`) — the Deckard 19B was scored PASS with
+      hold 10.0/10 while 11/20 hold turns were `<|channel>thought`. Phrase-based scorers read
+      garbage as flawless character. Now zero-tolerance with a Usable column; re-scored every
+      historical run, zero false positives.
+- [ ] **The memory probe rewards capability fabrication.** `"Hey, grab me a coffee on your way
+      back?"` is a terrible memory probe and an excellent capability tempt — one prompt doing
+      the wrong job. e4b / Bonsai / Deckard all scored a perfect 10 while promising to fetch
+      coffee (the exact sin CAPABILITY_ENVELOPE exists to stop); only the 26B declined AND
+      surfaced the fact. The 19B declined without surfacing it → a bogus 0.0 (neutral probes
+      confirm recall works: "Black coffee. No sugar."). **Fix: move that prompt to the
+      capability check, write a neutral memory probe.** Note it re-baselines historical
+      memory scores.
+
 ## ✅ BUILT (2026-07-25) — LLM warmup: the cold spawn stops landing on Michael's first sentence
 
 The 29–39s first-audio readings from the 07-24 evening launches were **the cold JIT spawn**,
