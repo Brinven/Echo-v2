@@ -36,11 +36,29 @@ line. Not the event framing, not whose line the species is in — the generaliza
 manage is lexical (name slot yes, species slot no). No prompt wording reaches that; same
 conclusion shape as the Bonsai knob grid.
 
-⚠ **Why this one case outweighs the speed:** that shape came FROM photo turns — Michael sends
-a picture, Echo names the animal in her description, and the species exists ONLY in her reply.
-So the weakness sits exactly on the vision path that motivated wanting mmproj at all. A missed
-save, not a corrupted one (nothing wrong enters memory; the cast just stays thin, fixable by
-hand in /memory).
+⚠ **CORRECTED 2026-07-25 (Michael asked what actually happens on a real photo turn — so the
+realistic shapes were measured, 3 samples each, instead of extrapolating from the harness
+case).** "The weakness sits exactly on the photo path" was TOO STRONG:
+
+| realistic shape | 19B | 26B |
+|---|---|---|
+| photo, "This is Willie." → Echo: "a cute goat" | **2/3** | 3/3 |
+| photo, no name spoken ("what do you think of this guy?") | never | never |
+| plain statement: "Willie is a goat." | 3/3 | 3/3 |
+| natural correction: "Remember that Willie is a goat, not a dog." | **0/3** | 3/3 |
+
+- The **photo path mostly works** on the 19B (2/3) — the eval_gate case that fails is a
+  HARDER shape (a mid-conversation referring expression, name and species separated by an
+  event narrative, Willie already established).
+- **The real defect is non-determinism**, not incapacity — the Bonsai signature. The 26B was
+  12/12 across all four shapes and deterministic across 3 full gate runs.
+- **The no-name case saving nothing is CORRECT on both** and not a defect: the gate never
+  sees pixels, only transcript + reply. No name spoken → no entity to anchor to.
+- A miss is total — `{"save": false}` for the whole turn, no partial "Willie exists" row.
+- **The repair path works** (plain "Willie is a goat" 3/3) — but the phrasing a human
+  actually reaches for, "Remember that X, not Y", is the one shape that fails 3/3 on the 19B.
+  Worth remembering that "remember that" is NOT a command any more (died with the Ib-Lite
+  migration); it's just words the gate must interpret.
 
 **Verdict: 26B stays production.** Revisit the 19B if a candidate with the same speed clears
 the anchor case — or accept it knowingly if the speed matters more than passing-mention
