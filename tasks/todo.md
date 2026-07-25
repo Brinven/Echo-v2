@@ -1,5 +1,63 @@
 # Echo — tasks/todo.md
 
+## 💡 PENDING DECISION (2026-07-25) — put the spare RTX 4060 back in for the "junk"
+
+Michael's idea, raised after the VRAM investigation. He still has the **8GB RTX 4060** from
+the pre-5080 build and a **spare half-speed PCIe slot**. Question was whether moving vision /
+Whisper / etc. off the 5080 would be useful. Answer after measuring: **yes, but not the way it
+was first framed** — the best win is moving *Windows*, not Echo's components.
+
+### Measured tenants on the 5080 (16.3 GB), 2026-07-25
+| tenant | VRAM | movable? |
+|---|---|---|
+| the 26B itself | **13.4 GB** | no (splitting across a half-speed slot would be SLOWER) |
+| desktop / Windows junk (Chrome, Discord, Teams, Comet, Electron, the 10" kiosk) | ~1.0 GB | **yes — by CABLE, no code** |
+| Kokoro TTS | ~0.8 GB *(derived: 15158 − 13365 − 1003)* | yes — `CUDA_VISIBLE_DEVICES` on the service |
+| Whisper large-v3-turbo int8_float16 | ~0.9 GB | yes — `WhisperModel(device_index=1)`, param verified |
+| **total in use** | **15.16 / 16.3** | ~1.1 GB margin |
+
+**Cannot move — do not try:**
+- **Vision / mmproj** — llama-server loads the projector into the model's own context; it is not
+  independently placeable on another device.
+- **ECAPA (speaker ID) + MiniLM (Ib-Lite embedder)** — torch in the venv is **2.13.0+cpu,
+  `cuda.is_available() == False`, deliberately**. Moving them means reinstalling CUDA torch,
+  which is exactly what clobbered the environment (lessons.md 2026-07-13). They're 0.1s and
+  4ms on CPU respectively. No gain, real risk.
+
+### Corrections to the first analysis (Michael's, and he was right)
+- **Invoke is NOT the co-tenant to design around.** It's usually loaded but idle with no model
+  served (measured: contributing ~0), and his image gen is **overnight batches of 200–300**,
+  not interactive. The earlier "move Invoke to the 4060" recommendation was over-weighted.
+- **Plex is the only unpredictable spike** (serves 5–6 outside users) — and it's being migrated
+  to the Linux box anyway, which beats any GPU shuffling because it removes the tenant instead
+  of relocating it. Blocked on that box being **WiFi-only** today: 3.5 TB at 55 Mbps ≈ **6 days**
+  vs ≈ **5 hours** once it's on the planned 2.5 GbE (disk-bound ~200 MB/s, not link-bound).
+
+### The plan if he does it
+1. **Displays → the 4060.** Reclaims ~1.0 GB with a cable and zero code. The 5080 runs
+   display-less, which is the normal headless-CUDA setup and is fine.
+2. Optionally Whisper (`stt_device_index`, one value in the same ladder as `stt_model` /
+   `stt_compute` — CC offered to add it) and Kokoro. Total reclaim ≈ **2.7 GB**.
+3. **Spend it on `--n-cpu-moe`, not a bigger model.** Currently 8; dropping toward 2 should
+   recover most of the gap between the measured **70 tok/s** and the **96** this model can do.
+   The offloaded layers are where the throughput went.
+
+### Open for Michael (his own list)
+- [ ] Confirm he has the **cabling** (and physical clearance).
+- [ ] Confirm the **PSU** — believes 1000W or 1200W, needs checking. A 4060 is ~115W TGP and
+      would be doing light work, so headroom is very likely fine.
+- [ ] Check the **4060's output count** covers his display set — main + the 10" kiosk on
+      DISPLAY3 at minimum. (The kiosk moving off is a bonus: it's a browser rendering
+      continuously on Echo's card today.)
+- [ ] ⚠ **Windows will not move everything automatically.** Display outputs drive compositing,
+      which gets most of it, but per-app GPU preference (Settings → Display → Graphics) still
+      needs a sweep for the browser/Electron offenders.
+
+**Scope note:** `CLAUDE.md` lists "Dual-GPU orchestration" as rejected — that was scoped to the
+PoC and meant *architecting Echo* around two cards. Pinning a process with `device_index` or
+`CUDA_VISIBLE_DEVICES` is a config line, not orchestration. Keep it that way; don't build a
+device-management layer.
+
 ## ❌ AUDITIONED + REJECTED (2026-07-25) — Gemma4 19B REAP `it` : one gap, on the photo path
 
 Michael's REAP hunt, round two. First candidate `...REAP-heretic` was dropped before testing —
