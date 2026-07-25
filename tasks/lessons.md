@@ -494,3 +494,43 @@ Rules that came out of it:
    ("flattery_handling") is deterministically indistinguishable from a real pref; it is
    PINNED as a known limit, and a model that produces it fails eval_gate instead. The net
    guarantees the worst classes; the audition harness gates the model.
+
+## 2026-07-25: "We're hitting the VRAM wall" — it was the cold spawn, and measurement was the only way to tell
+
+Three 26B launches showed 29–39s to first audio. The hypothesis was VRAM: the 26B is a hair
+bigger than Bonsai, Echo had recently moved to large-v3-turbo STT, and the card is 16GB with
+Invoke/Plex often on it. Every part of that reasoning was sound. It was also wrong.
+
+The two hypotheses — "oversubscribed VRAM spilling to system memory" and "cold JIT spawn" —
+produce **the same symptom**: a first turn that takes ~30s and later turns that are fine.
+Neither can be distinguished by reading code or by reasoning about model sizes. What
+separated them was three measurements taking about four minutes:
+
+| condition | VRAM | TTFT |
+|---|---|---|
+| cold route | 14368 MB | 21.4s |
+| warm, no Whisper | 14374 MB | 0.65s |
+| warm + Whisper resident | 15274 MB | 0.50s |
+
+Whisper costs 900 MB and **zero** latency. Had we "fixed" it by dropping STT to `base`, the
+30s would have persisted (it was never STT), the proper-noun accuracy Michael deliberately
+bought on 07-17 would have been thrown away, and the real cause would still be there —
+and it would have looked like the VRAM theory was *nearly* right, which is the worst
+possible place to end up.
+
+**Rules:**
+- **When two causes predict the same symptom, measure the thing that separates them before
+  changing anything.** The A/B here was: same generation, with and without the suspect
+  resident. If the suspect is innocent the numbers are identical, and they were.
+- **A plausible cause is not evidence.** "Bigger model + bigger STT + small card" is a
+  correct description of the situation that happened not to be the explanation.
+- **Suspect what changed.** The profile was being edited between those three launches
+  (CPU-offload layers, ctx, KV→q4) and every edit forces a respawn — the 30s was in the
+  logs three times *because he was tuning*, not because anything was broken.
+- **Third instance of "a lazy load wearing a slow reply's clothes"** (Ib-Lite embedder,
+  Stage 8.1; now the LLM route). Anything that loads on first use gets loaded at startup, on
+  a background thread, or it will eventually be reported as the app being slow. Fixed:
+  `llm.warm()` + a daemon thread in `main()` and in `do_model_swap`.
+- **The warmup needs its OWN timeout.** Reusing the 30s turn timeout would abandon a cold
+  spawn that Sindri queues for up to 120s — a warmup that gives up leaves the route cold,
+  i.e. silently does nothing while appearing to work.

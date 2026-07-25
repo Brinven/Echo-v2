@@ -178,6 +178,12 @@ _SERVER_LABEL = _NATIVE_ROOT.split("://")[-1]
 
 TIMEOUT_S = 30
 
+# Warmup gets its own, much longer timeout than an ordinary turn. A cold llama.cpp route
+# JIT-spawns its backend on the FIRST request, and Sindri's proxy queues that spawn for up
+# to 120s — TIMEOUT_S (30) would abandon the wait and leave the route cold, which is the
+# exact thing warming exists to prevent. Nothing is waiting on this call, so patience is free.
+WARMUP_TIMEOUT_S = 180
+
 
 def _route_slug(name: str) -> str:
     """Mirror of Sindri's routeSlug (src/main/profiles.js): a proxy route defaults to the
@@ -349,6 +355,38 @@ class LLMClient:
     def set_model(self, name: str) -> None:
         """Swap the active model in place (mid-chat hot-swap). The gate is swapped separately."""
         self._model = name
+
+    def warm(self, model: str | None = None) -> tuple[bool, float]:
+        """Force the server to load a model NOW. Blocking, never raises. → (ok, seconds).
+
+        A cold route's JIT spawn is paid by whoever sends the first request, and until this
+        existed that was always Michael's first sentence: measured 2026-07-25 on the 26B,
+        **21.4s TTFT cold vs 0.65s warm**. He read it as Echo being slow — the same
+        misdiagnosis the Ib-Lite embedder caused in Stage 8.1 (a lazy load wearing a slow
+        reply's clothes), and the same fix: pay it at startup, off to one side.
+
+        Deliberately the smallest possible request (one token, no history, no persona) — it
+        exists to make the server allocate, not to generate anything. Fail-soft on purpose:
+        no model, no route, server busy, spawn OOM — none of that should touch startup, and
+        the first real turn then simply pays the load exactly as it did before.
+        """
+        target = model or self._model
+        if not target:
+            return False, 0.0
+        t0 = time.monotonic()
+        try:
+            self._client.chat.completions.create(
+                model=target,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=1,
+                temperature=0,
+                reasoning_effort="none",
+                timeout=WARMUP_TIMEOUT_S,
+            )
+            return True, time.monotonic() - t0
+        except Exception as e:
+            logger.warning(f"warmup failed for {target}: {e}")
+            return False, time.monotonic() - t0
 
     def list_models(self) -> list[str]:
         """Live model ids from LM Studio (empty list on error)."""

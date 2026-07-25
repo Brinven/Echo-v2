@@ -920,6 +920,35 @@ def main():
     if llm.model_name and config.get("last_model") != llm.model_name:
         config["last_model"] = llm.model_name
         save_config(config)
+    # Warm the LLM route in the BACKGROUND, starting now (2026-07-25).
+    #
+    # A cold llama.cpp/Sindri route JIT-spawns its backend on the first request — measured
+    # 21.4s TTFT cold vs 0.65s warm on the 26B. That cost used to land on Michael's first
+    # sentence and read as "Echo is slow"; three consecutive launches showed 29-39s to first
+    # audio. Same shape as the Stage 8.1 embedder stall, same fix.
+    #
+    # A thread rather than a blocking call because the whole point is to overlap it with the
+    # loads below (TTS warm, embedder, ECAPA) — blocking here would just move the 20s from
+    # the first turn to the launch, which is no gift when the dashboard is the control surface.
+    # Daemon so a hung spawn can never keep the process alive; nothing joins it, and the
+    # result is cosmetic — if it loses the race with Michael, the first turn pays the load
+    # exactly as before. Fires only when a model actually resolved (Stage 8.1 allows none).
+    def _warm_llm():
+        ok, secs = llm.warm()
+        clear_status_line()
+        if ok:
+            print(f"  [LLM ready — {llm.model_name} warm in {secs:.1f}s]")
+        else:
+            # Not fatal and not necessarily wrong (server busy, route gone, spawn OOM).
+            # Say so plainly rather than silently leaving him to wonder about a slow turn.
+            print(f"  [LLM warmup did not complete after {secs:.1f}s — the first reply "
+                  f"may pause while the server loads {llm.model_name}]")
+            _print_vram_hint()
+
+    if llm.model_name:
+        print(f"  LLM: warming {llm.model_name} in the background...")
+        threading.Thread(target=_warm_llm, daemon=True, name="llm-warmup").start()
+
     # Voice persists in config.json (like last_model), so a dashboard pick survives a restart.
     tts = TTSEngine(voice=config.get("voice"))
     vad = VADDetector()
@@ -1156,7 +1185,26 @@ def main():
         if not llm.supports_vision():
             if collapse_image_history(history):
                 print("  [photo context dropped — the new model can't see images]")
-        print(f"  [Now using {new_model} — first reply may pause while the server loads it]")
+        print(f"  [Now using {new_model} — warming it in the background]")
+
+        # Warm the newly-picked route the same way startup does. A swap lands on a COLD
+        # route by definition (Sindri drains and stops the previous resident), so without
+        # this the next thing Michael says pays the full JIT spawn — ~21s on the 26B, and
+        # the dashboard dropdown is exactly where he auditions models back-to-back.
+        # Background + daemon for the same reason as startup: do_model_swap runs on the main
+        # loop between turns, and blocking here would freeze the loop (and the mic) mid-swap.
+        # `new_model` is passed explicitly rather than read from llm — a second swap while
+        # this thread is in flight must not make it warm the wrong route.
+        def _warm_swapped(target=new_model):
+            ok, secs = llm.warm(target)
+            clear_status_line()
+            if ok:
+                print(f"  [{target} warm in {secs:.1f}s]")
+            else:
+                print(f"  [{target} warmup did not complete after {secs:.1f}s — "
+                      f"the next reply may pause]")
+
+        threading.Thread(target=_warm_swapped, daemon=True, name="llm-warmup-swap").start()
 
     def do_voice_preview(name: str):
         """Speak the sample line in `name` WITHOUT adopting it. Main loop only, while idle.

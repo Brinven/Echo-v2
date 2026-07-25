@@ -1603,3 +1603,52 @@ route in the background."* Nothing in the prompt had ever said what she CAN'T do
   dedicated Echo profile); `bonsai1` stays a route for fun, not the memory-writing
   companion. Gate re-verify (eval_gate + reasoning check) required on the 12B's first
   Sindri session per the standing rule.
+
+---
+
+## ⚠ LLM Warmup — the cold JIT spawn belongs to startup, not to Michael (2026-07-25)
+
+A cold llama.cpp/Sindri route JIT-spawns its backend on the **first request**, and until now
+whoever sent that request paid for it — which was always Michael's first sentence. Three
+consecutive 26B launches (2026-07-24, 20:00/20:04/20:07) logged **29–39s to first audio**;
+he read it as Echo being slow and suspected the VRAM wall.
+
+**Measured (2026-07-25), because the two hypotheses look identical from the outside:**
+
+| condition | VRAM | TTFT | tok/s |
+|---|---|---|---|
+| cold (route not resident) | 14368 MB | **21.4s** | — |
+| warm, no Whisper | 14374 MB | 0.65s | 47.8 |
+| warm + Whisper large-v3-turbo resident | 15274 MB | **0.50s** | **48.4** |
+
+**STT was innocent.** large-v3-turbo `int8_float16` costs ~900 MB next to the 26B and
+**zero** measurable latency — TTFT and tok/s are the same with it loaded. Dropping to `base`
+(+367 MB, a 0.94 GB saving) would cost proper nouns and buy no speed. The whole 30s was the
+spawn, paid repeatedly because Michael was editing the Sindri profile between launches
+(CPU-offload layers, ctx, KV q4) and **every profile edit forces a respawn**. Sindri's
+`proxy_idle_unload_min` is opt-in and defaults to 0, so a settled route stays resident.
+
+- **`llm.LLMClient.warm(model=None) → (ok, seconds)`** — smallest possible request
+  (`max_tokens=1`, no history, no persona); it exists to make the server allocate, not to
+  generate. **Own `WARMUP_TIMEOUT_S = 180`, NOT `TIMEOUT_S` (30)** — Sindri queues a cold
+  spawn up to 120s, so the ordinary turn timeout would abandon the wait and leave the route
+  cold, which is the exact thing warming prevents. Never raises: no model / no route /
+  server busy / spawn OOM all return `(False, secs)` and the first real turn just pays the
+  load as before.
+- **Called on a daemon thread from `main()`, started immediately after `LLMClient`** — before
+  TTS/VAD/embedder/ECAPA — so the spawn overlaps the other loads. Blocking would merely move
+  the 20s from the first turn to the launch, which is no gift when the dashboard is the
+  control surface. Verified live: warm completed in 8.2s, *after* the loop reached LISTENING,
+  and `clear_status_line()` kept the async print off the status line.
+- **`do_model_swap` warms too**, passing `new_model` explicitly as a default arg — a second
+  swap while the first thread is in flight must not warm the wrong route. A swap lands on a
+  cold route BY DEFINITION (Sindri drains and stops the previous resident), and the dashboard
+  dropdown is exactly where models get auditioned back-to-back.
+- **Third instance of the same bug class:** a lazy load wearing a slow reply's clothes. The
+  Ib-Lite MiniLM embedder (Stage 8.1, `embedder.preload()`) was the first, STT was already
+  eager, and this is the LLM's. **Rule: anything that loads on first use gets loaded at
+  startup, or it will be mistaken for Echo being slow.**
+- ⚠ **Margin, not headroom:** 26B + Whisper = 15.27/16.3 GB. ~1 GB spare, and this box
+  usually has Invoke or Plex on the card (Stage 8.3). Going over does NOT error — the driver
+  falls back to system memory and everything just gets mysteriously slow. If co-tenancy
+  becomes routine, `base` STT is the insurance lever; it is not a fix for a cold spawn.

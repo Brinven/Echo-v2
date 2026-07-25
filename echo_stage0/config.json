@@ -2,7 +2,7 @@
   "user_name": "Michael",
   "user_pronouns": "he/him",
   "llm_base_url": "http://127.0.0.1:4610/v1",
-  "last_model": "bonsai1",
+  "last_model": "echo_gemma4_26b-a4b_unc",
   "voice": "bf_lily",
   "stt_model": "large-v3-turbo",
   "stt_compute": "int8_float16"

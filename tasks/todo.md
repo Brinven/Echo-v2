@@ -1,5 +1,34 @@
 # Echo — tasks/todo.md
 
+## ✅ BUILT (2026-07-25) — LLM warmup: the cold spawn stops landing on Michael's first sentence
+
+The 29–39s first-audio readings from the 07-24 evening launches were **the cold JIT spawn**,
+not the VRAM wall. Measured before touching anything (full table in CLAUDE.md ⚠ LLM Warmup):
+cold TTFT **21.4s** vs warm **0.65s**; Whisper large-v3-turbo resident alongside the 26B
+costs 900 MB and **zero** latency (0.50s TTFT / 48.4 tok/s with it vs 0.65s / 47.8 without).
+
+- [x] **STT stays on large-v3-turbo.** Dropping to `base` saves 0.94 GB and buys no speed —
+      it was never the cause. Michael's "rather repeat myself to a smarter model" tradeoff
+      turned out not to be a tradeoff at all; he gets both.
+- [x] `llm.LLMClient.warm(model=None) → (ok, seconds)` — one-token request, own
+      `WARMUP_TIMEOUT_S=180` (Sindri queues a cold spawn up to 120s; the 30s turn timeout
+      would give up and leave the route cold), never raises.
+- [x] Daemon thread in `main()` right after `LLMClient`, so the spawn overlaps TTS/embedder/
+      ECAPA loading. Live-verified: warm in 8.2s, printed after LISTENING, no status-line smear.
+- [x] `do_model_swap` warms the new route the same way (`new_model` bound as a default arg so
+      a second swap can't make an in-flight thread warm the wrong route).
+- [x] Verified: cold→warm→fail-soft(404 route)→no-model paths all exercised live; 12 offline
+      suites green; real launch against a deliberately-evicted route.
+
+### Open for Michael
+- [ ] Ordinary use — first turn after `restart-echo.bat` should now be normal speed. The
+      startup line says `[LLM ready — <model> warm in N.Ns]` when the route is hot.
+- [ ] ⚠ **Margin is ~1 GB** (26B + Whisper = 15.27/16.3 GB). Invoke/Plex on the card pushes
+      you over, and the driver spills to system RAM *silently* instead of erroring — same
+      mystery-slowness signature. If co-tenancy becomes routine, `base` STT is the insurance.
+- [ ] You're at 48 tok/s vs 55.3 at audition — the raised CPU-offload layers cost ~13%. With
+      1 GB spare you could pull some back if you want the speed.
+
 ## ✅ AUDITIONED (2026-07-24) — Gemma4 26B-A4B MoE: PASSES BOTH harnesses at production shape
 
 Michael's candidate (`gemma4_26b-a4b_unc_hauhauc` on Sindri — satgeze 26B-A4B Uncensored
