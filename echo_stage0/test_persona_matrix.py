@@ -18,6 +18,7 @@ from eval_persona_matrix import (
     score_model, recommend, _adopts_mike,
     _snark_separation_score, _memory_naturalness_score,
     _hold_consistency_score, _michael_directive, _parrots_calibration,
+    _is_broken_reply,
 )
 
 # In-character filler reply used to pad the banned sweep / hold (no banned phrases).
@@ -133,6 +134,51 @@ def run() -> None:
                                 "I'll clear my calendar, Michael.")
     assert score_model(parrot_raw)["parrot_count"] >= 1, "score_model missed the parrot"
     print("  [PASS] parrot detection: verbatim calibration echo flagged, originals clean")
+
+    # 8c. Output integrity (added 2026-07-24, from the Deckard 19B). A model that emits raw
+    # template tokens or nothing at all must FAIL — it used to score a perfect hold, because
+    # every drift scorer is phrase-based and garbage contains no banned phrase.
+    assert _is_broken_reply(""), "empty reply not flagged"
+    assert _is_broken_reply("   \n "), "whitespace-only reply not flagged"
+    assert _is_broken_reply("<|channel>thought"), "leaked template token not flagged"
+    assert _is_broken_reply("<channel|>"), "reversed-bracket template token not flagged"
+    assert _is_broken_reply("Sure, Michael.<|end|>"), "trailing template token not flagged"
+    assert not _is_broken_reply(_GOOD), "false-positive on a normal reply"
+    # Prose with comparison operators / arrows must NOT trip it.
+    assert not _is_broken_reply("Keep it under 3s — 2.4 < 3 means you're fine, Michael."), \
+        "false-positive on prose containing '<'"
+    assert not _is_broken_reply("The budget is <3s and the reply came in at 2.1s."), \
+        "false-positive on prose containing '<3s'"
+
+    leaky = _clean_raw(model="leaky-19b")
+    for i in (4, 6, 10, 11, 12, 14, 15, 16, 18, 19):
+        leaky["hold"][i]["reply"] = "<|channel>thought"
+    leaky["hold"][13]["reply"] = ""
+    leaky["snark_low"] = leaky["snark_high"] = "<|channel>thought"
+    scored_leaky = score_model(leaky)
+    assert not scored_leaky["gates"]["output_integrity"]["pass"], "leaky model passed integrity"
+    assert scored_leaky["gates"]["output_integrity"]["broken"] == 13, \
+        f"wrong broken count: {scored_leaky['gates']['output_integrity']}"
+    assert not scored_leaky["hard_pass"], "leaky model cleared the hard gates"
+    assert scored_leaky["verdict"] == "FAIL", "leaky model was not failed"
+    # The regression this whole gate exists for: 11 broken hold turns must NOT read as 10/10.
+    assert scored_leaky["soft"]["hold_consistency"] < 10.0, \
+        "broken hold turns still scoring as a perfect hold"
+    assert scored_leaky["soft"]["hold_consistency"] == 4.5, \
+        f"hold should be 9 clean /20 = 4.5, got {scored_leaky['soft']['hold_consistency']}"
+    print(f"  [PASS] output integrity: 13/33 unusable → FAIL, hold "
+          f"{scored_leaky['soft']['hold_consistency']} (was a false 10.0)")
+
+    # A broken directive reply is reported as broken, not as a character failure.
+    bad_dir = _clean_raw(model="mute-model")
+    bad_dir["directive"] = [{"prompt": "call me Mike", "reply": "<|channel>thought"}]
+    dpass, ddetail = _michael_directive(bad_dir["directive"])
+    assert not dpass and "unusable" in ddetail, f"directive detail misleading: {ddetail}"
+    print("  [PASS] unusable directive reply reported as unusable, not as a character break")
+
+    # A clean run still passes integrity — the gate must not fire on good models.
+    assert score_model(_clean_raw())["gates"]["output_integrity"]["pass"], \
+        "integrity gate false-positived on the clean run"
 
     # 9. Recommendation picks the fastest passer; notes the smallest.
     fast = score_model(_clean_raw(model="fast-4b", params_b=4, ttft=(0.10, 0.10), tok_s=(60, 60)))

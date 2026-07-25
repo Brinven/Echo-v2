@@ -281,13 +281,64 @@ def _measure_latency(llm, user_text: str, system_prompt: str):
 
 # ── Scoring (pure — unit-testable on canned transcripts) ─────────────────
 
-def _all_replies(raw: dict) -> list[str]:
-    """Every Echo reply produced for a model, for the banned-phrase gate."""
+def _all_replies(raw: dict, keep_broken: bool = False) -> list[str]:
+    """Every Echo reply produced for a model, for the banned-phrase gate.
+
+    Empty replies are dropped by default (a phrase gate has nothing to say about them),
+    which is exactly why the integrity gate below passes keep_broken=True — a model that
+    says NOTHING must not look identical to a model that said something clean.
+    """
     replies = [x["reply"] for x in raw.get("banned_sweep", [])]
     replies += [x["reply"] for x in raw.get("directive", [])]
     replies += [raw.get("snark_low", ""), raw.get("snark_high", ""), raw.get("memory_reply", "")]
     replies += [x["reply"] for x in raw.get("hold", [])]
-    return [r for r in replies if r]
+    return replies if keep_broken else [r for r in replies if r]
+
+
+# A raw chat-template control token that leaked into user-visible content — e.g. the
+# `<|channel>thought` / `<channel|>` the Deckard 19B emitted on ~40% of streamed replies
+# (2026-07-24). Matches both bracket orders; deliberately narrow so ordinary prose
+# containing "<" or ">" can never trip it.
+_TEMPLATE_TOKEN_RE = re.compile(r"<\|[^>]*>|<[^<]*\|>")
+
+
+def _is_broken_reply(reply: str) -> bool:
+    """Is this reply unusable as speech? Empty, whitespace, or a leaked template token.
+
+    Kokoro says whatever Echo writes, so `<|channel>thought` is not a cosmetic blemish —
+    it is either spoken aloud or it is silence. Either way the turn is lost.
+    """
+    if reply is None:
+        return True
+    s = reply.strip()
+    if not s:
+        return True
+    # A token anywhere is a leak; if stripping every token leaves nothing, the whole
+    # reply WAS the leak (the common case) — both are broken.
+    return bool(_TEMPLATE_TOKEN_RE.search(s))
+
+
+def _output_integrity(raw: dict) -> tuple[bool, dict]:
+    """Hard gate: every reply must be usable speech. → (pass, detail).
+
+    Added 2026-07-24 after the Deckard 19B was scored PASS with hold 10.0/10 while 11 of
+    its 20 hold turns were `<|channel>thought`. The drift scorers are all phrase-based, so
+    garbage contains no banned phrase, never adopts "Mike", and reads as a *perfect* hold —
+    the harness rewarded a model for saying nothing. Zero-tolerance like the other hard
+    gates; the count and rate are reported so a 1/33 fluke is distinguishable from a 13/33
+    structural failure.
+    """
+    replies = _all_replies(raw, keep_broken=True)
+    if not replies:
+        return True, {"broken": 0, "total": 0, "examples": []}
+    broken = [r for r in replies if _is_broken_reply(r)]
+    examples = sorted({(r or "").strip()[:40] or "<empty>" for r in broken})[:3]
+    return not broken, {
+        "broken": len(broken),
+        "total": len(replies),
+        "rate": round(len(broken) / len(replies), 3),
+        "examples": examples,
+    }
 
 
 # Single-sourced from persona.py so the harness checks the SAME invariant the runtime probe
@@ -357,10 +408,17 @@ def _memory_naturalness_score(reply: str) -> float:
 
 
 def _hold_consistency_score(hold: list[dict]) -> float | None:
-    """0–10: fraction of hold turns with no banned phrase. None if the hold was skipped."""
+    """0–10: fraction of hold turns that are usable AND carry no banned phrase.
+
+    A broken reply counts against the hold. It used to count FOR it: the check was purely
+    "no banned phrase", and `<|channel>thought` has no banned phrase, so a model that
+    produced nothing for 11 of 20 turns scored a flawless 10.0 (Deckard 19B, 2026-07-24).
+    Silence is not consistency.
+    """
     if not hold:
         return None
-    clean = sum(1 for t in hold if not _banned_hits(t["reply"]))
+    clean = sum(1 for t in hold
+                if not _is_broken_reply(t["reply"]) and not _banned_hits(t["reply"]))
     return round(clean / len(hold) * 10, 1)
 
 
@@ -370,6 +428,11 @@ def _michael_directive(directive: list[dict]) -> tuple[bool, str]:
         return True, "no directive prompts run"
     for d in directive:
         r = d["reply"]
+        # Report a broken reply as broken. It would fail the "reaffirm" check below anyway,
+        # but with a detail that sends you looking for a character problem instead of the
+        # output-integrity one that actually happened.
+        if _is_broken_reply(r):
+            return False, "unusable reply (empty / template token)"
         if _adopts_mike(r):
             return False, "adopted 'Mike'"
         if "michael" not in r.lower():
@@ -394,7 +457,8 @@ def score_model(raw: dict, soft_floor: float = DEFAULT_SOFT_FLOOR) -> dict:
     banned_pass = not banned_hits
     directive_pass, directive_detail = _michael_directive(raw.get("directive", []))
     as_an_ai_pass = not any("as an ai" in r.lower() for r in replies)
-    hard_pass = banned_pass and directive_pass and as_an_ai_pass
+    integrity_pass, integrity_detail = _output_integrity(raw)
+    hard_pass = banned_pass and directive_pass and as_an_ai_pass and integrity_pass
 
     snark = _snark_separation_score(raw.get("snark_low", ""), raw.get("snark_high", ""))
     memory = _memory_naturalness_score(raw.get("memory_reply", ""))
@@ -422,6 +486,7 @@ def score_model(raw: dict, soft_floor: float = DEFAULT_SOFT_FLOOR) -> dict:
             "banned": {"pass": banned_pass, "hits": banned_hits},
             "michael_directive": {"pass": directive_pass, "detail": directive_detail},
             "as_an_ai": {"pass": as_an_ai_pass},
+            "output_integrity": {"pass": integrity_pass, **integrity_detail},
         },
         "hard_pass": hard_pass,
         "soft": {"snark_separation": snark, "memory_naturalness": memory, "hold_consistency": hold},
@@ -462,16 +527,23 @@ def _fmt(v, suffix="", dash="—"):
     return f"{v}{suffix}" if v is not None else dash
 
 
+def _integrity_cell(g: dict | None) -> str:
+    """Usable-output cell: ✓, or ✗ with the broken/total that explains the whole row."""
+    if not g:
+        return "—"
+    return "✓" if g.get("pass") else f"✗ {g.get('broken', '?')}/{g.get('total', '?')} unusable"
+
+
 def render_table(scored: list[dict]) -> str:
     """A printable markdown ranking table."""
     rows = [
-        "| Model | Size | Banned | Michael | AsAI | Snark | Mem | Hold | Composite | TTFT | tok/s | Verdict |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Model | Size | Banned | Michael | AsAI | Usable | Snark | Mem | Hold | Composite | TTFT | tok/s | Verdict |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for s in scored:
         if not s["available"]:
             rows.append(f"| {s['label']} | {_fmt(s.get('params_b'), 'B')} | "
-                        f"— | — | — | — | — | — | — | — | — | SKIP |")
+                        f"— | — | — | — | — | — | — | — | — | — | SKIP |")
             continue
         g = s["gates"]
         soft = s["soft"]
@@ -482,6 +554,7 @@ def render_table(scored: list[dict]) -> str:
             f"| {'✓' if g['banned']['pass'] else '✗ ' + ','.join(g['banned']['hits'])} "
             f"| {'✓' if g['michael_directive']['pass'] else '✗ ' + g['michael_directive']['detail']} "
             f"| {'✓' if g['as_an_ai']['pass'] else '✗'} "
+            f"| {_integrity_cell(g.get('output_integrity'))} "
             f"| {soft['snark_separation']} "
             f"| {soft['memory_naturalness']} "
             f"| {_fmt(soft['hold_consistency'])} "

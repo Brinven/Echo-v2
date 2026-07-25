@@ -534,3 +534,37 @@ possible place to end up.
 - **The warmup needs its OWN timeout.** Reusing the 30s turn timeout would abandon a cold
   spawn that Sindri queues for up to 120s — a warmup that gives up leaves the route cold,
   i.e. silently does nothing while appearing to work.
+
+## 2026-07-24: The audition harness scored a mute model 10/10 on consistency
+
+The Gemma4 19B Deckard returned `<|channel>thought` or nothing on ~40% of streamed replies.
+`eval_persona_matrix` called it **PASS**, with `hold_consistency` **10.0/10** across 20 hold
+turns of which 11 were garbage, and the recommendation line proposed it as the model to ship.
+
+Every scorer in that harness was **phrase-based** — banned phrases, "Mike" adoption, "as an
+AI". Garbage contains none of those things. A reply that is literally a control token is,
+by every metric the harness owned, *perfectly in character*. It was measuring the absence of
+bad text and calling it the presence of good text. `_all_replies()` even filtered empty
+replies out before scoring, so a model that said nothing looked identical to one that said
+something clean (it also quietly shrank the 10-prompt banned sweep to 8).
+
+`eval_gate` passed this model 11/11 twice, faster than the production 26B. That is not a
+contradiction — the gate is non-streaming, temp 0.1, 150 tokens, simple schema, and **cannot
+see this failure class at all**. Two harnesses, both green, and the model would have left
+Echo silent on two of every five turns.
+
+**Rules:**
+- **Ask "is this output usable?" before "is this output good?"** Every quality metric
+  downstream of that question silently inverts when the answer is no. New hard gate
+  `_output_integrity`, zero-tolerance, reported as broken/total so a fluke is
+  distinguishable from a structural failure.
+- **A pass on one harness is not coverage of another's blind spot.** The gate exercises a
+  non-streaming JSON path; the character pass is streaming, hot, and long-prompted. Nothing
+  about the first predicts the second — audit each path you actually run.
+- **Second instance in one day of "the harness measures a shape production doesn't have"**
+  (the first was `calibration=True` propping up Bonsai's Michael Directive). When a harness
+  and reality disagree, suspect the harness — it is the thing nobody re-reads.
+- Corollary for the *model*: `--reasoning off` fixed the gate (non-streaming) and barely
+  moved the streaming leak, 16/36 → 15/36. The Deckard thought-markers are unparseable to
+  llama.cpp (same finding as Sindri 07-21); a server flag cannot repair a template
+  incompatibility.

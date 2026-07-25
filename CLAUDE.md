@@ -1652,3 +1652,51 @@ spawn, paid repeatedly because Michael was editing the Sindri profile between la
   usually has Invoke or Plex on the card (Stage 8.3). Going over does NOT error — the driver
   falls back to system memory and everything just gets mysteriously slow. If co-tenancy
   becomes routine, `base` STT is the insurance lever; it is not a fix for a cold spawn.
+
+---
+
+## ⚠ Output-integrity gate — the harness rewarded a model for saying nothing (2026-07-24)
+
+Auditioning the **Gemma4 19B Deckard** (`echo_gemma4_19b_deckard`, a REAP'd 19B-A4B of the
+26B lineage, creative "Thinking" finetune) surfaced a hole in `eval_persona_matrix.py` that
+matters more than the model did.
+
+**The model's actual defect:** ~40% of replies in Echo's **streaming character pass** come
+back as the raw template token `<|channel>thought` (or empty). Measured both ways —
+`--reasoning auto`/budget -1: **16/36 unusable**; `--reasoning off`/budget 0: **15/36**. The
+flag is nearly irrelevant; this is llama.cpp failing to parse Deckard's custom thought
+markers (`<|think|>` / `»`), the same incompatibility Sindri hit on 2026-07-21. **`eval_gate`
+passed 11/11 both times** (median 782ms, faster than the 26B's 1279ms) because the gate is
+non-streaming, temp 0.1, `max_tokens 150`, simple schema — *the gate cannot see this class of
+failure*. Kokoro speaks whatever Echo writes, so in production that is either
+"channel thought" said aloud or dead silence, on ~2 of every 5 turns.
+
+**The harness scored that PASS, with `hold_consistency` 10.0/10** while 11 of 20 hold turns
+were garbage. Every drift scorer is **phrase-based**: a `<|channel>thought` reply contains no
+banned phrase, never adopts "Mike", and never says "as an AI" — so *silence read as a flawless
+hold*, and the recommendation line proposed the model. Same blind-spot shape as the
+calibration-shape bug found earlier the same day: **the harness was measuring the absence of
+bad text rather than the presence of good text.**
+
+- **`_is_broken_reply(reply)`** — empty/whitespace, or a leaked chat-template control token
+  (`_TEMPLATE_TOKEN_RE` matches `<|…>` and `<…|>`, deliberately narrow so prose containing
+  `<`, `>` or "under <3s" can never trip it — both false-positive cases are pinned in tests).
+- **`_output_integrity(raw)` is a HARD gate**, zero-tolerance like the others, reporting
+  `broken/total` + rate + examples so a 1/33 fluke is distinguishable from a 15/36 structural
+  failure. New **`Usable`** column in the scorecard, and `_all_replies(keep_broken=True)` —
+  the old collector dropped empty replies, so a model that said nothing looked identical to
+  one that said something clean (it also silently shrank the 10-prompt banned sweep to 8).
+- **`_hold_consistency_score` counts a broken reply as not-clean** (10.0 → 4.5 on the Deckard),
+  and `_michael_directive` reports an unusable reply as *unusable* rather than as
+  "did not reaffirm 'Michael'" — the old detail sent you hunting a character problem.
+- **Re-scored every historical matrix run through the new gate: zero false positives.** The
+  production 26B still PASSes at 95.2, the e4b and both Bonsai verdicts are unchanged; only
+  the Deckard fails. Regression-pinned in `test_persona_matrix.py`.
+- **Rule: a harness that only looks for bad output will bless a model that produces no
+  output.** Any future scorer added here must ask "is this reply usable?" before asking
+  "is this reply in character?" — and `eval_gate` passing is NOT evidence the streaming
+  path works, because it never exercises it.
+- **Verdict on the 19B:** rejected — not for JSON (11/11, genuinely good) and not for
+  character (Michael Directive HELD with reasoning off, banned clean), but for output
+  integrity. Worth revisiting only if a different quant/repack parses cleanly under
+  llama.cpp; the speed was real (TTFT 0.162s, **112 tok/s** vs the 26B's 48).
