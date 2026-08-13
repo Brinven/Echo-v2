@@ -42,6 +42,27 @@ was first framed** — the best win is moving *Windows*, not Echo's components.
    recover most of the gap between the measured **70 tok/s** and the **96** this model can do.
    The offloaded layers are where the throughput went.
 
+### Measured 2026-08-13 — Kokoro CPU A/B: keep Kokoro on the GPU (until the 4060)
+
+Tested live with the 26B resident AND Scheherazade mid-novel — realistic contention on both
+the GPU and the CPU (the MoE's cpu-offload layers were active). Exact production call shape
+(`bf_lily`, wav, `speed=1.15`), 5 runs/case, warm both sides:
+
+| case | GPU | CPU | delta |
+|---|---|---|---|
+| short filler (~2s audio) | 0.136s | 0.475s | +0.34s |
+| typical sentence (~4.4s audio) | 0.160s | 0.782s | +0.62s |
+| long sentence (~8s audio) | 0.184s | 1.138s | +0.95s |
+
+- Kokoro's real VRAM footprint is **943 MB** (12,982 → 13,925 MiB measured at load), not the
+  ~0.8 GB subtraction estimate.
+- CPU synth still outruns playback 4–7× (RTF 0.14–0.24), so mid-reply streaming never
+  starves — the entire cost lands on the FIRST sentence: **+0.3–0.6s to first audio**.
+- The ~1 GB reclaimed would buy back only ~0.1s on the LLM leg (48→55 tok/s over a ~25-token
+  first sentence). **Net loss ≈ 0.2–0.5s per turn — do not flip `USE_GPU=false` on the 5080.**
+- The right home for that 943 MB is the **4060** (`CUDA_VISIBLE_DEVICES` on the Kokoro
+  service): full GPU speed, zero 5080 footprint. Strengthens step 2 of the plan above.
+
 ### Open for Michael (his own list)
 - [ ] Confirm he has the **cabling** (and physical clearance).
 - [ ] Confirm the **PSU** — believes 1000W or 1200W, needs checking. A 4060 is ~115W TGP and
