@@ -74,6 +74,25 @@ the GPU and the CPU (the MoE's cpu-offload layers were active). Exact production
       which gets most of it, but per-app GPU preference (Settings → Display → Graphics) still
       needs a sweep for the browser/Electron offenders.
 
+### Answered 2026-08-13 — the M.2 question (board = ASRock B650 Pro RS, verified via WMI)
+
+**The second slot does NOT kill an M.2 channel.** From the manual's block diagram (§1.5):
+- **PCIE3** (the second x16-size slot, bottom of the board) is **CPU-attached Gen3 x4 with its
+  own dedicated lanes** — no sharing, no mux, no asterisk.
+- All three M.2 keep full bandwidth: M2_1 Gen5x4 (CPU), M2_3 Gen4x4 (chipset), M2_2
+  Gen3x2/SATA (chipset). The "varies by CPU" footnote is about 8000-series APUs (fewer
+  lanes); the 9900X has the full complement.
+- Gen3 x4 (~3.9 GB/s) is plenty for display duty + Whisper/Kokoro CUDA (model loads are
+  sub-GB one-time; inference traffic is tiny).
+
+**Option B — iGPU as the Windows driver — is viable and already half-done:** the 9900X's
+RDNA2 iGPU is enabled right now (shows in Device Manager alongside the 5080). Board outputs:
+**1× HDMI 2.1 + 1× DisplayPort 1.4 (both 4K120)** — exactly two. That covers main + the 10"
+kiosk; a third display would have to stay on a dGPU. iGPU costs zero slots/PSU/VRAM (uses
+system RAM) and reclaims the ~1 GB desktop tax **today, with two cable moves** — but it
+can't host CUDA, so Kokoro (943 MB) + Whisper (~0.9 GB) only move off the 5080 with the
+4060. iGPU now + 4060 later compose fine.
+
 **Scope note:** `CLAUDE.md` lists "Dual-GPU orchestration" as rejected — that was scoped to the
 PoC and meant *architecting Echo* around two cards. Pinning a process with `device_index` or
 `CUDA_VISIBLE_DEVICES` is a config line, not orchestration. Keep it that way; don't build a
