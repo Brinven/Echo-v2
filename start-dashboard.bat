@@ -15,16 +15,17 @@ REM It also keeps Michael's real Chrome profile (tabs, sessions, logins) untouch
 REM and gives stop-dashboard.bat a unique string to anchor its kill filter to.
 REM
 REM WINDOW POSITION: --window-position picks the MONITOR by virtual-desktop
-REM coordinate; kiosk then fills that display. 0,1080 = the 10" panel (1280x800,
-REM below the primary) as of 2026-07-15. If you rearrange displays in Windows
-REM Settings, update KIOSK_POS -- check the layout with:
+REM coordinate; kiosk then fills that display. -1920,1080 = the 10" panel (1280x800,
+REM below the left monitor) as of 2026-08-14 (iGPU monitor became primary, which
+REM re-anchored the whole coordinate space). If you rearrange displays or change
+REM the primary in Windows Settings, update KIOSK_POS -- check the layout with:
 REM     powershell -c "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::AllScreens | %% { $_.DeviceName + ' ' + $_.Bounds }"
 REM ============================================================================
 
 setlocal enableextensions
 
 set "DASH_URL=http://127.0.0.1:7862"
-set "KIOSK_POS=0,1080"
+set "KIOSK_POS=-1920,1080"
 set "KIOSK_PROFILE=%LOCALAPPDATA%\Echo\kiosk-profile"
 
 set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
