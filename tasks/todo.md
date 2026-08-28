@@ -27,9 +27,8 @@ remote" — the voice twin of chat's NDJSON sentence streaming.
       absent from the trailer, speaker `unknown` (0.154) and she still searched. Before: the
       phone heard nothing until +7.7s, then 9.5s of audio. (That probe turn is in tonight's
       session log as an `unknown` weather question — the gate writes nothing for unknowns.)
-- [ ] Michael, from the phone (`https://skorp99.tail5c0851.ts.net:7862/remote`, reload the
-      page once): a search turn — filler plays, ~1s pause, answer; a normal turn — first audio
-      noticeably sooner; a sign-off — the goodbye streams, the summary runs at the desk.
+- [x] **Michael's phone pass, 2026-08-27 late:** "oh yeah, that's MUCH better — sounds way
+      more natural." Closed.
 - Known shape: after the filler (~2s) there is ~1s of silence before the answer on a search
   turn (decision call + search + TTFT + first-sentence synth ≈ 3s). That is the real wait,
   no longer hidden — a longer filler line would cover it if it bothers him.
