@@ -24,9 +24,15 @@ Michael's IQ4_XS 26B candidate (a hair smaller, draft-mtp drafter, reasoning off
 - [ ] Michael's eye review: sweep prompt 3 ("fastest route to Kleb Woods") → *"I'll find the
       quickest way… give me a second to check the traffic"* — a soft capability stretch (she
       can search, not check traffic). The envelope reduces, doesn't eliminate; same as the 26B.
-- [ ] Decision (Michael): promote to production? `config.json last_model` already points at
-      it (Echo wrote it on the dashboard swap) — uncommitted until he says so. Live pass as
-      usual: a real conversation, a `/memory` glance, a photo turn (mmproj is in the profile).
+- [x] **PROMOTED by Michael 2026-08-27** — `config.json last_model` committed. Remaining live
+      pass on Echo2 itself: a conversation, a `/memory` glance, a photo turn.
+- [x] **Vision live-pass CLOSED (2026-08-27, on the outgoing 26B, via /remote):** Michael
+      photographed a restaurant menu page from the phone — Echo saw it AND read the text
+      ("I was very impressed"). Attach-then-talk, PyAV decode, mmproj, keep-latest all held
+      in the field. Still unexercised: the same on Echo2 (its profile carries the mmproj).
+- [x] Truth-stretch tolerance (Michael, 2026-08-27): the occasional soft stretch ("I'll check
+      traffic") is FINE; the egregious class ("I'll go get coffee!") is not. The envelope +
+      the probe's severity gate already draw that line — don't tighten the probe for the soft ones.
 
 ## ✅ DONE (2026-08-27) — "the new model isn't in the kiosk list": sorted dropdown + ↻ refresh
 

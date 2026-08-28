@@ -119,7 +119,13 @@ Do not architect for dual-GPU now.
   `main.py`) swaps BOTH the voice model (`llm.set_model`) and the gate model (`ib.set_model`),
   preserving conversation history; first reply after a swap pauses while LM Studio JIT-loads.
   Full workflow doc: `echo_stage0/audition.md`. The harnesses honor `ECHO_MODEL` for batch testing.
-- **Production model (since 2026-07-19): Bonsai 27B 1-bit** (`bonsai1` Sindri route;
+- **⚠ The production model is whatever `config.json last_model` points at — read it live.**
+  Michael audits and swaps 26B candidates often (2026-08-27: promoted `echo2_g4-26b-a4b-it-qat-q4_xs`,
+  an IQ4_XS Gemma4 26B-A4B, after eval_gate 11/11 + matrix 99.7 production shape). The model bullets
+  below are HISTORY, not status. Any candidate clears the same ladder before a real session: Sindri
+  proxy checkbox ON + `--reasoning off` → `eval_gate.py` → `eval_persona_matrix.py` (no `--calibration`)
+  → live pass. Don't rewrite this file per swap.
+- **Production model (2026-07-19, historical): Bonsai 27B 1-bit** (`bonsai1` Sindri route;
   dealignai Bonsai-27b-1bit-CRACK-GGUF, Q1_0, ~4.35 GB, base Qwen3.6-27B, multimodal via its
   own mmproj). Audited before the switch: **eval_gate.py 11/11** (gate JSON clean, median
   809ms, guest attribution + species anchor + ONE-object all hold) and **eval_persona_matrix
