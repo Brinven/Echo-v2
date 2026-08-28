@@ -14,8 +14,10 @@ Run:  python test_remote_voice.py     (exit 0 = all assertions passed)
 
 import io
 import sys
+import json
 import time
 import base64
+import queue
 import threading
 
 try:
@@ -167,6 +169,26 @@ def run() -> None:
     assert rt_sr == 24000 and len(rt_data) == len(data)
     print("  [PASS] empty sink → None; sink_to_b64 round-trips back to the same audio")
 
+    # Streaming (2026-08-27): with a queue, every enqueue pushes THAT chunk as its own WAV
+    # the moment it lands — and the sink still collects the whole reply for the trailer path.
+    q = queue.Queue()
+    ssink = RemoteAudioSink(stream_q=q)
+    ssink.enqueue(np.zeros(24000, dtype=np.float32), 24000)          # 1.0s
+    ssink.enqueue(np.zeros((6000, 2), dtype=np.float32), 24000)      # 0.25s stereo → mono
+    assert q.qsize() == 2 and ssink.chunk_count == 2
+    kind, payload = q.get_nowait()
+    assert kind == "audio" and payload["sample_rate"] == 24000
+    c1, sr1 = sf.read(io.BytesIO(base64.b64decode(payload["wav_b64"])), dtype="float32")
+    assert sr1 == 24000 and abs(len(c1) - 24000) < 10, (sr1, len(c1))
+    kind, payload = q.get_nowait()
+    c2, _ = sf.read(io.BytesIO(base64.b64decode(payload["wav_b64"])), dtype="float32")
+    assert abs(len(c2) - 6000) < 10 and c2.ndim == 1, (len(c2), c2.ndim)
+    full, _ = sf.read(io.BytesIO(ssink.wav_bytes()[0]), dtype="float32")
+    assert abs(len(full) - 30000) < 10, "a streaming sink must still collect the whole reply"
+    RemoteAudioSink().enqueue(np.zeros(100, dtype=np.float32), 24000)
+    assert q.qsize() == 0, "a sink without a queue pushes nothing"
+    print("  [PASS] streaming sink pushes each chunk as its own WAV and still collects the whole reply")
+
     print("\n── Remote Voice: park contract (offline) ──")
 
     control, session, sm = _mk_control()
@@ -237,6 +259,73 @@ def run() -> None:
         if slot is not None:
             control.finish_remote_turn(slot, {"ok": False})
     print("  [PASS] no main loop → 504 timeout after REMOTE_WAIT_S (request never hangs)")
+
+    # Streaming (2026-08-27): stream=1 → NDJSON audio lines as the desk "synthesizes", then a
+    # done trailer carrying the text and NO wav_b64 (the audio already went out).
+    def _fake_stream_loop(control, n_chunks=2):
+        def run():
+            for _ in range(300):
+                slot = control.take_pending_remote()
+                if slot is not None:
+                    sink = RemoteAudioSink(stream_q=slot["stream_q"])
+                    for _ in range(n_chunks):
+                        sink.enqueue(np.zeros(2400, dtype=np.float32), 24000)
+                    control.finish_remote_turn(slot, {
+                        "ok": True, "signoff": False, "transcript": "hi there",
+                        "reply": "Streamed from the desk.", "speaker": "Michael",
+                        "speaker_score": 0.61, "wav_b64": "FULL", "sample_rate": 24000})
+                    return
+                time.sleep(0.01)
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        return t
+
+    def _lines(resp):
+        return [json.loads(l) for l in resp.get_data(as_text=True).splitlines() if l.strip()]
+
+    _fake_stream_loop(control)
+    r = client.post("/api/remote/turn?stream=1", data=_wav(1.0),
+                    headers={"Content-Type": "audio/wav"})
+    assert r.status_code == 200 and r.mimetype == "application/x-ndjson", (r.status_code, r.mimetype)
+    lines = _lines(r)
+    audio = [l for l in lines if "audio" in l]
+    assert len(audio) == 2 and all(a["audio"]["sample_rate"] == 24000 for a in audio), lines
+    c, sr = sf.read(io.BytesIO(base64.b64decode(audio[0]["audio"]["wav_b64"])), dtype="float32")
+    assert sr == 24000 and abs(len(c) - 2400) < 10, (sr, len(c))
+    trailer = lines[-1]
+    assert trailer["done"] is True and trailer["ok"] is True
+    assert trailer["reply"] == "Streamed from the desk." and trailer["speaker"] == "Michael"
+    assert "wav_b64" not in trailer and "sample_rate" not in trailer, "trailer must be text-only"
+    assert sum(1 for l in lines if l.get("done")) == 1 and lines.index(trailer) == len(lines) - 1
+    print("  [PASS] stream=1 → NDJSON: two audio chunks in order, then a text-only done trailer")
+
+    _fake_stream_loop(control, n_chunks=1)
+    r = client.post("/api/remote/turn",
+                    data={"audio": (io.BytesIO(_wav(1.0)), "turn.wav"), "stream": "1"},
+                    content_type="multipart/form-data")
+    lines = _lines(r)
+    assert r.mimetype == "application/x-ndjson" and lines[-1]["done"] is True
+    assert sum(1 for l in lines if "audio" in l) == 1, lines
+    print("  [PASS] multipart carries the flag as a form field and streams the same way")
+
+    _fake_stream_loop(control)
+    r = client.post("/api/remote/turn", data=_wav(1.0), headers={"Content-Type": "audio/wav"})
+    j = r.get_json()
+    assert r.mimetype == "application/json" and j["ok"] is True and j["wav_b64"] == "FULL"
+    print("  [PASS] without the flag the response is the original single JSON + full wav")
+
+    old_wait = server_mod.REMOTE_WAIT_S
+    server_mod.REMOTE_WAIT_S = 0.2
+    try:
+        r = client.post("/api/remote/turn?stream=1", data=_wav(1.0))
+        assert r.status_code == 200, r.status_code
+        assert _lines(r) == [{"done": True, "ok": False, "error": "timeout"}], _lines(r)
+    finally:
+        server_mod.REMOTE_WAIT_S = old_wait
+        slot = control.take_pending_remote()
+        if slot is not None:
+            control.finish_remote_turn(slot, {"ok": False})
+    print("  [PASS] streaming with no main loop → in-stream timeout trailer, never a mid-stream 504")
 
     print("\n── Visual input: sniff + save (offline) ──")
 

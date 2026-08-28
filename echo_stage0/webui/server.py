@@ -195,6 +195,39 @@ def create_app(control):
         v = (value or "").strip().lower()
         return v if v in ("home", "jeep", "away") else None
 
+    def _flag(value) -> bool:
+        return (value or "").strip().lower() in ("1", "true")
+
+    def _ndjson_drain(slot: dict, finalize):
+        """Drain a streaming slot's queue into an NDJSON response (shared by
+        /api/remote/turn and /api/chat/turn).
+
+        One line per queued item — {"audio": {...}} for a synthesized chunk (remote voice,
+        pushed by RemoteAudioSink), {"sentence": ...} for a reply sentence (chat) — then a
+        single trailer line with done=true + finalize(result). The ("done", result) sentinel
+        is pushed by finish_remote_turn inside the main loop's finally, so this can't hang
+        on a pipeline exception; a silent main loop becomes an in-stream timeout trailer
+        (never a mid-stream 504 — the status line is already on the wire).
+        """
+        def drain():
+            deadline = time.monotonic() + REMOTE_WAIT_S
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    yield json.dumps({"done": True, "ok": False, "error": "timeout"}) + "\n"
+                    return
+                try:
+                    kind, payload = slot["stream_q"].get(timeout=min(remaining, 1.0))
+                except queue.Empty:
+                    continue
+                if kind == "done":
+                    out = finalize(payload)
+                    out["done"] = True
+                    yield json.dumps(out) + "\n"
+                    return
+                yield json.dumps({kind: payload}) + "\n"
+        return app.response_class(drain(), mimetype="application/x-ndjson")
+
     @app.post("/api/remote/turn")
     def api_remote_turn():
         """One phone utterance in, one Echo reply out (optionally with a photo riding it).
@@ -206,6 +239,13 @@ def create_app(control):
         model/voice/preview. This request BLOCKS until the main loop publishes the result —
         that's the point: the phone wants the answer.
 
+        Streaming (2026-08-27): `stream=1` (form field / query param, like `location`)
+        answers with NDJSON instead of one JSON — an {"audio": {wav_b64, sample_rate}} line
+        per synthesized chunk as the desk makes it, then a text-only done=true trailer. The
+        phone plays chunks as they land, so the search filler is audible WHILE she looks
+        and a normal reply starts after its first sentence. Without the flag the response
+        is the original single JSON + full wav.
+
         Image problems degrade to a voice-only turn (`image_dropped` says why) — a photo
         must never cost Michael the sentence he just spoke.
         """
@@ -213,9 +253,12 @@ def create_app(control):
         doc_text = doc_name = doc_dropped = None
         # Per-turn location hint (2026-07-18): form field on multipart, query param on the
         # raw-body shape (which has no fields). Missing/invalid → None → session location.
+        # The stream flag rides the same way.
         location_hint = _clean_location(request.args.get("location"))
+        stream = _flag(request.args.get("stream"))
         if (request.content_type or "").startswith("multipart/form-data"):
             location_hint = _clean_location(request.form.get("location")) or location_hint
+            stream = stream or _flag(request.form.get("stream"))
             audio_part = request.files.get("audio")
             raw = audio_part.read() if audio_part else b""
             # Document on a VOICE turn (2026-07-18, Michael: "might as well") — attach-then-
@@ -263,20 +306,31 @@ def create_app(control):
             return jsonify(ok=False, error="too-short"), 400
         slot = control.submit_remote_turn(pcm, image_b64=image_b64,
                                           image_mime=image_mime, image_file=image_file,
-                                          location_hint=location_hint,
+                                          location_hint=location_hint, stream=stream,
                                           doc_text=doc_text, doc_name=doc_name)
         if slot is None:
             return jsonify(ok=False, error="busy"), 409
+
+        def _finalize(result: dict) -> dict:
+            result = dict(result or {"ok": False, "error": "no-result"})
+            result["image_attached"] = image_b64 is not None
+            if image_dropped:
+                result["image_dropped"] = image_dropped
+            result["doc_attached"] = doc_text is not None
+            if doc_dropped:
+                result["doc_dropped"] = doc_dropped
+            if stream:
+                # The audio already went out chunk by chunk; the trailer is text only —
+                # a second copy of the whole reply would double the payload.
+                result.pop("wav_b64", None)
+                result.pop("sample_rate", None)
+            return result
+
+        if stream:
+            return _ndjson_drain(slot, _finalize)
         if not slot["event"].wait(timeout=REMOTE_WAIT_S):
             return jsonify(ok=False, error="timeout"), 504
-        result = dict(slot["result"] or {"ok": False, "error": "no-result"})
-        result["image_attached"] = image_b64 is not None
-        if image_dropped:
-            result["image_dropped"] = image_dropped
-        result["doc_attached"] = doc_text is not None
-        if doc_dropped:
-            result["doc_dropped"] = doc_dropped
-        return jsonify(result)
+        return jsonify(_finalize(slot["result"]))
 
     # ── Chat lane (2026-07-18): typed turns through the same pipeline ──
     @app.get("/chat")
@@ -358,29 +412,9 @@ def create_app(control):
 
         if stream:
             # NDJSON: one {"sentence": ...} line per reply sentence as the model produces
-            # it, then a single trailer line with done=true + the authoritative result.
-            # The sentinel is pushed by finish_remote_turn (inside the main loop's
-            # finally), so this drain can't hang on a pipeline exception.
-            def drain():
-                deadline = time.monotonic() + REMOTE_WAIT_S
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        yield json.dumps({"done": True, "ok": False,
-                                          "error": "timeout"}) + "\n"
-                        return
-                    try:
-                        kind, payload = slot["stream_q"].get(timeout=min(remaining, 1.0))
-                    except queue.Empty:
-                        continue
-                    if kind == "sentence":
-                        yield json.dumps({"sentence": payload}) + "\n"
-                    else:
-                        out = _finalize(payload)
-                        out["done"] = True
-                        yield json.dumps(out) + "\n"
-                        return
-            return app.response_class(drain(), mimetype="application/x-ndjson")
+            # it, then a single trailer line with done=true + the authoritative result
+            # (shared drain — the remote voice route streams audio chunks the same way).
+            return _ndjson_drain(slot, _finalize)
 
         if not slot["event"].wait(timeout=REMOTE_WAIT_S):
             return jsonify(ok=False, error="timeout"), 504

@@ -1275,7 +1275,10 @@ def main():
             audio_stream.stop()
         except Exception:
             pass
-        sink = RemoteAudioSink()
+        # Streaming (2026-08-27): a VOICE turn's slot queue receives each synthesized chunk
+        # as it is made (the phone plays them as they land); a typed turn's queue carries
+        # sentences only — nothing is synthesized on a typed turn. No queue → collect only.
+        sink = RemoteAudioSink(stream_q=None if typed else rt.get("stream_q"))
         result: dict = {"ok": False, "error": "no-reply",
                         "detail": "Echo couldn't use that — too short, no speech she could "
                                   "make out, an ignored voice, or no model loaded."}

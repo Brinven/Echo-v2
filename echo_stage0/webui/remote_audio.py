@@ -12,11 +12,15 @@ Two pieces, both pure and offline-testable:
   unchanged (search filler included — it simply rides at the front of the reply), the PC
   speakers stay silent, and sink_to_b64() hands the reply back for the phone to play.
   finish()/wait_done() are non-blocking no-ops — nothing plays, so nothing is waited on.
+  Streaming (2026-08-27): given a queue, the sink ALSO pushes each chunk the moment it is
+  enqueued, so the phone hears the filler while the search runs and the first sentence
+  before the rest is generated — instead of one WAV after the whole turn.
 """
 
 import io
 import time
 import base64
+import queue
 from pathlib import Path
 
 import numpy as np
@@ -118,15 +122,30 @@ def decode_to_pcm16k(data: bytes) -> np.ndarray | None:
     return np.concatenate(chunks).astype(np.float32) / 32768.0
 
 
+def _pcm16_wav(audio: np.ndarray, sample_rate: int) -> bytes:
+    """Encode float32 mono samples as a 16-bit PCM WAV — the shape the phone decodes."""
+    buf = io.BytesIO()
+    sf.write(buf, audio, sample_rate, format="WAV", subtype="PCM_16")
+    return buf.getvalue()
+
+
 class RemoteAudioSink:
     """Drop-in for AudioQueue that collects chunks instead of playing them.
 
     The pipeline calls start() → enqueue()× → finish() (and run_signoff adds wait_done());
     all are cheap and none block. is_playing mirrors AudioQueue's property shape.
+
+    Streaming (2026-08-27): with a `stream_q`, every enqueue() ALSO pushes
+    ("audio", {"wav_b64", "sample_rate"}) — that one chunk as its own small WAV — so the
+    request thread can hand it to the phone while the pipeline is still generating. The
+    chunks are still collected, so wav_bytes()/sink_to_b64() keep working (the non-streaming
+    shape, the sign-off goodbye). Without a queue the sink is byte-identical to before.
+    The ("done", result) sentinel is control.finish_remote_turn's job, never the sink's.
     """
 
-    def __init__(self):
+    def __init__(self, stream_q: "queue.Queue | None" = None):
         self._chunks: list[tuple[np.ndarray, int]] = []
+        self._stream_q = stream_q
 
     def start(self) -> None:
         pass
@@ -135,7 +154,13 @@ class RemoteAudioSink:
         a = np.asarray(audio, dtype=np.float32)
         if a.ndim > 1:
             a = a.mean(axis=1)
-        self._chunks.append((a, int(sample_rate)))
+        sr = int(sample_rate)
+        self._chunks.append((a, sr))
+        if self._stream_q is not None:
+            self._stream_q.put(("audio", {
+                "wav_b64": base64.b64encode(_pcm16_wav(a, sr)).decode("ascii"),
+                "sample_rate": sr,
+            }))
 
     def finish(self) -> None:
         pass
@@ -167,9 +192,7 @@ class RemoteAudioSink:
                 a = np.interp(np.linspace(0.0, len(a) - 1.0, n),
                               np.arange(len(a)), a).astype(np.float32)
             parts.append(a)
-        buf = io.BytesIO()
-        sf.write(buf, np.concatenate(parts), target_sr, format="WAV", subtype="PCM_16")
-        return buf.getvalue(), target_sr
+        return _pcm16_wav(np.concatenate(parts), target_sr), target_sr
 
 
 def sink_to_b64(sink: RemoteAudioSink) -> tuple[str, int] | None:

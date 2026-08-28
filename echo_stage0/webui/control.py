@@ -274,10 +274,12 @@ class EchoControl:
         SAME single-flight slot — a phone voice turn and a typed turn can never interleave.
         `location_hint` is the per-turn register override (remote or chat).
 
-        `stream=True` (chat streaming): the slot carries a Queue; the pipeline pushes each
-        reply sentence in, and finish_remote_turn pushes the ("done", result) sentinel —
-        the request thread drains it into a chunked response. `doc_text`/`doc_name` attach
-        an extracted document to the turn (chat lane; the pipeline seam is generic).
+        `stream=True`: the slot carries a Queue and the request thread drains it into a
+        chunked NDJSON response. Chat pushes ("sentence", text) per reply sentence; a voice
+        turn's RemoteAudioSink pushes ("audio", {wav_b64, sample_rate}) per synthesized
+        chunk (2026-08-27). finish_remote_turn pushes the ("done", result) sentinel either
+        way. `doc_text`/`doc_name` attach an extracted document to the turn (chat lane; the
+        pipeline seam is generic).
         """
         with self._remote_lock:
             if self.pending_remote is not None or self._remote_busy:

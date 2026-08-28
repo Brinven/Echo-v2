@@ -1,5 +1,39 @@
 # Echo — tasks/todo.md
 
+## ✅ BUILT (2026-08-27) — Remote Voice streams: the phone hears the filler WHILE she searches
+
+Michael: *"she says 'one second while I look that up' and then immediately says what she found
+— like it searches first, then replies."* Not a timing bug: **5 of the 7 August search turns
+were `/remote`**, and the sink collected the whole reply into one WAV, so the phone was silent
+for the full turn (3.8–16.6s `total`) and then played filler + answer back-to-back. At the desk
+the filler genuinely plays during the search. Michael chose streaming over "skip the filler on
+remote" — the voice twin of chat's NDJSON sentence streaming.
+
+- [x] `RemoteAudioSink(stream_q=)` pushes each chunk as its own small WAV the moment it is
+      enqueued (still collects → `sink_to_b64`/goodbye unchanged; no queue → byte-identical).
+- [x] `/api/remote/turn` `stream=1` (form field on multipart, query on raw body) → NDJSON via
+      a `_ndjson_drain` shared with `/api/chat/turn`; trailer is text-only; timeout is an
+      in-stream trailer, never a mid-stream 504. Non-stream shape untouched.
+- [x] `main.handle_remote_turn`: one line — the voice turn's sink gets the slot queue (typed
+      turns keep sentence-only queues; nothing is synthesized on a typed turn).
+- [x] `remote.html`: `stream=1` on the POST, NDJSON reader (chat.html's), `ChunkPlayer`
+      schedules chunks gapless at `max(now, prev end)` on the gesture-unlocked AudioContext,
+      button flips to 🔊 on the FIRST chunk; errors / older server fall through to the JSON path.
+- [x] Tests: `test_remote_voice.py` (+5 checks) green; `test_chat.py`, `test_webui.py` green.
+      Headless Chromium against the real page + a stub NDJSON server: two BufferSources
+      scheduled in order, speaking label >1s before the trailer, button resets.
+- [x] **Live (real server, Echo2, Kokoro `am_adam` asking for the Magnolia weather):** filler
+      chunk on the wire at **+4.46s**, answer chunks +7.38/+7.70s, trailer +7.72s, `wav_b64`
+      absent from the trailer, speaker `unknown` (0.154) and she still searched. Before: the
+      phone heard nothing until +7.7s, then 9.5s of audio. (That probe turn is in tonight's
+      session log as an `unknown` weather question — the gate writes nothing for unknowns.)
+- [ ] Michael, from the phone (`https://skorp99.tail5c0851.ts.net:7862/remote`, reload the
+      page once): a search turn — filler plays, ~1s pause, answer; a normal turn — first audio
+      noticeably sooner; a sign-off — the goodbye streams, the summary runs at the desk.
+- Known shape: after the filler (~2s) there is ~1s of silence before the answer on a search
+  turn (decision call + search + TTFT + first-sentence synth ≈ 3s). That is the real wait,
+  no longer hidden — a longer filler line would cover it if it bothers him.
+
 ## ✅ AUDITIONED (2026-08-27) — Echo2 (`echo2_g4-26b-a4b-it-qat-q4_xs`): PASSES both harnesses — and exposed a matcher bug
 
 Michael's IQ4_XS 26B candidate (a hair smaller, draft-mtp drafter, reasoning off, proxy on).

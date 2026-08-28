@@ -380,16 +380,30 @@ async function sendTurn(blob){
       if(photoBlob) form.append("image", photoBlob, "photo.jpg");
       if(docFile) form.append("doc", docFile, docFile.name);
       if(locHint) form.append("location", locHint);
+      form.append("stream", "1");
       opts = {method: "POST", body: form};
     }else{
       opts = {method: "POST",
               headers: {"Content-Type": blob.type || "application/octet-stream"},
               body: blob};
     }
-    // The raw-body shape has no form fields — the hint rides the query string there.
-    const url = "/api/remote/turn" + (!multipart && locHint ? "?location=" + locHint : "");
+    // The raw-body shape has no form fields — the hint and the stream flag ride the query string.
+    const url = "/api/remote/turn" + (multipart ? "" : "?stream=1" + (locHint ? "&location=" + locHint : ""));
     const r = await fetch(url, opts);
-    const j = await r.json().catch(() => null);
+    // Streaming (2026-08-27): an NDJSON reply carries audio chunks as the desk makes them —
+    // the search filler is audible WHILE she looks, and a normal reply starts after its
+    // first sentence instead of after the whole thing. The trailer (done:true) is the
+    // result. Anything else (errors, an older server's single JSON) takes the old path.
+    const streamed = r.ok && (r.headers.get("content-type") || "").includes("x-ndjson");
+    let j = null, player = null;
+    if(streamed){
+      player = new ChunkPlayer();
+      j = await readStream(r, player);
+      if(!j) j = {ok: false, detail: "The reply stream broke off — try again."};
+      else if(!j.ok && j.error === "timeout") j.detail = "That took too long — she may still be finishing at the desk.";
+    }else{
+      j = await r.json().catch(() => null);
+    }
     if(r.status === 409){ setStatus("She's mid-conversation at home — try again in a moment."); }
     else if(r.status === 413){ setStatus("That photo is too big to upload — remove it and retry."); }
     else if(r.status === 504){ setStatus("That took too long — she may still be finishing at the desk."); }
@@ -403,7 +417,9 @@ async function sendTurn(blob){
       renderLive(j);
       // Speaker + score up front (not after playback) — it's the live-pass tuning readout.
       if(j.speaker) $("meta").textContent = `heard as ${j.speaker} (${(j.speaker_score ?? 0).toFixed(2)})`;
-      if(j.wav_b64){
+      if(player){
+        await player.done();   // chunks were scheduled as they arrived; wait for the last one
+      }else if(j.wav_b64){
         talk.textContent = "🔊 Echo";
         setStatus("");
         await playB64(j.wav_b64);
@@ -440,6 +456,55 @@ async function playB64(b64){
   }catch(err){
     setStatus("Reply arrived but couldn't play — check the phone isn't on silent.");
   }
+}
+
+// Gapless chunk playback for the streaming reply. Each chunk is scheduled at
+// max(now, end of the previous one): sample-accurate joins while chunks arrive ahead of
+// playback, a small gap (never an overlap) if the network falls behind. Same shape as the
+// desk's AudioQueue. The first chunk is the moment the phone hears her — flip the button.
+class ChunkPlayer{
+  constructor(){ this.next = 0; this.pending = []; this.started = false; }
+  async play(b64){
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for(let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const audio = await decodeAudio(bytes.buffer);
+    const src = ctx.createBufferSource();
+    src.buffer = audio;
+    src.connect(ctx.destination);
+    const at = Math.max(ctx.currentTime, this.next);
+    this.pending.push(new Promise(res => { src.onended = res; }));
+    src.start(at);
+    this.next = at + audio.duration;
+    if(!this.started){ this.started = true; talk.textContent = "🔊 Echo"; setStatus(""); }
+  }
+  async done(){ await Promise.all(this.pending); }
+}
+
+// NDJSON reader (same shape as chat.html): audio lines are played as they land, the
+// done:true trailer is returned as the turn's result. null = the stream ended without one.
+async function readStream(r, player){
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", trailer = null;
+  while(true){
+    const {value, done} = await reader.read();
+    if(done) break;
+    buf += dec.decode(value, {stream: true});
+    let i;
+    while((i = buf.indexOf("\n")) >= 0){
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if(!line) continue;
+      let j; try{ j = JSON.parse(line); }catch(e){ continue; }
+      if(j.audio && j.audio.wav_b64){
+        try{ await player.play(j.audio.wav_b64); }
+        catch(e){ setStatus("Reply arrived but couldn't play — check the phone isn't on silent."); }
+      }
+      if(j.done) trailer = j;
+    }
+  }
+  return trailer;
 }
 
 // This exchange, rendered immediately from the POST response (the poll catches up later).

@@ -1336,6 +1336,21 @@ funnels :443/:8443 publicly for claude.ai MCP — Echo must not share those list
   sink, park contract, route incl. 400/409/504) + a real-browser smoke (headless Chromium,
   fake mic → real webm/Opus upload → PyAV decode → reply rendered + played). All prior
   suites green.
+- **⚠ Remote replies STREAM (2026-08-27).** Michael: *"she says 'one second while I look that
+  up' and then immediately says what she found."* 5 of the 7 August search turns were from the
+  phone, where the sink returned ONE WAV after the whole turn — the filler could cover nothing.
+  Now `RemoteAudioSink(stream_q=)` pushes `("audio", {wav_b64, sample_rate})` per synthesized
+  chunk (still collecting, so `sink_to_b64` / the goodbye path are unchanged); `/api/remote/turn`
+  with `stream=1` (form field / query, like `location`) answers NDJSON through the SAME
+  `_ndjson_drain` the chat route uses (kinds: `audio`, `sentence`, `done`), with a text-only
+  trailer (`wav_b64` stripped — it already went out); `remote.html`'s `ChunkPlayer` schedules
+  each chunk gapless at `max(now, end of previous)` on the gesture-unlocked AudioContext and
+  flips the button on the FIRST chunk. **Still no `remote` branch in the pipeline — the sink is
+  the branch.** Measured live: filler on the wire at +4.5s, answer chunks +7.4/+7.7s, trailer
+  +7.7s — the phone used to hear nothing until the trailer. Typed turns keep sentence-only
+  queues (nothing is synthesized there). Without the flag the response is the original JSON +
+  full wav, byte-identical. Tests: `test_remote_voice.py` (sink push, NDJSON route, multipart
+  flag, text-only trailer, in-stream timeout) + a headless-Chromium smoke of the real page.
 - **Open (Michael):** the live pass — FIRST check his speaker-ID score through the phone
   mic (different mic character than the desk; fold a phone sample into his print if it
   sags), then a real conversation, a guest/unknown check, sign-off from the phone.
