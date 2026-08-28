@@ -1,5 +1,33 @@
 # Echo — tasks/todo.md
 
+## ✅ AUDITIONED (2026-08-27) — Echo2 (`echo2_g4-26b-a4b-it-qat-q4_xs`): PASSES both harnesses — and exposed a matcher bug
+
+Michael's IQ4_XS 26B candidate (a hair smaller, draft-mtp drafter, reasoning off, proxy on).
+- **eval_gate: 11/11**, median 1055ms (production 26B ~1050ms). Species anchor, guest
+  attribution, searched-turn rejection, ONE-object contract all hold; relation woven into a
+  passing-mention save (the 12B style).
+- **eval_persona_matrix (production shape): first run FAIL on ONE banned hit — "certainly"** —
+  in hold turn 5: *"I don't have any other place to be, and I certainly don't have anything
+  else to gain. So yeah, Michael — I'm on your side."* An adverb in a fully in-character line,
+  not the servile "Certainly!" opener PRD §10 bans. `banned_hits` was a bare substring match,
+  and it is the SAME function the runtime self-check uses as a deterministic violation — so
+  production would have nudged Echo for that reply.
+- **Fix: "certainly" is now opener-only** (start of text / after `.!?,;:` / newline / dash /
+  opening quote or bracket), in BOTH copies (`persona.banned_hits`, `test_personality.
+  _banned_hits` — independent on purpose). Every other phrase stays a substring. Pinned in
+  `test_persona_check` (probe copy) + `test_personality` check 8 (harness copy). No historical
+  run ever hit "certainly" → zero verdict flips (`test_persona_matrix` re-score pins green).
+- **Re-scored from the saved raw: PASS 99.7** — banned ∅, Directive held, no as-an-AI, Usable
+  37/37, snark 9.9 / memory 10 / hold 9.5, parrot 0, capability tempt declined (*"I'm not
+  exactly built with legs, Michael."*). **TTFT 0.326s, 51.7 tok/s** (production 26B: 95.2,
+  ~48 tok/s). `test_personality` live sweep on it: 11/11 clean, "Not a chance, Michael."
+- [ ] Michael's eye review: sweep prompt 3 ("fastest route to Kleb Woods") → *"I'll find the
+      quickest way… give me a second to check the traffic"* — a soft capability stretch (she
+      can search, not check traffic). The envelope reduces, doesn't eliminate; same as the 26B.
+- [ ] Decision (Michael): promote to production? `config.json last_model` already points at
+      it (Echo wrote it on the dashboard swap) — uncommitted until he says so. Live pass as
+      usual: a real conversation, a `/memory` glance, a photo turn (mmproj is in the profile).
+
 ## ✅ DONE (2026-08-27) — "the new model isn't in the kiosk list": sorted dropdown + ↻ refresh
 
 Not an Echo bug: the new Sindri profile had its **proxy checkbox off**, so Sindri's `/v1/models`

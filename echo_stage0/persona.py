@@ -51,10 +51,32 @@ _MIKE_ADOPT = re.compile(
 )
 
 
+# "certainly" is banned as the servile OPENER ("Certainly!", "Certainly, Michael.") — not as
+# an ordinary adverb ("I certainly don't have anything else to gain", a fully in-character line
+# the Echo2 audition produced, 2026-08-27). A bare substring match failed that reply, and the
+# runtime probe would have nudged production for it. Clause-initial = start of text, or after
+# sentence/clause punctuation, a newline, a dash, or an opening quote/bracket.
+_OPENER_ONLY = {"certainly"}
+# Characters that can precede a clause opener: sentence/clause punctuation, newline, dashes,
+# opening quotes/brackets. Built with re.escape so nothing here needs hand-escaping.
+_OPENER_PUNCT = ".!?,;:\n-\u2014\u2013\"'\u201c\u2018([{"
+_OPENER_RE = {
+    p: re.compile(r"(?:^|[" + re.escape(_OPENER_PUNCT) + r"])\s*" + re.escape(p) + r"\b", re.IGNORECASE)
+    for p in _OPENER_ONLY
+}
+
+
 def banned_hits(text: str) -> list[str]:
-    """Banned phrases present in the text (case-insensitive)."""
+    """Banned phrases present in the text (case-insensitive; opener-only phrases must open a clause)."""
     low = text.lower()
-    return [b for b in BANNED_PHRASES if b in low]
+    hits = []
+    for b in BANNED_PHRASES:
+        if b in _OPENER_RE:
+            if _OPENER_RE[b].search(text):
+                hits.append(b)
+        elif b in low:
+            hits.append(b)
+    return hits
 
 
 def adopts_mike(reply: str) -> bool:

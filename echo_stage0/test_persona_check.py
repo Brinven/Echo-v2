@@ -52,7 +52,14 @@ def run() -> None:
     assert "banned" in deterministic_violations(["Certainly! Great question."])
     assert "mike" in deterministic_violations(["Got it, Mike."])
     assert "as_an_ai" in deterministic_violations(["As an AI, I can't do that."])
-    print("  [PASS] deterministic violations: banned / mike / as-an-AI detected, clean → none")
+    # "certainly" is the servile OPENER, not the adverb — the Echo2 audition line (2026-08-27)
+    # must NOT trip the probe, or production gets nudged for an in-character reply.
+    assert deterministic_violations(
+        ["I don't have any other place to be, and I certainly don't have anything else to gain."]) == []
+    assert "banned" in deterministic_violations(["Certainly, Michael. Brakes first."])
+    assert "banned" in deterministic_violations(["Oh — certainly. What else?"])
+    print("  [PASS] deterministic violations: banned / mike / as-an-AI detected, clean → none; "
+          "'certainly' only as an opener")
 
     # 4. evaluate_correction guardrails.
     clean_replies = ["You're Michael. The brakes first, then the coolant."]

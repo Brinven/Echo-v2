@@ -661,7 +661,10 @@ deliverables, all local-first, inference-only, CoT-isolated. PRD:
 
 ### Character invariants are single-sourced (`persona.py`)
 `BANNED_PHRASES`, `adopts_mike()` (the "adopting Mike" detector), and `banned_hits()` live in
-`persona.py` — identity content. The runtime self-check probe reads them; the eval harness
+`persona.py` — identity content. **`certainly` is matched as a clause OPENER only** (2026-08-27 —
+the bare substring failed Echo2 on "I certainly don't have anything else to gain", and the same
+function is the runtime probe's deterministic violation); every other phrase is a substring. The
+`test_personality._banned_hits` copy carries the same rule — keep them in step. The runtime self-check probe reads them; the eval harness
 aliases `adopts_mike`. **The test files keep their OWN independent copies on purpose** — a test
 asserting against the module it tests would hide drift. If you edit the banned list, edit it
 in `persona.py`; the probe and harness follow automatically, the tests will flag the change.

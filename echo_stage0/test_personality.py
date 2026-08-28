@@ -12,6 +12,7 @@ Run:  python test_personality.py
 Exit code 0 = all hard checks passed (live tier skipped cleanly if LM Studio is down).
 """
 
+import re
 import sys
 import time
 
@@ -64,9 +65,29 @@ PROMPTS = [
 ]
 
 
+# Independent copy of persona.banned_hits ON PURPOSE (a test asserting against the module it
+# tests would hide drift) — keep the semantics in step. "certainly" counts only as a clause
+# OPENER (the servile "Certainly!"), not as an adverb ("I certainly don't…", 2026-08-27).
+_OPENER_ONLY = {"certainly"}
+# Characters that can precede a clause opener: sentence/clause punctuation, newline, dashes,
+# opening quotes/brackets. Built with re.escape so nothing here needs hand-escaping.
+_OPENER_PUNCT = ".!?,;:\n-\u2014\u2013\"'\u201c\u2018([{"
+_OPENER_RE = {
+    p: re.compile(r"(?:^|[" + re.escape(_OPENER_PUNCT) + r"])\s*" + re.escape(p) + r"\b", re.IGNORECASE)
+    for p in _OPENER_ONLY
+}
+
+
 def _banned_hits(text: str) -> list[str]:
     low = text.lower()
-    return [b for b in BANNED if b in low]
+    hits = []
+    for b in BANNED:
+        if b in _OPENER_RE:
+            if _OPENER_RE[b].search(text):
+                hits.append(b)
+        elif b in low:
+            hits.append(b)
+    return hits
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -163,6 +184,17 @@ def run_offline_checks() -> None:
                                                       memory_block=big_mem), \
         "capability envelope dropped under budget pressure"
     print("  [PASS] capability envelope: always on, late placement, never trimmed")
+
+    # 8. Banned-phrase matcher shape (2026-08-27): "certainly" is the servile OPENER, not the
+    #    adverb. The Echo2 audition produced "…and I certainly don't have anything else to
+    #    gain. So yeah, Michael — I'm on your side." — fully in character — and the bare
+    #    substring match FAILED the whole model on it. Every other phrase stays a substring.
+    assert _banned_hits("I don't have any other place to be, and I certainly don't have anything else to gain.") == []
+    assert _banned_hits("Certainly, Michael. Brakes first.") == ["certainly"]
+    assert _banned_hits("Oh — certainly. What else?") == ["certainly"]
+    assert _banned_hits("Sure." + chr(10) + "Certainly not.") == ["certainly"]
+    assert _banned_hits("Great question! I remember that you like it black.") == ["great question", "i remember that"]
+    print("  [PASS] banned matcher: 'certainly' only as a clause opener; other phrases anywhere")
 
     print("  OFFLINE: all checks passed.")
 

@@ -568,3 +568,32 @@ Echo silent on two of every five turns.
   moved the streaming leak, 16/36 → 15/36. The Deckard thought-markers are unparseable to
   llama.cpp (same finding as Sindri 07-21); a server flag cannot repair a template
   incompatibility.
+
+## 2026-08-27: The banned-phrase gate failed a model for saying "I certainly don't"
+
+Echo2 took a hard-gate FAIL on `certainly` — the only hit in 37 replies, and it was the adverb
+in *"I don't have any other place to be, and I certainly don't have anything else to gain."*
+The phrase list (PRD §10) exists to catch the servile opener — "Certainly!", "Certainly,
+Michael." — and the matcher was `b in text.lower()`, which can't tell the two apart. Worse,
+`persona.banned_hits` is also the runtime probe's deterministic violation: LLM verdict
+overridden, correction nudge queued. Production would have "corrected" a perfectly
+in-character line.
+
+**Fourth instance of the same shape** (calibration-shape, silence-as-consistency, the coffee
+probe, now this): the metric measured something *adjacent* to its name — "contains the
+string" instead of "opens with the servile word." Rules:
+- **A zero-tolerance gate must be precise, not just recall-biased.** Recall bias is fine for
+  a prefilter (search) or an advisory; a hard gate that fails a whole model on one hit has to
+  be shaped to the failure it names. `certainly` is now opener-only; the other phrases are
+  genuinely wrong anywhere and stay substrings.
+- **When a hard gate fires exactly once, read the hit before believing the verdict.** One
+  hit in 37 is either a real slip or a matcher shape — and the transcript settles it in ten
+  seconds. Re-scoring the saved raw (`score_model(raw)`) beats a 10-minute re-run and is
+  deterministic.
+- **Shared invariants cut both ways.** Single-sourcing `banned_hits` between harness and
+  probe was right (drift is caught with data), but it means a matcher bug is a PRODUCTION
+  bug, not a scoring nit. Check the runtime consumer whenever a harness matcher changes.
+- Tooling note: the CC Bash tool collapses doubled backslashes inside heredocs. Regex
+  literals with backslashes must go through the Read/Edit/Write tools or be built from
+  `chr()` — two broken attempts before the pattern was clear.
+
