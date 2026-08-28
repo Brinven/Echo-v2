@@ -133,7 +133,9 @@ def create_app(control):
     # ── model swap (Stage 8: replaces the L key's blocking picker) ──
     @app.get("/api/models")
     def api_models():
-        return jsonify(models=control.models(), current=control.snapshot()["model"])
+        # ?refresh=1 bypasses the ~10s cache (the dropdown's ↻ button).
+        force = request.args.get("refresh", "") in ("1", "true")
+        return jsonify(models=control.models(force=force), current=control.snapshot()["model"])
 
     @app.post("/api/model")
     def api_model():

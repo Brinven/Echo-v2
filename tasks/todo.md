@@ -1,5 +1,23 @@
 # Echo — tasks/todo.md
 
+## ✅ DONE (2026-08-27) — "the new model isn't in the kiosk list": sorted dropdown + ↻ refresh
+
+Not an Echo bug: the new Sindri profile had its **proxy checkbox off**, so Sindri's `/v1/models`
+never listed it and Echo's dropdown (a faithful mirror, 41/41) couldn't either. Fixed at the
+source — Sindri now defaults proxy ON for new profiles (`Sindri/tasks/todo.md`). What WAS
+Echo's fault: the list came back in Sindri's profile-creation order (unfindable at 40+), and
+"is it there yet?" had no answer but waiting out the 10s server cache + 15s page poll.
+
+- [x] Dropdown sorted A→Z in the page (presentation only; `/api/models` still returns the
+      server's order). Current model stays selected.
+- [x] `↻` button beside the select → `GET /api/models?refresh=1` → `control.models(force=True)`
+      bypasses the cache; button shows `<count> ✓` for 1.5s as proof it re-read the server.
+- [x] `test_webui.py` 8g pins the bypass (plain GET stays cached, refresh re-queries). Suite green.
+      Headless Chromium against the LIVE dashboard: 41 options in JS-locale order, ↻ → "41 ✓".
+- [ ] Michael: tick proxy on the `Echo2` profile → ↻ (or wait ≤25s) → it appears. The HTML is
+      live now (served from disk); the cache-bypass half needs `restart-echo.bat` to load the
+      new `control.py`/`server.py`. Then the audit ladder: `eval_gate.py` → `eval_persona_matrix.py`.
+
 ## 💡 PENDING DECISION (2026-07-25) — put the spare RTX 4060 back in for the "junk"
 
 Michael's idea, raised after the VRAM investigation. He still has the **8GB RTX 4060** from

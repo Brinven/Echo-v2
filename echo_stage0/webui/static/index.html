@@ -253,6 +253,7 @@
         <div class="snark-row" style="margin-top:12px;">
           <span class="lbl" style="color:var(--dim); min-width:52px;">MODEL</span>
           <select id="model-sel"></select>
+          <button id="model-refresh" class="mini" title="Re-read the model list from the LLM server now" style="flex:none; min-height:48px; padding:10px 14px;">↻</button>
         </div>
         <div class="snark-row" style="margin-top:10px;">
           <span class="lbl" style="color:var(--dim); min-width:52px;">VOICE</span>
@@ -578,25 +579,37 @@ $("enroll-name").addEventListener("keydown", e=>{ if(e.key==="Enter") $("enroll-
 // swaps (LM Studio → Sindri), and a one-shot list kept showing the 12B era forever
 // (2026-07-20). Signature-diffed so an unchanged list is a DOM no-op (house rule), and
 // never re-rendered while the <select> is focused/open under the user's finger.
+// Sorted A→Z here (presentation only — the server hands back Sindri's own order, which
+// is profile-creation order and unfindable at 40+ routes). force=true skips the server's
+// ~10s cache: the ↻ button, for "I just enabled the route in Sindri, show it NOW".
 let modelsSig = "";
-async function loadModels(){
-  const r = await api("/api/models");
+async function loadModels(force){
+  const r = await api(force ? "/api/models?refresh=1" : "/api/models");
   if(!r || !r.models) return;
   const sel = $("model-sel");
   if(document.activeElement === sel) return;   // don't yank the list open under the user
-  const sig = JSON.stringify([r.models, r.current]);
-  if(sig === modelsSig) return;
+  const models = r.models.slice().sort((a,b)=>a.localeCompare(b, undefined, {sensitivity:"base"}));
+  const sig = JSON.stringify([models, r.current]);
+  if(sig === modelsSig) return models.length;
   modelsSig = sig;
-  sel.innerHTML = r.models.length
-    ? r.models.map(m=>`<option value="${esc(m)}"${m===r.current?" selected":""}>${esc(m)}</option>`).join("")
+  sel.innerHTML = models.length
+    ? models.map(m=>`<option value="${esc(m)}"${m===r.current?" selected":""}>${esc(m)}</option>`).join("")
     : `<option>(LLM server unreachable)</option>`;
+  return models.length;
 }
 $("model-sel").onchange = e=>{
   // The swap is applied by the main loop between turns — never mid-generation.
   api("/api/model","POST",{name:e.target.value}).then(loopState);
 };
+$("model-refresh").onclick = async ()=>{
+  const btn = $("model-refresh");
+  btn.disabled = true; btn.textContent = "…";
+  const n = await loadModels(true);
+  btn.textContent = (n === undefined) ? "✗" : `${n} ✓`;   // count = proof it re-read the server
+  setTimeout(()=>{ btn.textContent = "↻"; btn.disabled = false; }, 1500);
+};
 loadModels();
-setInterval(loadModels, 15000);
+setInterval(()=>loadModels(false), 15000);
 
 // ── Kokoro voice dropdown (audition voices without editing code) ──
 let voicesLoaded = false;

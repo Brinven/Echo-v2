@@ -163,12 +163,16 @@ class EchoControl:
         return self.set_vad(not self.session.vad_enabled)
 
     # ── model swap (parked for the main loop; never applied here) ──
-    def models(self) -> list[str]:
-        """Live model ids from LM Studio, cached ~10s (the dropdown may be opened repeatedly)."""
+    def models(self, force: bool = False) -> list[str]:
+        """Live model ids from the LLM server, cached ~10s (the dropdown may be opened repeatedly).
+
+        force=True bypasses the cache — the dashboard's ↻ button. A route just enabled in
+        Sindri should show up the moment Michael asks, not up to 25s later (10s here + the
+        page's 15s poll), or the delay reads as "the new model isn't there" (2026-08-27)."""
         if self._list_models is None:
             return []
         now = time.monotonic()
-        if self._models_cache and (now - self._models_ts) < _MODELS_CACHE_S:
+        if not force and self._models_cache and (now - self._models_ts) < _MODELS_CACHE_S:
             return self._models_cache
         try:
             self._models_cache = list(self._list_models() or [])

@@ -222,6 +222,20 @@ def run() -> None:
     assert cl3.post("/api/model", json={"name": "test/model-y"}).get_json()["ok"] is False
     print("  [PASS] /api/models fail-soft when LM Studio is down")
 
+    # 8g. ?refresh=1 bypasses the ~10s cache (the dashboard's ↻ button). A route enabled in
+    # Sindri seconds ago must appear on demand, not after the cache + poll windows expire.
+    live = list(_FAKE_MODELS)
+    calls = []
+    c4, _, _, _, _ = _mk(list_models=lambda: (calls.append(1), list(live))[1])
+    cl4 = create_app(c4).test_client()
+    assert cl4.get("/api/models").get_json()["models"] == _FAKE_MODELS and len(calls) == 1
+    live.append("echo2/just-enabled")
+    assert "echo2/just-enabled" not in cl4.get("/api/models").get_json()["models"]   # cached
+    assert len(calls) == 1
+    assert "echo2/just-enabled" in cl4.get("/api/models?refresh=1").get_json()["models"]
+    assert len(calls) == 2
+    print("  [PASS] /api/models?refresh=1 bypasses the cache; plain GET stays cached")
+
     # 8g. Voice: same park-for-the-main-loop contract as the model (never mid-sentence).
     voices = client.get("/api/voices").get_json()
     assert voices["voices"] == _FAKE_VOICES and voices["current"] == "af_heart"

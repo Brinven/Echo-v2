@@ -977,7 +977,7 @@ must begin when RECORDING begins; don't "simplify" this back to clearing on LIST
   returns `ok:false` rather than lying.
 
 ### Model swap moved to the dashboard (and is no longer blocking)
-The `L`-key picker's `input()` is what wedged the loop. Now: `/api/models` (read-only, cached ~10s)
+The `L`-key picker's `input()` is what wedged the loop. Now: `/api/models` (read-only, cached ~10s; `?refresh=1` bypasses the cache for the dropdown's ↻ button; the page sorts the list A→Z — the server returns Sindri's creation order, 2026-08-27)
 + `/api/model` → `control.request_model()` parks the id in **`control.pending_model`**; the **MAIN
 LOOP** claims it (`take_pending_model`) at the next LISTENING tick and calls `do_model_swap(name)`.
 This preserves EchoControl's **"never touches the pipeline"** invariant — it gets a read-only
