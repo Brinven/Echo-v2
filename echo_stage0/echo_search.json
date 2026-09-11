@@ -3,7 +3,7 @@
   "provider": "searxng",
   "searxng_base_url": "http://127.0.0.1:26",
   "categories": "general",
-  "engines": "duckduckgo,brave",
+  "engines": "bing,brave,duckduckgo",
   "top_k": 5,
   "timeout_s": 5,
   "filler_lines": [

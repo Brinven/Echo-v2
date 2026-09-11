@@ -8,8 +8,15 @@ Michael — the one deliberate, minimized exception to Echo's local-first spine.
 
 Echo points at **`http://127.0.0.1:26`** (set in `echo_stage0/echo_search.json`).
 
-This is Michael's pre-existing `Searxng` container (image `searxng/searxng:2026.6.15-cf1410af8`),
-already running before Stage 5 Part 3. Verified 2026-07-14 — it already meets every PRD §4
+This is Michael's pre-existing `Searxng` container (recreated 2026-09-11 on `searxng/searxng:latest`,
+was `2026.6.15`), already running before Stage 5 Part 3. **Keep the image fresh** — upstream engines
+(DuckDuckGo, Brave, Bing) change their markup/bot checks every few months and a stale image degrades
+SILENTLY: the container answers HTTP 200 with zero results (or Bing's first-word-only garbage), so
+Echo says "couldn't find it" and it reads as *SearXNG is down* when it is not. Refresh:
+`docker pull searxng/searxng:latest`, then re-run the container with the same `-p 26:8080`,
+`-v C:/Users/zwolf/searxng:/etc/searxng` and the same `/var/cache/searxng` volume (it is not
+compose-managed; `docker inspect Searxng` shows the binds). Diagnose per engine with
+`curl "http://127.0.0.1:26/search?q=test&format=json&engines=bing"` and read `unresponsive_engines`. Verified 2026-07-14 — it already meets every PRD §4
 requirement:
 
 | Requirement | Status |

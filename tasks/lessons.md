@@ -597,3 +597,21 @@ string" instead of "opens with the servile word." Rules:
   literals with backslashes must go through the Read/Edit/Write tools or be built from
   `chr()` — two broken attempts before the pattern was clear.
 
+## 2026-09-11: "SearXNG is down" — it was up the whole time; its engines had rotted
+
+- **Symptom:** Echo answered every search with "I couldn't find anything useful"; Michael read it as
+  the container being down. The container was up and `curl` on localhost returned 200.
+- **Cause:** the `searxng/searxng:2026.6.15` image was three months old. DuckDuckGo had moved to a
+  CAPTCHA challenge and Brave to 429s for its request shape, and its Bing engine only sent the first
+  word of the query ("weather Magnolia Texas" -> Grand Forks, ND). Echo pinned `engines=duckduckgo,brave`,
+  so every turn merged two blocked engines into zero results. JSONL shows `results_count: 0` from
+  2026-08-28 on — the data was there, nobody was reading it.
+- **Why it hid:** `healthy()` checks status code, and SearXNG returns 200 for an empty result set.
+  "Reachable" and "useful" are different questions; the probe only asks the first.
+- **Fix:** recreated the container on `searxng/searxng:latest` (2026.9.11; old container kept as
+  `Searxng_old_2026.6.15`, restart policy off, for rollback). Engines re-pinned `bing,brave,duckduckgo`.
+  Verified all four majors return relevant results and Echo's provider gets 5/5 on real queries.
+- **Rule:** when a metasearch proxy "stops working", read `unresponsive_engines` and the per-turn
+  `results_count` before touching the network. Anything that proxies third-party HTML has a shelf
+  life — an image date older than ~2 months is the first suspect. (Cross-project: retained to
+  Hindsight `axly-infra`.)

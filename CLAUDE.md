@@ -624,6 +624,15 @@ Config in **`echo_search.json`** (fail-soft, mirrors `echo_sampler.json`).
   voice off/on switch `is_stay_offline()`/`is_go_online()` → `session.web_search_off`.
 - **New JSONL fields:** web_search_triggered, search_prefilter_hit, search_decision_ms,
   search_query, search_provider, search_latency_ms, results_count, search_engines_used.
+- **⚠ "Search is down" almost always means STALE ENGINES, not a dead container (2026-09-11).**
+  SearXNG answered 200 on every probe while returning zero results for two weeks: the June image's
+  DDG/Brave engines were bot-blocked (CAPTCHA / 429) and its Bing parser matched only the first
+  word of a query. `healthy()` is a 200-check, so the startup line said *reachable* and Echo
+  declined in character — indistinguishable from an outage without reading `results_count` in the
+  JSONL (0 since 2026-08-28) or `unresponsive_engines` in the JSON. Fix = pull the current image
+  and recreate the container (`searxng/README.md` has the recipe). Engines now pinned
+  `bing,brave,duckduckgo` (Bing first — the one that survived the block) so one blocked engine
+  doesn't zero the turn.
 - **Road/Jeep note:** to reach SearXNG from the Jeep, the definitive test is a curl from the
   Mac node over Tailscale (`http://100.86.181.37:26`); the recommended eventual architecture is
   SearXNG **local on the Mac Mini** (one-line `searxng_base_url` swap) so road search needs no

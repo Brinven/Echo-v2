@@ -33,7 +33,7 @@ _DEFAULT_CONFIG = {
     "provider": "searxng",
     "searxng_base_url": "http://127.0.0.1:26",  # existing host Searxng container
     "categories": "general",
-    "engines": "duckduckgo,brave",
+    "engines": "bing,brave,duckduckgo",
     "top_k": 5,
     "timeout_s": 5,
     "filler_lines": [
@@ -85,7 +85,7 @@ class SearXNGProvider(SearchProvider):
     """SearXNG JSON API client.
 
     GET {base_url}/search?q=...&format=json&categories=...&language=en&pageno=1
-    (optional &engines=duckduckgo,brave for stability). Results are already sorted
+    (optional &engines=bing,brave,duckduckgo for stability — DDG/Brave bot-block this IP at times, 2026-09-11). Results are already sorted
     by score desc; we parse defensively (fields are heterogeneous across engines).
     """
 
